@@ -11,14 +11,15 @@ fn to_u8_slice<T>(slice: &[T]) -> &[u8] {
     unsafe { std::slice::from_raw_parts(slice.as_ptr().cast::<u8>(), byte_len) }
 }
 
-
 pub trait Serialize
 where
     Self: Sized + FuryMeta,
 {
     fn write_vec(value: &Vec<Self>, serializer: &mut SerializerState) {
         serializer.writer.i32(value.len() as i32);
-        serializer.writer.reserve((<Self as Serialize>::reserved_space() + 3) * value.len());
+        serializer
+            .writer
+            .reserve((<Self as Serialize>::reserved_space() + 3) * value.len());
         for item in value.iter() {
             item.serialize(serializer);
         }
@@ -32,7 +33,11 @@ where
         // ref flag
         serializer.writer.i8(RefFlag::NotNullValueFlag as i8);
         // type
-        serializer.writer.i16(<Self as FuryMeta>::ty() as i16);
+        serializer.writer.i16(if Self::is_vec() {
+            Self::vec_ty()
+        } else {
+            Self::ty()
+        } as i16);
         self.write(serializer);
     }
 }
@@ -90,7 +95,9 @@ impl Serialize for String {
 
     fn write_vec(value: &Vec<Self>, serializer: &mut SerializerState) {
         serializer.writer.i32(value.len() as i32);
-        serializer.writer.reserve((<Self as Serialize>::reserved_space()) * value.len());
+        serializer
+            .writer
+            .reserve((<Self as Serialize>::reserved_space()) * value.len());
 
         for x in value.iter() {
             x.write(serializer);
@@ -193,14 +200,6 @@ where
     fn reserved_space() -> usize {
         4
     }
-
-    fn serialize(&self, serializer: &mut SerializerState) {
-        // ref flag
-        serializer.writer.i8(RefFlag::NotNullValueFlag as i8);
-        // type
-        serializer.writer.i16(<Self as FuryMeta>::vec_ty() as i16);
-        self.write(serializer);
-    }
 }
 
 impl<T> Serialize for Option<T>
@@ -249,7 +248,9 @@ impl<'de> SerializerState<'de> {
 pub fn to_buffer<T: Serialize>(record: &T) -> Vec<u8> {
     let mut writer = Writer::default();
     let mut serializer = SerializerState::new(&mut writer);
-    serializer.writer.reserve(<T as Serialize>::reserved_space() + 3);
+    serializer
+        .writer
+        .reserve(<T as Serialize>::reserved_space() + 3);
     <T as Serialize>::serialize(record, &mut serializer);
     writer.dump()
 }

@@ -39,10 +39,14 @@ where
         if ref_flag == (RefFlag::NotNullValueFlag as i8) {
             // type_id
             let type_id = deserializer.reader.i16();
-
-            if type_id != <Self as FuryMeta>::ty() as i16 {
+            let ty = if Self::is_vec() {
+                Self::vec_ty()
+            } else {
+                Self::ty()
+            };
+            if type_id != ty as i16 {
                 Err(Error::FieldType {
-                    expected: <Self as FuryMeta>::ty(),
+                    expected: ty,
                     actial: type_id,
                 })
             } else {
@@ -156,34 +160,6 @@ impl Deserialize for NaiveDateTime {
 impl<T: Deserialize> Deserialize for Vec<T> {
     fn read(deserializer: &mut DeserializerState) -> Result<Self, Error> {
         T::read_vec(deserializer)
-    }
-
-
-    fn deserialize(deserializer: &mut DeserializerState) -> Result<Self, Error> {
-        // ref flag
-        let ref_flag = deserializer.reader.i8();
-
-        if ref_flag == (RefFlag::NotNullValueFlag as i8) {
-            // type_id
-            let type_id = deserializer.reader.i16();
-
-            if type_id != <Self as FuryMeta>::vec_ty() as i16 {
-                Err(Error::FieldType {
-                    expected: <Self as FuryMeta>::vec_ty(),
-                    actial: type_id,
-                })
-            } else {
-                Ok(Self::read(deserializer)?)
-            }
-        } else if ref_flag == (RefFlag::NullFlag as i8) {
-            Err(Error::Null)
-        } else if ref_flag == (RefFlag::RefFlag as i8) {
-            Err(Error::Ref)
-        } else if ref_flag == (RefFlag::RefValueFlag as i8) {
-            Err(Error::RefValue)
-        } else {
-            Err(Error::BadRefFlag)
-        }
     }
 }
 

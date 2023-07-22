@@ -16,6 +16,10 @@ pub trait FuryMeta {
     fn tag() -> &'static str {
         ""
     }
+
+    fn is_vec() -> bool {
+        false
+    }
 }
 
 macro_rules! impl_number_meta {
@@ -92,6 +96,10 @@ impl_primitive_array_meta!(FieldType::STRING, FieldType::FuryStringArray, String
 impl<T: FuryMeta> FuryMeta for Vec<T> {
     fn ty() -> FieldType {
         FieldType::ARRAY
+    }
+
+    fn is_vec() -> bool {
+        true
     }
 }
 
