@@ -27,7 +27,7 @@ where
         // value
         let mut result = Vec::new();
         for _ in 0..len {
-            result.push(Self::read(deserializer)?);
+            result.push(Self::deserialize(deserializer)?);
         }
         Ok(result)
     }
@@ -88,11 +88,12 @@ macro_rules! impl_num_deserialize_and_pritimive_vec {
     };
 }
 
-impl_num_deserialize!(u8, u8);
 impl_num_deserialize!(u16, u16);
 impl_num_deserialize!(u32, u32);
 impl_num_deserialize!(u64, u64);
 impl_num_deserialize!(i8, i8);
+
+impl_num_deserialize_and_pritimive_vec!(u8, u8);
 impl_num_deserialize_and_pritimive_vec!(i16, i16);
 impl_num_deserialize_and_pritimive_vec!(i32, i32);
 impl_num_deserialize_and_pritimive_vec!(i64, i64);
@@ -120,8 +121,8 @@ impl<T1: Deserialize + Eq + std::hash::Hash, T2: Deserialize> Deserialize for Ha
         // key-value
         for _ in 0..len {
             result.insert(
-                <T1 as Deserialize>::read(deserializer)?,
-                <T2 as Deserialize>::read(deserializer)?,
+                <T1 as Deserialize>::deserialize(deserializer)?,
+                <T2 as Deserialize>::deserialize(deserializer)?,
             );
         }
         Ok(result)
@@ -135,7 +136,7 @@ impl<T: Deserialize + Eq + std::hash::Hash> Deserialize for HashSet<T> {
         let mut result = HashSet::new();
         // key-value
         for _ in 0..len {
-            result.insert(<T as Deserialize>::read(deserializer)?);
+            result.insert(<T as Deserialize>::deserialize(deserializer)?);
         }
         Ok(result)
     }
@@ -155,6 +156,34 @@ impl Deserialize for NaiveDateTime {
 impl<T: Deserialize> Deserialize for Vec<T> {
     fn read(deserializer: &mut DeserializerState) -> Result<Self, Error> {
         T::read_vec(deserializer)
+    }
+
+
+    fn deserialize(deserializer: &mut DeserializerState) -> Result<Self, Error> {
+        // ref flag
+        let ref_flag = deserializer.reader.i8();
+
+        if ref_flag == (RefFlag::NotNullValueFlag as i8) {
+            // type_id
+            let type_id = deserializer.reader.i16();
+
+            if type_id != <Self as FuryMeta>::vec_ty() as i16 {
+                Err(Error::FieldType {
+                    expected: <Self as FuryMeta>::vec_ty(),
+                    actial: type_id,
+                })
+            } else {
+                Ok(Self::read(deserializer)?)
+            }
+        } else if ref_flag == (RefFlag::NullFlag as i8) {
+            Err(Error::Null)
+        } else if ref_flag == (RefFlag::RefFlag as i8) {
+            Err(Error::Ref)
+        } else if ref_flag == (RefFlag::RefValueFlag as i8) {
+            Err(Error::RefValue)
+        } else {
+            Err(Error::BadRefFlag)
+        }
     }
 }
 

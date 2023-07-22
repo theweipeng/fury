@@ -8,6 +8,7 @@ use byteorder::{ByteOrder, LittleEndian};
 #[derive(Default)]
 pub struct Writer {
     bf: Vec<u8>,
+    reserved: usize
 }
 
 macro_rules! write_num {
@@ -22,6 +23,7 @@ macro_rules! write_num {
 
 impl Writer {
     pub fn dump(&self) -> Vec<u8> {
+        print!("{}, {}", self.reserved, self.bf.len());
         self.bf.clone()
     }
 
@@ -40,7 +42,10 @@ impl Writer {
     }
 
     pub fn reserve(&mut self, additional: usize) {
-        self.bf.reserve_exact(additional);
+        self.reserved += additional;
+        if self.bf.capacity() < self.reserved  {
+            self.bf.reserve(self.reserved);
+        }
     }
 
     write_num!(u8, u8);

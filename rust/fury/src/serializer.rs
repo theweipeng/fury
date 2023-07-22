@@ -11,31 +11,24 @@ fn to_u8_slice<T>(slice: &[T]) -> &[u8] {
     unsafe { std::slice::from_raw_parts(slice.as_ptr().cast::<u8>(), byte_len) }
 }
 
-fn write_vec_head<T: Serialize>(v: &Vec<T>, serializer: &mut SerializerState) {
-    serializer.writer.i32(v.len() as i32);
-    let reserved_space = (<T as Serialize>::reserved_space() + 3) * v.len();
-    serializer.writer.reserve(reserved_space);
-}
 
 pub trait Serialize
 where
     Self: Sized + FuryMeta,
 {
     fn write_vec(value: &Vec<Self>, serializer: &mut SerializerState) {
-        write_vec_head(value, serializer);
+        serializer.writer.i32(value.len() as i32);
+        serializer.writer.reserve((<Self as Serialize>::reserved_space() + 3) * value.len());
         for item in value.iter() {
-            item.write(serializer);
+            item.serialize(serializer);
         }
     }
-
-    fn reserve(_: &mut SerializerState) {}
 
     fn reserved_space() -> usize;
 
     fn write(&self, serializer: &mut SerializerState);
 
     fn serialize(&self, serializer: &mut SerializerState) {
-        Self::reserve(serializer);
         // ref flag
         serializer.writer.i8(RefFlag::NotNullValueFlag as i8);
         // type
@@ -66,7 +59,7 @@ macro_rules! impl_num_serialize_and_pritimive_vec {
             }
 
             fn write_vec(value: &Vec<Self>, serializer: &mut SerializerState) {
-                write_vec_head(value, serializer);
+                serializer.writer.i32(value.len() as i32);
                 serializer.writer.bytes(to_u8_slice(value.as_slice()));
             }
 
@@ -77,11 +70,12 @@ macro_rules! impl_num_serialize_and_pritimive_vec {
     };
 }
 
-impl_num_serialize!(u8, u8);
 impl_num_serialize!(u16, u16);
 impl_num_serialize!(u32, u32);
 impl_num_serialize!(u64, u64);
 impl_num_serialize!(i8, i8);
+
+impl_num_serialize_and_pritimive_vec!(u8, u8);
 impl_num_serialize_and_pritimive_vec!(i16, i16);
 impl_num_serialize_and_pritimive_vec!(i32, i32);
 impl_num_serialize_and_pritimive_vec!(i64, i64);
@@ -95,7 +89,9 @@ impl Serialize for String {
     }
 
     fn write_vec(value: &Vec<Self>, serializer: &mut SerializerState) {
-        write_vec_head(value, serializer);
+        serializer.writer.i32(value.len() as i32);
+        serializer.writer.reserve((<Self as Serialize>::reserved_space()) * value.len());
+
         for x in value.iter() {
             x.write(serializer);
         }
@@ -112,7 +108,7 @@ impl Serialize for bool {
     }
 
     fn write_vec(value: &Vec<Self>, serializer: &mut SerializerState) {
-        write_vec_head(value, serializer);
+        serializer.writer.i32(value.len() as i32);
         serializer.writer.bytes(to_u8_slice(value.as_slice()));
     }
 
@@ -132,8 +128,8 @@ impl<T1: Serialize, T2: Serialize> Serialize for HashMap<T1, T2> {
 
         // key-value
         for i in self.iter() {
-            i.0.write(serializer);
-            i.1.write(serializer);
+            i.0.serialize(serializer);
+            i.1.serialize(serializer);
         }
     }
 
@@ -152,7 +148,7 @@ impl<T: Serialize> Serialize for HashSet<T> {
 
         // key-value
         for i in self.iter() {
-            i.write(serializer);
+            i.serialize(serializer);
         }
     }
 
@@ -196,6 +192,14 @@ where
 
     fn reserved_space() -> usize {
         4
+    }
+
+    fn serialize(&self, serializer: &mut SerializerState) {
+        // ref flag
+        serializer.writer.i8(RefFlag::NotNullValueFlag as i8);
+        // type
+        serializer.writer.i16(<Self as FuryMeta>::vec_ty() as i16);
+        self.write(serializer);
     }
 }
 
@@ -245,6 +249,7 @@ impl<'de> SerializerState<'de> {
 pub fn to_buffer<T: Serialize>(record: &T) -> Vec<u8> {
     let mut writer = Writer::default();
     let mut serializer = SerializerState::new(&mut writer);
+    serializer.writer.reserve(<T as Serialize>::reserved_space() + 3);
     <T as Serialize>::serialize(record, &mut serializer);
     writer.dump()
 }

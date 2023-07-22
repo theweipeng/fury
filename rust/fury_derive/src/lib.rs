@@ -1,6 +1,14 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, DeriveInput};
+use syn::{parse_macro_input, DeriveInput, Field, Fields};
+
+fn sorted_fields(fields: &Fields) -> Vec<&Field> {
+    let mut fields = fields.iter().collect::<Vec<&Field>>();
+    fields.sort_by(|a, b| {
+        a.ident.cmp(&b.ident)
+    });
+    fields
+}
 
 #[proc_macro_derive(FuryMeta, attributes(tag))]
 pub fn proc_macro_derive_fury_meta(input: proc_macro::TokenStream) -> TokenStream {
@@ -23,12 +31,11 @@ pub fn proc_macro_derive_fury_meta(input: proc_macro::TokenStream) -> TokenStrea
 fn derive_fury_meta(ast: &syn::DeriveInput, tag: String) -> TokenStream {
     let name = &ast.ident;
     let fields = match &ast.data {
-        syn::Data::Struct(s) => &s.fields,
+        syn::Data::Struct(s) => sorted_fields(&s.fields),
         _ => {
             panic!("only struct be supported")
         }
     };
-
     let props = fields.iter().map(|field| {
         let ty = &field.ty;
         quote! {
@@ -41,7 +48,7 @@ fn derive_fury_meta(ast: &syn::DeriveInput, tag: String) -> TokenStream {
     let gen = quote! {
 
         lazy_static::lazy_static! {
-            static ref #name_hash_static: u32 = fury::compute_tag_hash(vec![#(#props),*]);
+            static ref #name_hash_static: u32 = fury::compute_struct_hash(vec![#(#props),*]);
         }
 
         impl fury::FuryMeta for #name {
@@ -70,7 +77,7 @@ pub fn proc_macro_derive_serialize(input: proc_macro::TokenStream) -> TokenStrea
 fn derive_serialize(ast: &syn::DeriveInput) -> TokenStream {
     let name = &ast.ident;
     let fields = match &ast.data {
-        syn::Data::Struct(s) => &s.fields,
+        syn::Data::Struct(s) => sorted_fields(&s.fields),
         _ => {
             panic!("only struct be supported")
         }
@@ -101,10 +108,6 @@ fn derive_serialize(ast: &syn::DeriveInput) -> TokenStream {
                 #(#accessor_exprs)*
             }
 
-            fn reserve(serializer: &mut fury::SerializerState) {
-                serializer.writer.reserve(Self::reserved_space());
-            }
-
             fn reserved_space() -> usize {
                 // struct have four byte hash
                 4 + #(#reserved_size_exprs)+*
@@ -123,7 +126,7 @@ pub fn proc_macro_derive_deserialize(input: proc_macro::TokenStream) -> TokenStr
 fn derive_deserilize(ast: &syn::DeriveInput) -> TokenStream {
     let name = &ast.ident;
     let fields = match &ast.data {
-        syn::Data::Struct(s) => &s.fields,
+        syn::Data::Struct(s) => sorted_fields(&s.fields),
         _ => {
             panic!("only struct be supported")
         }
