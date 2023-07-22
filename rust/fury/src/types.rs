@@ -132,9 +132,6 @@ pub enum RefFlag {
 
 #[derive(Clone, Copy, Debug)]
 pub enum FieldType {
-    STRING = 13,
-    ARRAY = 25,
-    MAP = 30,
     BOOL = 1,
     UINT8 = 2,
     INT8 = 3,
@@ -146,9 +143,12 @@ pub enum FieldType {
     INT64 = 9,
     FLOAT = 11,
     DOUBLE = 12,
+    STRING = 13,
     BINARY = 14,
     DATE = 16,
     TIMESTAMP = 18,
+    ARRAY = 25,
+    MAP = 30,
     FuryTypeTag = 256,
     FurySet = 257,
     FuryPrimitiveBoolArray = 258,
