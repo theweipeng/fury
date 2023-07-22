@@ -16,7 +16,7 @@ where
     Self: Sized + FuryMeta,
 {
     fn write_vec(value: &Vec<Self>, serializer: &mut SerializerState) {
-        serializer.writer.i32(value.len() as i32);
+        serializer.writer.var_int32(value.len() as i32);
         serializer
             .writer
             .reserve((<Self as Serialize>::reserved_space() + 3) * value.len());
@@ -64,7 +64,7 @@ macro_rules! impl_num_serialize_and_pritimive_vec {
             }
 
             fn write_vec(value: &Vec<Self>, serializer: &mut SerializerState) {
-                serializer.writer.i32(value.len() as i32);
+                serializer.writer.var_int32(value.len() as i32);
                 serializer.writer.bytes(to_u8_slice(value.as_slice()));
             }
 
@@ -94,7 +94,7 @@ impl Serialize for String {
     }
 
     fn write_vec(value: &Vec<Self>, serializer: &mut SerializerState) {
-        serializer.writer.i32(value.len() as i32);
+        serializer.writer.var_int32(value.len() as i32);
         serializer
             .writer
             .reserve((<Self as Serialize>::reserved_space()) * value.len());
@@ -115,7 +115,7 @@ impl Serialize for bool {
     }
 
     fn write_vec(value: &Vec<Self>, serializer: &mut SerializerState) {
-        serializer.writer.i32(value.len() as i32);
+        serializer.writer.var_int32(value.len() as i32);
         serializer.writer.bytes(to_u8_slice(value.as_slice()));
     }
 
@@ -127,7 +127,7 @@ impl Serialize for bool {
 impl<T1: Serialize, T2: Serialize> Serialize for HashMap<T1, T2> {
     fn write(&self, serializer: &mut SerializerState) {
         // length
-        serializer.writer.i32(self.len() as i32);
+        serializer.writer.var_int32(self.len() as i32);
 
         let reserved_space = (<T1 as Serialize>::reserved_space() + 3) * self.len()
             + (<T2 as Serialize>::reserved_space() + 3) * self.len();

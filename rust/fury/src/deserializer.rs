@@ -23,7 +23,7 @@ where
 
     fn read_vec(deserializer: &mut DeserializerState) -> Result<Vec<Self>, Error> {
         // length
-        let len = deserializer.reader.i32();
+        let len = deserializer.reader.var_int32();
         // value
         let mut result = Vec::new();
         for _ in 0..len {
@@ -81,7 +81,7 @@ macro_rules! impl_num_deserialize_and_pritimive_vec {
 
             fn read_vec(deserializer: &mut DeserializerState) -> Result<Vec<Self>, Error> {
                 // length
-                let len = (deserializer.reader.i32() as usize) * mem::size_of::<$ty>();
+                let len = (deserializer.reader.var_int32() as usize) * mem::size_of::<$ty>();
                 Ok(from_u8_slice::<$ty>(
                     deserializer.reader.bytes(len as usize),
                 ))
@@ -118,7 +118,7 @@ impl Deserialize for bool {
 impl<T1: Deserialize + Eq + std::hash::Hash, T2: Deserialize> Deserialize for HashMap<T1, T2> {
     fn read(deserializer: &mut DeserializerState) -> Result<Self, Error> {
         // length
-        let len = deserializer.reader.i32();
+        let len = deserializer.reader.var_int32();
         let mut result = HashMap::new();
         // key-value
         for _ in 0..len {
@@ -134,7 +134,7 @@ impl<T1: Deserialize + Eq + std::hash::Hash, T2: Deserialize> Deserialize for Ha
 impl<T: Deserialize + Eq + std::hash::Hash> Deserialize for HashSet<T> {
     fn read(deserializer: &mut DeserializerState) -> Result<Self, Error> {
         // length
-        let len = deserializer.reader.i32();
+        let len = deserializer.reader.var_int32();
         let mut result = HashSet::new();
         // key-value
         for _ in 0..len {

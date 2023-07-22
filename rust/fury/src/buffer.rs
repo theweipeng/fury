@@ -151,11 +151,15 @@ impl<'bf> Reader<'bf> {
     read_num!(i64, i64);
 
     pub fn f32(&mut self) -> f32 {
-        LittleEndian::read_f32(self.cast::<u8>(4))
+        let result = LittleEndian::read_f32(self.cast::<u8>(4));
+        self.move_next(4);
+        result
     }
 
     pub fn f64(&mut self) -> f64 {
-        LittleEndian::read_f64(self.cast::<u8>(4))
+        let result = LittleEndian::read_f64(self.cast::<u8>(8));
+        self.move_next(8);
+        result
     }
 
     pub fn var_int32(&mut self) -> i32 {
