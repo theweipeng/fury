@@ -36,7 +36,7 @@ where
         // ref flag
         let ref_flag = deserializer.reader.i8();
 
-        if ref_flag == (RefFlag::NotNullValueFlag as i8) {
+        if ref_flag == (RefFlag::NotNullValueFlag as i8) || ref_flag == (RefFlag::RefValueFlag as i8){
             // type_id
             let type_id = deserializer.reader.i16();
             let ty = if Self::is_vec() {
@@ -56,8 +56,6 @@ where
             Err(Error::Null)
         } else if ref_flag == (RefFlag::RefFlag as i8) {
             Err(Error::Ref)
-        } else if ref_flag == (RefFlag::RefValueFlag as i8) {
-            Err(Error::RefValue)
         } else {
             Err(Error::BadRefFlag)
         }
@@ -83,9 +81,9 @@ macro_rules! impl_num_deserialize_and_pritimive_vec {
 
             fn read_vec(deserializer: &mut DeserializerState) -> Result<Vec<Self>, Error> {
                 // length
-                let len = deserializer.reader.i32();
+                let len = (deserializer.reader.i32() as usize) * mem::size_of::<$ty>();
                 Ok(from_u8_slice::<$ty>(
-                    deserializer.reader.bytes::<$ty>(len as usize),
+                    deserializer.reader.bytes(len as usize),
                 ))
             }
         }
@@ -172,7 +170,7 @@ impl<T: Deserialize> Deserialize for Option<T> {
         // ref flag
         let ref_flag = deserializer.reader.i8();
 
-        if ref_flag == (RefFlag::NotNullValueFlag as i8) {
+        if ref_flag == (RefFlag::NotNullValueFlag as i8) || ref_flag == (RefFlag::RefValueFlag as i8) {
             // type_id
             let type_id = deserializer.reader.i16();
 
@@ -188,8 +186,6 @@ impl<T: Deserialize> Deserialize for Option<T> {
             Ok(None)
         } else if ref_flag == (RefFlag::RefFlag as i8) {
             Err(Error::Ref)
-        } else if ref_flag == (RefFlag::RefValueFlag as i8) {
-            Err(Error::RefValue)
         } else {
             Err(Error::BadRefFlag)
         }
@@ -209,18 +205,47 @@ impl Deserialize for NaiveDate {
         }
     }
 }
-pub struct DeserializerState<'de> {
-    pub reader: Reader<'de>,
+pub struct DeserializerState<'de, 'bf: 'de> {
+    pub reader: Reader<'bf>,
+    pub tags: Vec<&'de str>,
 }
 
-impl<'de> DeserializerState<'de> {
-    fn new(reader: Reader<'de>) -> DeserializerState<'de> {
-        DeserializerState { reader }
+impl<'de, 'bf: 'de> DeserializerState<'de, 'bf> {
+    fn new(reader: Reader<'bf>) -> DeserializerState<'de, 'bf> {
+        DeserializerState {
+            reader,
+            tags: Vec::new(),
+        }
+    }
+
+    fn head(&mut self) {
+        let _bitmap = self.reader.u8();
+        let _language = self.reader.u8();
+        self.reader.skip(8); // native offset and size
+    }
+
+    pub fn read_tag(&mut self) -> Result<&str, Error> {
+        const USESTRINGVALUE: u8 = 0;
+        const USESTRINGID: u8 = 1;
+        let tag_type = self.reader.u8();
+        if tag_type == USESTRINGID {
+            Ok(&self.tags[self.reader.i16() as usize])
+        } else if tag_type == USESTRINGVALUE {
+            self.reader.skip(8); // todo tag hash
+            let len = self.reader.i16();
+            let tag: &str =
+                unsafe { std::str::from_utf8_unchecked(self.reader.bytes(len as usize)) };
+            self.tags.push(tag);
+            Ok(tag)
+        } else {
+            Err(Error::TagType(tag_type))
+        }
     }
 }
 
 pub fn from_buffer<T: Deserialize>(bf: &[u8]) -> Result<T, Error> {
     let reader = Reader::new(bf);
     let mut deserializer = DeserializerState::new(reader);
+    deserializer.head();
     <T as Deserialize>::deserialize(&mut deserializer)
 }

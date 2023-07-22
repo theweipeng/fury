@@ -2,7 +2,7 @@ use chrono::{NaiveDate, NaiveDateTime};
 use std::collections::{HashMap, HashSet};
 use std::mem;
 
-use crate::{FuryMeta, RefFlag};
+use crate::{config_flags, FuryMeta, Language, RefFlag};
 
 use super::buffer::Writer;
 
@@ -237,20 +237,56 @@ where
 
 pub struct SerializerState<'se> {
     pub writer: &'se mut Writer,
+    pub tags: Vec<&'static str>,
 }
 
 impl<'de> SerializerState<'de> {
     fn new(writer: &mut Writer) -> SerializerState {
-        SerializerState { writer }
+        SerializerState {
+            writer,
+            tags: Vec::new(),
+        }
+    }
+
+    pub fn write_tag(&mut self, tag: &'static str) {
+        const USESTRINGVALUE: u8 = 0;
+        const USESTRINGID: u8 = 1;
+
+        let mayby_idx = self.tags.iter().position(|x| *x == tag);
+        match mayby_idx {
+            Some(idx) => {
+                self.writer.u8(USESTRINGID);
+                self.writer.i16(idx as i16);
+            }
+            None => {
+                self.writer.u8(USESTRINGVALUE);
+                self.writer.skip(8); // todo tag hash
+                self.writer.i16(tag.len() as i16);
+                self.writer.bytes(tag.as_bytes());
+            }
+        };
+    }
+
+    fn head<T: Serialize>(&mut self) -> &Self {
+        const HEAD_SIZE: usize = 10;
+        self.writer
+            .reserve(<T as Serialize>::reserved_space() + 3 + HEAD_SIZE);
+
+        let mut bitmap = 0;
+        bitmap |= config_flags::IS_LITTLE_ENDIAN_FLAG;
+        bitmap |= config_flags::IS_CROSS_LANGUAGE_FLAG;
+        self.writer.u8(bitmap);
+        self.writer.u8(Language::RUST as u8);
+        self.writer.skip(4); // native offset
+        self.writer.skip(4); // native size
+        self
     }
 }
 
 pub fn to_buffer<T: Serialize>(record: &T) -> Vec<u8> {
     let mut writer = Writer::default();
     let mut serializer = SerializerState::new(&mut writer);
-    serializer
-        .writer
-        .reserve(<T as Serialize>::reserved_space() + 3);
+    serializer.head::<T>();
     <T as Serialize>::serialize(record, &mut serializer);
     writer.dump()
 }

@@ -23,7 +23,6 @@ macro_rules! write_num {
 
 impl Writer {
     pub fn dump(&self) -> Vec<u8> {
-        print!("{}, {}", self.reserved, self.bf.len());
         self.bf.clone()
     }
 
@@ -56,6 +55,10 @@ impl Writer {
     write_num!(i16, i16);
     write_num!(i32, i32);
     write_num!(i64, i64);
+
+    pub fn skip(&mut self, len: usize) {
+        self.move_next(len);
+    }
 
     pub fn f32(&mut self, value: f32) {
         LittleEndian::write_f32(self.cast::<u8>(4), value);
@@ -118,7 +121,7 @@ macro_rules! read_num {
     };
 }
 
-impl<'de> Reader<'de> {
+impl<'bf> Reader<'bf> {
     pub fn new(bf: &[u8]) -> Reader {
         Reader { bf, cursor: 0 }
     }
@@ -183,10 +186,13 @@ impl<'de> Reader<'de> {
         result
     }
 
-    pub fn bytes<T>(&mut self, len: usize) -> &[u8] {
-        let byte_len = len * mem::size_of::<T>();
-        let result = &self.bf[self.cursor..self.cursor + byte_len];
-        self.move_next(byte_len);
+    pub fn skip(&mut self, len: u32) {
+        self.move_next(len as usize);
+    }
+
+    pub fn bytes(&mut self, len: usize) -> &'bf [u8] {
+        let result = &self.bf[self.cursor..self.cursor + len];
+        self.move_next(len);
         result
     }
 }

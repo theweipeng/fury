@@ -164,23 +164,27 @@ const MAX_UNT32: u64 = (1 << 31) - 1;
 
 pub fn compute_string_hash(s: &str) -> u32 {
     let mut hash: u64 = 17;
-    s.as_bytes()
-        .iter()
-        .for_each(|b| {
-            hash = (hash * 31) + (*b as u64);
-            while hash >= MAX_UNT32 {
-                hash /= 7;
-            }
-        });
+    s.as_bytes().iter().for_each(|b| {
+        hash = (hash * 31) + (*b as u64);
+        while hash >= MAX_UNT32 {
+            hash /= 7;
+        }
+    });
     hash as u32
 }
 
 pub fn compute_field_hash(hash: u32, prop: &(FieldType, &str)) -> u32 {
-    let mut new_hash: u64 = (hash as u64) * 31 + (prop.0 as u64);
-    while new_hash >= MAX_UNT32 {
-        new_hash /= 7;
+    let ty = prop.0;
+    match ty {
+        FieldType::ARRAY | FieldType::MAP => {
+            let mut new_hash: u64 = (hash as u64) * 31 + (prop.0 as u64);
+            while new_hash >= MAX_UNT32 {
+                new_hash /= 7;
+            }
+            new_hash as u32
+        }
+        _ => hash,
     }
-    new_hash as u32
 }
 
 pub fn compute_struct_hash(props: Vec<(FieldType, &str)>) -> u32 {
@@ -189,4 +193,21 @@ pub fn compute_struct_hash(props: Vec<(FieldType, &str)>) -> u32 {
         .iter()
         .for_each(|prop| hash = compute_field_hash(hash, prop));
     hash
+}
+
+pub mod config_flags {
+    pub const IS_NULL_FLAG: u8 = 1 << 0;
+    pub const IS_LITTLE_ENDIAN_FLAG: u8 = 2;
+    pub const IS_CROSS_LANGUAGE_FLAG: u8 = 4;
+    pub const IS_OUT_OF_BAND_FLAG: u8 = 8;
+}
+
+pub enum Language {
+    XLANG = 0,
+    JAVA = 1,
+    PYTHON = 2,
+    CPP = 3,
+    GO = 4,
+    JAVASCRIPT = 5,
+    RUST = 6,
 }

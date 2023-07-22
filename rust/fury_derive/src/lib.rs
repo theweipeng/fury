@@ -4,9 +4,7 @@ use syn::{parse_macro_input, DeriveInput, Field, Fields};
 
 fn sorted_fields(fields: &Fields) -> Vec<&Field> {
     let mut fields = fields.iter().collect::<Vec<&Field>>();
-    fields.sort_by(|a, b| {
-        a.ident.cmp(&b.ident)
-    });
+    fields.sort_by(|a, b| a.ident.cmp(&b.ident));
     fields
 }
 
@@ -99,9 +97,13 @@ fn derive_serialize(ast: &syn::DeriveInput) -> TokenStream {
         }
     });
 
+    let tag_bytelen = format!("{}", name).len();
+
     let gen = quote! {
         impl fury::Serialize for #name {
             fn write(&self, serializer: &mut fury::SerializerState) {
+                // write tag string
+                serializer.write_tag(<#name as fury::FuryMeta>::tag());
                 // write tag hash
                 serializer.writer.u32(<#name as fury::FuryMeta>::hash());
                 // write fields
@@ -110,7 +112,7 @@ fn derive_serialize(ast: &syn::DeriveInput) -> TokenStream {
 
             fn reserved_space() -> usize {
                 // struct have four byte hash
-                4 + #(#reserved_size_exprs)+*
+                #tag_bytelen + 4 + #(#reserved_size_exprs)+*
             }
         }
     };
@@ -143,6 +145,9 @@ fn derive_deserilize(ast: &syn::DeriveInput) -> TokenStream {
     let gen = quote! {
         impl<'de> fury::Deserialize for #name {
             fn read(deserializer: &mut fury::DeserializerState) -> Result<Self, fury::Error> {
+                // read tag string
+                deserializer.read_tag()?;
+                // read tag hash
                 let hash = deserializer.reader.u32();
                 let expected = <#name as fury::FuryMeta>::hash();
                 if(hash != expected) {
