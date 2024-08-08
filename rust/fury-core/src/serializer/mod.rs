@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::{Any, TypeId};
 use crate::error::Error;
 use crate::fury::Fury;
 use crate::resolver::context::{ReadContext, WriteContext};
@@ -63,7 +64,23 @@ pub fn deserialize<T: Serializer>(context: &mut ReadContext) -> Result<T, Error>
     }
 }
 
-pub trait Serializer
+pub trait Serializable {
+    fn as_any(&self) -> &dyn Any;
+
+    fn type_id(&self) -> TypeId;
+}
+
+impl<T: Serializer + 'static> Serializable for T {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn type_id(&self) -> TypeId {
+        TypeId::of::<T>()
+    }
+}
+
+pub trait Serializer: Serializable
 where
     Self: Sized,
 {

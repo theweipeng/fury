@@ -18,11 +18,13 @@
 use crate::error::Error;
 use crate::fury::Fury;
 use crate::resolver::context::{ReadContext, WriteContext};
-use crate::serializer::Serializer;
+use crate::serializer::{Serializable, Serializer};
 use crate::types::{FieldType, Mode, RefFlag};
 use std::any::Any;
 
-impl Serializer for Box<dyn Any> {
+
+
+impl Serializer for Box<dyn Serializable> {
     fn reserved_space() -> usize {
         0
     }
@@ -43,7 +45,7 @@ impl Serializer for Box<dyn Any> {
         context
             .get_fury()
             .get_class_resolver()
-            .get_harness_by_type(self.as_ref().type_id())
+            .get_harness_by_type(Serializable::type_id(self.as_ref()))
             .unwrap()
             .get_serializer()(self.as_ref(), context);
     }
@@ -54,26 +56,20 @@ impl Serializer for Box<dyn Any> {
         let ref_flag = context.reader.i8();
 
         if ref_flag == (RefFlag::NotNullValue as i8) || ref_flag == (RefFlag::RefValue as i8) {
+            let type_id;
             if context.get_fury().get_mode().eq(&Mode::Compatible) {
-                let meta_index = context.reader.i16();
-                let type_id = context.meta_resolver.get(meta_index as usize).get_type_id();
-                reset_cursor(&mut context.reader);
-                context
-                    .get_fury()
-                    .get_class_resolver()
-                    .get_harness(type_id)
-                    .unwrap()
-                    .get_deserializer()(context)
+                type_id = context.meta_resolver.get(context.reader.i16() as usize).get_type_id();
             } else {
-                let type_id = context.reader.i16();
-                reset_cursor(&mut context.reader);
-                context
-                    .get_fury()
-                    .get_class_resolver()
-                    .get_harness(type_id as u32)
-                    .unwrap()
-                    .get_deserializer()(context)
+                type_id = context.reader.i16() as u32;
             }
+            reset_cursor(&mut context.reader);
+            let v= context
+                .get_fury()
+                .get_class_resolver()
+                .get_harness(type_id)
+                .unwrap()
+                .get_deserializer()(context)?;
+            Ok(v)
         } else if ref_flag == (RefFlag::Null as i8) {
             Err(Error::Null)
         } else if ref_flag == (RefFlag::Ref as i8) {
@@ -85,3 +81,4 @@ impl Serializer for Box<dyn Any> {
         }
     }
 }
+

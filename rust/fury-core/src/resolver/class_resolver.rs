@@ -18,19 +18,19 @@
 use super::context::{ReadContext, WriteContext};
 use crate::error::Error;
 use crate::fury::Fury;
-use crate::serializer::StructSerializer;
+use crate::serializer::{Serializable, StructSerializer};
 use std::any::TypeId;
 use std::{any::Any, collections::HashMap};
 
 pub struct Harness {
-    serializer: fn(&dyn Any, &mut WriteContext),
-    deserializer: fn(&mut ReadContext) -> Result<Box<dyn Any>, Error>,
+    serializer: fn(&dyn Serializable, &mut WriteContext),
+    deserializer: fn(&mut ReadContext) -> Result<Box<dyn Serializable>, Error>,
 }
 
 impl Harness {
     pub fn new(
-        serializer: fn(&dyn Any, &mut WriteContext),
-        deserializer: fn(&mut ReadContext) -> Result<Box<dyn Any>, Error>,
+        serializer: fn(&dyn Serializable, &mut WriteContext),
+        deserializer: fn(&mut ReadContext) -> Result<Box<dyn Serializable>, Error>,
     ) -> Harness {
         Harness {
             serializer,
@@ -38,11 +38,11 @@ impl Harness {
         }
     }
 
-    pub fn get_serializer(&self) -> fn(&dyn Any, &mut WriteContext) {
+    pub fn get_serializer(&self) -> fn(&dyn Serializable, &mut WriteContext) {
         self.serializer
     }
 
-    pub fn get_deserializer(&self) -> fn(&mut ReadContext) -> Result<Box<dyn Any>, Error> {
+    pub fn get_deserializer(&self) -> fn(&mut ReadContext) -> Result<Box<dyn Serializable>, Error> {
         self.deserializer
     }
 }
@@ -82,24 +82,21 @@ impl ClassResolver {
     }
 
     pub fn register<T: StructSerializer>(&mut self, class_info: ClassInfo, id: u32) {
-        fn serializer<T2: 'static + StructSerializer>(this: &dyn Any, context: &mut WriteContext) {
-            let this = this.downcast_ref::<T2>();
-            match this {
-                Some(v) => {
-                    T2::serialize(v, context);
-                }
-                None => todo!(),
-            }
+        fn serializer<T2: 'static + StructSerializer>(this: &dyn Serializable, context: &mut WriteContext) {
+            let t = TypeId::of::<T2>();
+            let this = this.as_any().downcast_ref::<T2>().unwrap();
+            T2::serialize(this, context)
         }
 
         fn deserializer<T2: 'static + StructSerializer>(
             context: &mut ReadContext,
-        ) -> Result<Box<dyn Any>, Error> {
+        ) -> Result<Box<dyn Serializable>, Error> {
             match T2::deserialize(context) {
                 Ok(v) => Ok(Box::new(v)),
                 Err(e) => Err(e),
             }
         }
+
         self.type_id_map.insert(TypeId::of::<T>(), id);
         self.serialize_map
             .insert(id, Harness::new(serializer::<T>, deserializer::<T>));

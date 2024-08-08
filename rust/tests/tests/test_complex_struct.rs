@@ -19,25 +19,70 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime};
 use fury_core::fury::Fury;
 use fury_core::types::Mode;
 use fury_derive::Fury;
-use std::any::Any;
+use std::any::{Any, TypeId};
 use std::collections::HashMap;
+use fury_core::serializer::{Serializable, Serializer};
+
+
+#[test]
+fn any2() {
+    trait Animal: Serializable {
+        fn get_name(&self) -> String;
+    }
+    #[derive(Fury)]
+    struct Dog {
+        f3: String,
+    }
+
+    impl Animal for Dog {
+        fn get_name(&self) -> String {
+            self.f3.clone()
+        }
+    }
+
+    #[derive(Fury)]
+    struct Person {
+        f1: Box<dyn Animal>,
+    }
+
+    let f1 = Box::new(Dog {
+        f3: String::from("hello"),
+    });
+
+    let person = Person {
+        f1,
+    };
+
+    let mut fury = Fury::default();
+    fury.register::<Dog>(999);
+    fury.register::<Person>(1001);
+
+    let bin = fury.serialize(&person);
+    let obj: Person = fury.deserialize(&bin).expect("");
+
+    let obj = obj.f1.as_ref().as_any().downcast_ref::<Dog>().unwrap();
+
+    println!("{:?}", obj.f3)
+}
 
 #[test]
 fn any() {
-    #[derive(Fury, Debug)]
+    #[derive(Fury)]
     struct Animal {
         f3: String,
     }
 
-    #[derive(Fury, Debug)]
+    #[derive(Fury)]
     struct Person {
-        f1: Box<dyn Any>,
+        f1: Box<dyn Serializable>,
     }
 
+    let f1 = Box::new(Animal {
+        f3: String::from("hello"),
+    });
+
     let person = Person {
-        f1: Box::new(Animal {
-            f3: String::from("hello"),
-        }),
+        f1,
     };
 
     let mut fury = Fury::default();
@@ -45,7 +90,10 @@ fn any() {
     fury.register::<Person>(1000);
     let bin = fury.serialize(&person);
     let obj: Person = fury.deserialize(&bin).expect("");
-    assert!(obj.f1.is::<Animal>())
+
+    let obj = obj.f1.as_ref().as_any().downcast_ref::<Animal>().unwrap();
+
+    println!("{:?}", obj.f3)
 }
 
 #[test]
