@@ -116,6 +116,59 @@ for (int i = 0; i < 10; i++) {
 return arrowWriter.finishAsRecordBatch();
 ```
 
+### Support for Interface and Extension Types
+
+Fury now supports row format mapping for Java `interface` types and subclassed (`extends`) types, enabling more dynamic and flexible data schemas.
+
+These enhancements were introduced in [#2243](https://github.com/apache/fury/pull/2243), [#2250](https://github.com/apache/fury/pull/2250), and [#2256](https://github.com/apache/fury/pull/2256).
+
+#### Example: Interface Mapping with RowEncoder
+
+```java
+public interface Animal {
+  String speak();
+}
+
+public class Dog implements Animal {
+  public String name;
+
+  @Override
+  public String speak() {
+    return "Woof";
+  }
+}
+
+// Encode and decode using RowEncoder with interface type
+RowEncoder<Animal> encoder = Encoders.bean(Animal.class);
+Dog dog = new Dog();
+dog.name = "Bingo";
+BinaryRow row = encoder.toRow(dog);
+Animal decoded = encoder.fromRow(row);
+System.out.println(decoded.speak()); // Woof
+
+```
+
+#### Example: Extension Type with RowEncoder
+
+```java
+public class Parent {
+    public String parentField;
+}
+
+public class Child extends Parent {
+    public String childField;
+}
+
+// Encode and decode using RowEncoder with parent class type
+RowEncoder<Parent> encoder = Encoders.bean(Parent.class);
+Child child = new Child();
+child.parentField = "Hello";
+child.childField = "World";
+BinaryRow row = encoder.toRow(child);
+Parent decoded = encoder.fromRow(row);
+
+```
+
 Python:
 
 ```python
