@@ -703,6 +703,52 @@ class BytesBufferObject(BufferObject):
         return Buffer(self.binary)
 
 
+class StatefulSerializer(CrossLanguageCompatibleSerializer):
+    """
+    Serializer for objects that support __getstate__ and __setstate__.
+    Uses Fory's native serialization for better cross-language support.
+    """
+
+    def __init__(self, fory, cls):
+        super().__init__(fory, cls)
+        self.cls = cls
+        # Cache the method references as fields in the serializer.
+        self._getnewargs_ex = getattr(cls, "__getnewargs_ex__", None)
+        self._getnewargs = getattr(cls, "__getnewargs__", None)
+
+    def write(self, buffer, value):
+        state = value.__getstate__()
+        args = ()
+        kwargs = {}
+        if self._getnewargs_ex is not None:
+            args, kwargs = self._getnewargs_ex(value)
+        elif self._getnewargs is not None:
+            args = self._getnewargs(value)
+
+        # Serialize constructor arguments first
+        self.fory.serialize_ref(buffer, args)
+        self.fory.serialize_ref(buffer, kwargs)
+
+        # Then serialize the state
+        self.fory.serialize_ref(buffer, state)
+
+    def read(self, buffer):
+        args = self.fory.deserialize_ref(buffer)
+        kwargs = self.fory.deserialize_ref(buffer)
+        state = self.fory.deserialize_ref(buffer)
+
+        if args or kwargs:
+            # Case 1: __getnewargs__ was used. Re-create by calling __init__.
+            obj = self.cls(*args, **kwargs)
+        else:
+            # Case 2: Only __getstate__ was used. Create without calling __init__.
+            obj = self.cls.__new__(self.cls)
+
+        if state:
+            obj.__setstate__(state)
+        return obj
+
+
 class PickleSerializer(Serializer):
     PICKLE_TYPE_ID = 96
 
