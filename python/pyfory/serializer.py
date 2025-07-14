@@ -302,7 +302,7 @@ class DataClassSerializer(Serializer):
         self._xlang = xlang
         # This will get superclass type hints too.
         self._type_hints = typing.get_type_hints(clz)
-        self._field_names = sorted(self._type_hints.keys())
+        self._field_names = self._get_field_names(clz)
         self._has_slots = hasattr(clz, "__slots__")
 
         if self._xlang:
@@ -334,6 +334,16 @@ class DataClassSerializer(Serializer):
                 # don't use `__slots__`, which will make instance method readonly
                 self.write = self._generated_write_method
                 self.read = self._generated_read_method
+
+    def _get_field_names(self, clz):
+        if hasattr(clz, "__dict__"):
+            # Regular object with __dict__
+            # We can't know the fields without an instance, so we rely on type hints
+            return sorted(self._type_hints.keys())
+        elif hasattr(clz, "__slots__"):
+            # Object with __slots__
+            return sorted(clz.__slots__)
+        return []
 
     def _gen_write_method(self):
         context = {}
@@ -1176,6 +1186,54 @@ class PickleSerializer(Serializer):
 
     def read(self, buffer):
         return self.fory.handle_unsupported_read(buffer)
+
+
+class ObjectSerializer(Serializer):
+    """Serializer for regular Python objects.
+    It serializes objects based on `__dict__` or `__slots__`.
+    """
+
+    def __init__(self, fory, clz: type):
+        super().__init__(fory, clz)
+        # If the class defines __slots__, compute and store a sorted list once
+        slots = getattr(clz, "__slots__", None)
+        self._slot_field_names = None
+        if slots is not None:
+            # __slots__ can be a string or iterable of strings
+            if isinstance(slots, str):
+                slots = [slots]
+            self._slot_field_names = sorted(slots)
+
+    def write(self, buffer, value):
+        # Use precomputed slots if available, otherwise sort instance __dict__ keys
+        if self._slot_field_names is not None:
+            sorted_field_names = self._slot_field_names
+        else:
+            sorted_field_names = sorted(value.__dict__.keys())
+
+        buffer.write_varuint32(len(sorted_field_names))
+        for field_name in sorted_field_names:
+            buffer.write_string(field_name)
+            field_value = getattr(value, field_name)
+            self.fory.serialize_ref(buffer, field_value)
+
+    def read(self, buffer):
+        obj = self.type_.__new__(self.type_)
+        self.fory.ref_resolver.reference(obj)
+        num_fields = buffer.read_varuint32()
+        for _ in range(num_fields):
+            field_name = buffer.read_string()
+            field_value = self.fory.deserialize_ref(buffer)
+            setattr(obj, field_name, field_value)
+        return obj
+
+    def xwrite(self, buffer, value):
+        # for cross-language or minimal framing, reuse the same logic
+        return self.write(buffer, value)
+
+    def xread(self, buffer):
+        # symmetric to xwrite
+        return self.read(buffer)
 
 
 class ComplexObjectSerializer(DataClassSerializer):
