@@ -72,6 +72,7 @@ import org.apache.fory.util.record.RecordUtils;
  */
 public class MetaSharedCodecBuilder extends ObjectCodecBuilder {
   private final ClassDef classDef;
+  private final String defaultValueLanguage;
   private final DefaultValueUtils.DefaultValueField[] defaultValueFields;
 
   public MetaSharedCodecBuilder(TypeRef<?> beanType, Fory fory, ClassDef classDef) {
@@ -91,14 +92,32 @@ public class MetaSharedCodecBuilder extends ObjectCodecBuilder {
     objectCodecOptimizer =
         new ObjectCodecOptimizer(beanClass, grouper, !fory.isBasicTypesRefIgnored(), ctx);
 
+    String defaultValueLanguage = "None";
+    DefaultValueUtils.DefaultValueField[] defaultValueFields =
+        new DefaultValueUtils.DefaultValueField[0];
     if (fory.getConfig().isScalaOptimizationEnabled()) {
       // Check if this is a Scala case class and build default value fields
-      this.defaultValueFields =
+      defaultValueFields =
           DefaultValueUtils.getScalaDefaultValueSupport()
               .buildDefaultValueFields(fory, beanClass, grouper.getSortedDescriptors());
-    } else {
-      this.defaultValueFields = new DefaultValueUtils.DefaultValueField[0];
+      if (defaultValueFields.length > 0) {
+        defaultValueLanguage = "Scala";
+      }
     }
+    if (defaultValueFields.length == 0) {
+      DefaultValueUtils.DefaultValueSupport kotlinDefaultValueSupport =
+          DefaultValueUtils.getKotlinDefaultValueSupport();
+      if (kotlinDefaultValueSupport != null) {
+        defaultValueFields =
+            kotlinDefaultValueSupport.buildDefaultValueFields(
+                fory, beanClass, grouper.getSortedDescriptors());
+        if (defaultValueFields.length > 0) {
+          defaultValueLanguage = "Kotlin";
+        }
+      }
+    }
+    this.defaultValueLanguage = defaultValueLanguage;
+    this.defaultValueFields = defaultValueFields;
   }
 
   // Must be static to be shared across the whole process life.
@@ -155,7 +174,6 @@ public class MetaSharedCodecBuilder extends ObjectCodecBuilder {
   protected void addCommonImports() {
     super.addCommonImports();
     ctx.addImport(GeneratedMetaSharedSerializer.class);
-    ctx.addImport(DefaultValueUtils.class);
   }
 
   // Invoked by JIT.
@@ -232,6 +250,7 @@ public class MetaSharedCodecBuilder extends ObjectCodecBuilder {
       if (typeRef.unwrap().isPrimitive() || typeRef.equals(STRING_TYPE)) {
         defaultValueExpr = new Literal(defaultValue, typeRef);
       } else {
+        String funcName = "get" + defaultValueLanguage + "DefaultValue";
         defaultValueExpr =
             getOrCreateField(
                 true,
@@ -241,7 +260,7 @@ public class MetaSharedCodecBuilder extends ObjectCodecBuilder {
                   Expression expr =
                       new StaticInvoke(
                           DefaultValueUtils.class,
-                          "getScalaDefaultValue",
+                          funcName,
                           OBJECT_TYPE,
                           staticBeanClassExpr(),
                           Literal.ofString(member.getName()));
