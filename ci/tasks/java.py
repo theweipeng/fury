@@ -17,27 +17,63 @@
 
 import logging
 import os
+import sys
+import subprocess
+import re
 from . import common
+
+
+def get_jdk_major_version():
+    try:
+        # Run the 'java -version' command
+        result = subprocess.run(['java', '-version'], capture_output=True, text=True)
+        output = result.stderr  # java -version outputs to stderr
+
+        # Use regex to find the version string
+        match = re.search(r'version "([^"]+)"', output)
+        if not match:
+            return None
+
+        version_string = match.group(1)
+
+        # Parse the version string
+        version_parts = version_string.split('.')
+        if version_parts[0] == '1':
+            # Java 8 or earlier
+            return int(version_parts[1])
+        else:
+            # Java 9 or later
+            return int(version_parts[0])
+
+    except Exception:
+        return None
+
 
 # JDK versions
 JDKS = {
-    "8": "zulu21.28.85-ca-jdk21.0.0-linux_x64",
-    "11": "zulu17.44.17-ca-crac-jdk17.0.8-linux_x64",
-    "17": "zulu15.46.17-ca-jdk15.0.10-linux_x64",
-    "21": "zulu13.54.17-ca-jdk13.0.14-linux_x64",
-    "24": "zulu11.66.15-ca-jdk11.0.20-linux_x64",
+    "8": "zulu8.72.0.17-ca-jdk8.0.382-linux_x64",
+    "11": "zulu11.66.15-ca-jdk11.0.20-linux_x64",
+    "17": "zulu17.44.17-ca-crac-jdk17.0.8-linux_x64",
+    "21": "zulu21.28.85-ca-jdk21.0.0-linux_x64",
+    "24": "zulu24.32.13-ca-fx-jdk24.0.2-linux_x64",
 }
 
 
 def install_jdks():
     """Download and install JDKs."""
+    logging.info("Downloading and installing JDKs")
     common.cd_project_subdir("")  # Go to the project root
     for jdk in JDKS.values():
+        if os.path.exists(os.path.join(common.PROJECT_ROOT_DIR, jdk)):
+            logging.info(f"JDK {jdk} already exists")
+            continue
         common.exec_cmd(
             f"wget -q https://cdn.azul.com/zulu/bin/{jdk}.tar.gz -O {jdk}.tar.gz"
         )
         common.exec_cmd(f"tar zxf {jdk}.tar.gz")
+    logging.info("Creating toolchains.xml")
     create_toolchains_xml(JDKS)
+    logging.info("JDKs downloaded and installed successfully")
 
 
 def create_toolchains_xml(jdk_mappings):
@@ -70,7 +106,7 @@ def create_toolchains_xml(jdk_mappings):
         # Set configuration
         configuration = ET.SubElement(toolchain, "configuration")
         jdk_home = ET.SubElement(configuration, "jdkHome")
-        jdk_home.text = os.path.join(common.PROJECT_ROOT_DIR, jdk_name)
+        jdk_home.text = os.path.abspath(os.path.join(common.PROJECT_ROOT_DIR, jdk_name))
     
     # Create pretty XML string
     rough_string = ET.tostring(toolchains, 'unicode')
@@ -88,12 +124,22 @@ def create_toolchains_xml(jdk_mappings):
     
     logging.info(f"Created toolchains.xml at {toolchains_path}")
     logging.info("Toolchains configuration:")
-    for version, jdk_name in jdk_mappings:
+    for version, jdk_name in jdk_mappings.items():
         jdk_path = os.path.join(common.PROJECT_ROOT_DIR, jdk_name)
         logging.info(f"  JDK {version}: {jdk_path}")
+    # print toolchains.xml
+    with open(toolchains_path, 'r', encoding='utf-8') as f:
+        logging.info(f.read())
+
 
 def install_fory():
     """Install Fory."""
+    # Always install jdks and create toolchains.xml to ensure proper JDK environment
+    if get_jdk_major_version() == 8:
+        install_jdks()
+        java_home = os.path.join(common.PROJECT_ROOT_DIR, JDKS["11"])
+        os.environ["JAVA_HOME"] = java_home
+        os.environ["PATH"] = f"{java_home}/bin:{os.environ.get('PATH', '')}"
     common.cd_project_subdir("java")
     common.exec_cmd("mvn -T16 --batch-mode --no-transfer-progress install -DskipTests")
 
@@ -101,6 +147,7 @@ def install_fory():
 def run_java8():
     """Run Java 8 tests."""
     logging.info("Executing fory java tests with Java 8")
+    install_jdks()
     common.cd_project_subdir("java")
     common.exec_cmd("mvn -T16 --batch-mode --no-transfer-progress test -pl '!fory-format'")
     logging.info("Executing fory java tests succeeds")
@@ -256,31 +303,28 @@ def run_release():
     logging.info("Release to Maven Central completed successfully")
 
 
-def run(java_version=None, release=False, install_jdks=False, install_fory=False):
+def run(version=None, release=False, install_jdks=False, install_fory=False):
     """Run Java CI tasks based on the specified Java version."""
     if install_jdks:
-        install_jdks()
+        globals()["install_jdks"]()
     if install_fory:
-        install_fory()
+        globals()["install_fory"]()
     if release:
         logging.info("Release mode enabled - will release to Maven Central")
         run_release()
-    elif java_version == "8":
+    elif version == "8":
         run_java8()
-    elif java_version == "11":
+    elif version == "11":
         run_java11()
-    elif java_version == "17":
+    elif version == "17":
         run_jdk17_plus("17")
-    elif java_version == "21":
+    elif version == "21":
         run_jdk17_plus("21")
-    elif java_version == "24":
+    elif version == "24":
         run_jdk17_plus("24")
-    elif java_version == "windows_java21":
+    elif version == "windows_java21":
         run_windows_java21()
-    elif java_version == "integration_tests":
+    elif version == "integration_tests":
         run_integration_tests()
-    elif java_version == "graalvm":
+    elif version == "graalvm":
         run_graalvm_test()
-    else:
-        # Default to Java 17 if no version specified
-        run_jdk17_plus("17")
