@@ -15,19 +15,21 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: build wheels for release
+name: Build Containerized PR Wheels
 on:
+  pull_request:
+    paths: [ci/**, python/**, .github/workflows/**]
   push:
-    tags: ["v*"]
+    branches: [main]
+    paths: [ci/**, python/**, .github/workflows/**]
 
 jobs:
-  build-wheels:
-    uses: ./.github/workflows/build-wheels.yaml
+  build:
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-13, macos-14, macos-latest, windows-latest]
-        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12', '3.13']
-    with:
-      os: ${{ matrix.os }}
-      python-version: ${{ matrix.python-version }}
-      bump-version: true
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build and test wheels
+        run: ./ci/build_linux_wheels.py --arch ${{ runner.arch }}
