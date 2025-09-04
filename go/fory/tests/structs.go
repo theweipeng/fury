@@ -15,13 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-module github.com/apache/fory/go/fory
+package fory
 
-go 1.13
+// ValidationDemo is a simple struct for testing code generation
+// Contains only basic types since PR1 only supports basic types
 
-require (
-	github.com/davecgh/go-spew v1.1.1 // indirect
-	github.com/spaolacci/murmur3 v1.1.0
-	github.com/stretchr/testify v1.7.0
-	golang.org/x/tools v0.1.12
-)
+// fory:gen
+type ValidationDemo struct {
+	A int32  `json:"a"` // int32 field
+	B string `json:"b"` // string field
+	C int64  `json:"c"` // int64 field (instead of array, as arrays are not supported yet)
+}
