@@ -59,7 +59,7 @@ pub enum TypeId {
     NAMED_ENUM = 14,
     STRUCT = 15,
     COMPATIBLE_STRUCT = 16,
-    NamedStruct = 17,
+    NAMED_STRUCT = 17,
     NAMED_COMPATIBLE_STRUCT = 18,
     EXT = 19,
     NAMED_EXT = 20,
@@ -124,6 +124,16 @@ pub static BASIC_TYPES: [TypeId; 18] = [
     TypeId::INT64_ARRAY,
     TypeId::FLOAT32_ARRAY,
     TypeId::FLOAT64_ARRAY,
+];
+
+pub static PRIMITIVE_TYPES: [u32; 7] = [
+    TypeId::BOOL as u32,
+    TypeId::INT8 as u32,
+    TypeId::INT16 as u32,
+    TypeId::INT32 as u32,
+    TypeId::INT64 as u32,
+    TypeId::FLOAT32 as u32,
+    TypeId::FLOAT64 as u32,
 ];
 
 pub static FINAL_TYPES: [TypeId; 3] = [TypeId::STRING, TypeId::LOCAL_DATE, TypeId::TIMESTAMP];

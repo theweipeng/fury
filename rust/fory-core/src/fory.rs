@@ -18,7 +18,6 @@
 use crate::buffer::{Reader, Writer};
 use crate::ensure;
 use crate::error::Error;
-use crate::meta::MetaStringEncoder;
 use crate::resolver::context::ReadContext;
 use crate::resolver::context::WriteContext;
 use crate::resolver::type_resolver::{TypeInfo, TypeResolver};
@@ -34,6 +33,7 @@ pub struct Fory {
     mode: Mode,
     xlang: bool,
     type_resolver: TypeResolver,
+    compress_string: bool,
 }
 
 impl Default for Fory {
@@ -42,6 +42,7 @@ impl Default for Fory {
             mode: Mode::SchemaConsistent,
             xlang: true,
             type_resolver: TypeResolver::default(),
+            compress_string: false,
         }
     }
 }
@@ -57,8 +58,17 @@ impl Fory {
         self
     }
 
+    pub fn compress_string(mut self, compress_string: bool) -> Self {
+        self.compress_string = compress_string;
+        self
+    }
+
     pub fn get_mode(&self) -> &Mode {
         &self.mode
+    }
+
+    pub fn is_compress_string(&self) -> bool {
+        self.compress_string
     }
 
     pub fn write_head<T: Serializer>(&self, is_none: bool, writer: &mut Writer) {
@@ -136,13 +146,18 @@ impl Fory {
         if is_none {
             return Ok(T::default());
         }
+        let mut bytes_to_skip = 0;
         if self.mode == Mode::Compatible {
             let meta_offset = context.reader.i32();
             if meta_offset != -1 {
-                context.load_meta(meta_offset as usize);
+                bytes_to_skip = context.load_meta(meta_offset as usize);
             }
         }
-        <T as Serializer>::deserialize(context, false)
+        let result = <T as Serializer>::deserialize(context, false);
+        if bytes_to_skip > 0 {
+            context.reader.skip(bytes_to_skip as u32);
+        }
+        result
     }
 
     pub fn serialize<T: Serializer>(&self, record: &T) -> Vec<u8> {
@@ -176,34 +191,24 @@ impl Fory {
     }
 
     pub fn register<T: 'static + StructSerializer>(&mut self, id: u32) {
-        let actual_type_id = T::actual_type_id(id);
-        let empty_bytes = "".as_bytes().to_vec();
-        let type_info = TypeInfo::new::<T>(
-            self,
-            actual_type_id,
-            empty_bytes.clone(),
-            empty_bytes,
-            false,
-        );
-        self.type_resolver.register::<T>(type_info);
+        let actual_type_id = T::actual_type_id(id, false, &self.mode);
+        let empty_string = String::new();
+        let type_info =
+            TypeInfo::new::<T>(self, actual_type_id, &empty_string, &empty_string, false);
+        self.type_resolver.register::<T>(&type_info);
     }
 
-    pub fn register_by_name<T: 'static + StructSerializer>(
+    pub fn register_by_namespace<T: 'static + StructSerializer>(
         &mut self,
         namespace: &str,
         type_name: &str,
     ) {
-        let type_id = T::actual_type_id(0);
-        let encoder = MetaStringEncoder::new();
-        let namespace_metastring = encoder.encode(namespace).unwrap();
-        let type_name_metastring = encoder.encode(type_name).unwrap();
-        let type_info = TypeInfo::new::<T>(
-            self,
-            type_id,
-            namespace_metastring.bytes,
-            type_name_metastring.bytes,
-            true,
-        );
-        self.type_resolver.register::<T>(type_info);
+        let actual_type_id = T::actual_type_id(0, true, &self.mode);
+        let type_info = TypeInfo::new::<T>(self, actual_type_id, namespace, type_name, true);
+        self.type_resolver.register::<T>(&type_info);
+    }
+
+    pub fn register_by_name<T: 'static + StructSerializer>(&mut self, type_name: &str) {
+        self.register_by_namespace::<T>("", type_name);
     }
 }

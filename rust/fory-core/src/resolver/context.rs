@@ -84,7 +84,7 @@ impl<'se> WriteContext<'se> {
 pub struct ReadContext<'de, 'bf: 'de> {
     pub reader: Reader<'bf>,
     pub tags: Vec<&'de str>,
-    pub fory: &'de Fory,
+    fory: &'de Fory,
     pub meta_resolver: MetaReaderResolver,
 }
 
@@ -106,7 +106,7 @@ impl<'de, 'bf: 'de> ReadContext<'de, 'bf> {
         self.meta_resolver.get(type_index)
     }
 
-    pub fn load_meta(&mut self, offset: usize) {
+    pub fn load_meta(&mut self, offset: usize) -> usize {
         self.meta_resolver.load(&mut Reader::new(
             &self.reader.slice_after_cursor()[offset..],
         ))

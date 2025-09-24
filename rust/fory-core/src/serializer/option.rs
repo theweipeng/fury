@@ -20,26 +20,27 @@ use crate::fory::Fory;
 use crate::resolver::context::ReadContext;
 use crate::resolver::context::WriteContext;
 use crate::serializer::Serializer;
-use crate::types::{ForyGeneralList, Mode, TypeId};
+use crate::types::ForyGeneralList;
 
 impl<T: Serializer> Serializer for Option<T> {
-    fn read(context: &mut ReadContext, is_field: bool) -> Result<Self, Error> {
-        if *context.get_fory().get_mode() == Mode::Compatible && !is_field {
-            let remote_type_id = context.reader.var_uint32();
-            assert_eq!(remote_type_id, T::get_type_id(context.fory));
-        }
-        Ok(Some(T::read(context, is_field)?))
+    fn read(context: &mut ReadContext) -> Result<Self, Error> {
+        Ok(Some(T::read(context)?))
+    }
+
+    fn read_type_info(context: &mut ReadContext, is_field: bool) {
+        T::read_type_info(context, is_field);
     }
 
     fn write(&self, context: &mut WriteContext, is_field: bool) {
-        if *context.get_fory().get_mode() == Mode::Compatible && !is_field {
-            context.writer.var_uint32(TypeId::BOOL as u32);
-        }
         if let Some(v) = self {
             T::write(v, context, is_field)
         } else {
             unreachable!("write should be call by serialize")
         }
+    }
+
+    fn write_type_info(context: &mut WriteContext, is_field: bool) {
+        T::write_type_info(context, is_field);
     }
 
     fn reserved_space() -> usize {

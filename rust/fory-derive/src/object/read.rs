@@ -67,7 +67,9 @@ fn read(fields: &[&Field]) -> TokenStream {
         .iter()
         .map(|f| create_private_field_name(f))
         .collect();
-    let sorted_deserialize = {
+    let sorted_deserialize = if fields.is_empty() {
+        quote! {}
+    } else {
         let let_decls = fields
             .iter()
             .zip(private_idents.iter())
@@ -77,20 +79,18 @@ fn read(fields: &[&Field]) -> TokenStream {
                     let mut #private_ident: #ty = Default::default();
                 }
             });
-
         let match_ts = fields.iter().zip(private_idents.iter()).map(|(field, private_ident)| {
             let ty = &field.ty;
             let name_str = field.ident.as_ref().unwrap().to_string();
             quote! {
                 #name_str => {
-                    #private_ident = <#ty as fory_core::serializer::Serializer>::deserialize(context, true)?;
+                    let skip_ref_flag = fory_core::serializer::get_skip_ref_flag::<#ty>(context.get_fory());
+                    #private_ident = fory_core::serializer::read_data::<#ty>(context, true, skip_ref_flag, false)?;
                 }
             }
         });
-
         quote! {
              #(#let_decls)*
-
             let sorted_field_names = <Self as fory_core::serializer::StructSerializer>::get_sorted_field_names(context.get_fory());
             for field_name in sorted_field_names {
                 match field_name.as_str() {
@@ -110,19 +110,22 @@ fn read(fields: &[&Field]) -> TokenStream {
             }
         });
     quote! {
-        fn read(context: &mut fory_core::resolver::context::ReadContext, _is_field: bool) -> Result<Self, fory_core::error::Error> {
+        fn read(context: &mut fory_core::resolver::context::ReadContext) -> Result<Self, fory_core::error::Error> {
+            #sorted_deserialize
+            Ok(Self {
+                #(#field_idents),*
+            })
+            // Ok(Self {
+            //     #(#assign_stmt),*
+            // })
+        }
+
+        fn read_type_info(context: &mut fory_core::resolver::context::ReadContext, _is_field: bool) {
             let remote_type_id = context.reader.var_uint32();
             assert_eq!(remote_type_id, Self::get_type_id(context.get_fory()));
             if *context.get_fory().get_mode() == fory_core::types::Mode::Compatible {
                 let _meta_index = context.reader.var_uint32();
             }
-            // Ok(Self {
-            //     #(#assign_stmt),*
-            // })
-            #sorted_deserialize
-            Ok(Self {
-                #(#field_idents),*
-            })
         }
     }
 }
@@ -151,7 +154,7 @@ pub fn gen_deserialize_nullable(fields: &[&Field]) -> TokenStream {
             let ty = &field.ty;
             let generic_tree = parse_generic_tree(ty);
             let nullable_generic_tree = NullableTypeNode::from(generic_tree);
-            let deserialize_tokens = nullable_generic_tree.to_deserialize_tokens(&vec![]);
+            let deserialize_tokens = nullable_generic_tree.to_deserialize_tokens(&vec![], true);
             quote! {
                 fn #fn_name(
                     context: &mut fory_core::resolver::context::ReadContext,
@@ -191,7 +194,8 @@ pub fn gen_read_compatible(fields: &[&Field], struct_ident: &Ident) -> TokenStre
             if _field.field_name.as_str() == #field_name_str {
                 let local_field_type = #generic_token;
                 if &_field.field_type == &local_field_type {
-                    #var_name = Some(<#ty as fory_core::serializer::Serializer>::deserialize(context, true).unwrap_or_else(|_err| {
+                    let skip_ref_flag = fory_core::serializer::get_skip_ref_flag::<#ty>(context.get_fory());
+                    #var_name = Some(fory_core::serializer::read_data::<#ty>(context, true, skip_ref_flag, false).unwrap_or_else(|_err| {
                         // same type, err means something wrong
                         panic!("Err at deserializing {:?}: {:?}", #field_name_str, _err);
                     }));
@@ -201,7 +205,8 @@ pub fn gen_read_compatible(fields: &[&Field], struct_ident: &Ident) -> TokenStre
                     if local_nullable_type != remote_nullable_type {
                         // set default and skip bytes
                         println!("Type not match, just skip: {}", #field_name_str);
-                        fory_core::serializer::skip::skip_field_value(context, &remote_nullable_type, true).unwrap();
+                        let read_ref_flag = fory_core::serializer::skip::get_read_ref_flag(&remote_nullable_type);
+                        fory_core::serializer::skip::skip_field_value(context, &remote_nullable_type, read_ref_flag).unwrap();
                         #var_name = Some(#base_ty::default());
                     } else {
                         println!("Try to deserialize: {}", #field_name_str);
@@ -236,7 +241,8 @@ pub fn gen_read_compatible(fields: &[&Field], struct_ident: &Ident) -> TokenStre
                 #(#pattern_items else)* {
                     println!("skip {:?}:{:?}", _field.field_name.as_str(), _field.field_type);
                     let nullable_field_type = fory_core::meta::NullableFieldType::from(_field.field_type.clone());
-                    fory_core::serializer::skip::skip_field_value(context, &nullable_field_type, true).unwrap();
+                    let read_ref_flag = fory_core::serializer::skip::get_read_ref_flag(&nullable_field_type);
+                    fory_core::serializer::skip::skip_field_value(context, &nullable_field_type, read_ref_flag).unwrap();
                 }
             }
             Ok(Self {
@@ -251,10 +257,18 @@ pub fn gen(fields: &[&Field], struct_ident: &Ident) -> TokenStream {
     let compatible_token_stream = deserialize_compatible(struct_ident);
 
     quote! {
-        fn deserialize(context: &mut fory_core::resolver::context::ReadContext, is_field: bool) -> Result<Self, fory_core::error::Error> {
+        fn deserialize(context: &mut fory_core::resolver::context::ReadContext, _is_field: bool) -> Result<Self, fory_core::error::Error> {
             match context.get_fory().get_mode() {
                 fory_core::types::Mode::SchemaConsistent => {
-                    fory_core::serializer::deserialize::<Self>(context, is_field)
+                    let ref_flag = context.reader.i8();
+                    if ref_flag == fory_core::types::RefFlag::Null as i8 {
+                        Ok(Self::default())
+                    } else if ref_flag == (fory_core::types::RefFlag::NotNullValue as i8) {
+                        Self::read_type_info(context, false);
+                        Self::read(context)
+                    } else {
+                        unimplemented!()
+                    }
                 },
                 fory_core::types::Mode::Compatible => {
                     #compatible_token_stream
