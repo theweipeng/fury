@@ -84,14 +84,12 @@ public class ReflectionUtils {
       return null;
     }
     Constructor[] constructors = clazz.getDeclaredConstructors();
-    if (constructors.length == 0) {
-      return null;
-    } else {
-      return Stream.of(constructors)
-          .filter((c) -> c.getParameterCount() == 0)
-          .findAny()
-          .orElse(null);
+    Constructor ctr = null;
+    if (constructors.length != 0) {
+      ctr =
+          Stream.of(constructors).filter((c) -> c.getParameterCount() == 0).findAny().orElse(null);
     }
+    return ctr;
   }
 
   private static final ClassValue<MethodHandle> ctrHandleCache =
@@ -123,7 +121,11 @@ public class ReflectionUtils {
   public static MethodHandle getCtrHandle(Class<?> cls, boolean checked) {
     MethodHandle methodHandle = ctrHandleCache.get(cls);
     if (checked && methodHandle == null) {
-      throw new RuntimeException(String.format("Class %s doesn't have a no-arg constructor", cls));
+      throw new RuntimeException(
+          String.format(
+              "Class %s doesn't have a no-arg constructor, "
+                  + "please provide a no-arg constructor for the type",
+              cls));
     }
     return methodHandle;
   }

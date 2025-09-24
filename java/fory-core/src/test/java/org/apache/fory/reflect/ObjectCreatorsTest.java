@@ -17,27 +17,31 @@
  * under the License.
  */
 
-package org.apache.fory.serializer;
+package org.apache.fory.reflect;
 
-import org.apache.fory.Fory;
-import org.apache.fory.memory.MemoryBuffer;
-import org.apache.fory.reflect.ObjectCreator;
+import java.util.concurrent.ArrayBlockingQueue;
+import org.apache.fory.reflect.ObjectCreators.ParentNoArgCtrObjectCreator;
+import org.testng.Assert;
+import org.testng.annotations.Test;
 
-/**
- * Base class for compatible serializer. Both JIT mode serializer and interpreter-mode serializer
- * will extend this class.
- */
-public abstract class CompatibleSerializerBase<T> extends AbstractObjectSerializer<T> {
-  public CompatibleSerializerBase(Fory fory, Class<T> type) {
-    super(fory, type);
+@SuppressWarnings("rawtypes")
+public class ObjectCreatorsTest {
+
+  static class NoCtrTestClass {
+    int f1;
+
+    public NoCtrTestClass(int f1) {
+      this.f1 = f1;
+    }
   }
 
-  public CompatibleSerializerBase(Fory fory, Class<T> type, ObjectCreator<T> objectCreator) {
-    super(fory, type, objectCreator);
-  }
-
-  public T readAndSetFields(MemoryBuffer buffer, T obj) {
-    // java record object doesn't support update state.
-    throw new UnsupportedOperationException();
+  @Test
+  public void testObjectCreator() {
+    ParentNoArgCtrObjectCreator<ArrayBlockingQueue> creator =
+        new ParentNoArgCtrObjectCreator<>(ArrayBlockingQueue.class);
+    Assert.assertEquals(creator.newInstance().getClass(), ArrayBlockingQueue.class);
+    Assert.assertEquals(
+        new ParentNoArgCtrObjectCreator<>(NoCtrTestClass.class).newInstance().getClass(),
+        NoCtrTestClass.class);
   }
 }
