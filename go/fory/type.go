@@ -540,6 +540,10 @@ func (r *typeResolver) getSerializerByTypeTag(typeTag string) (Serializer, error
 
 func (r *typeResolver) getTypeInfo(value reflect.Value, create bool) (TypeInfo, error) {
 	// First check if type info exists in cache
+	if value.Kind() == reflect.Interface {
+		// make sure the concrete value don't miss its real typeInfo
+		value = value.Elem()
+	}
 	typeString := value.Type()
 	if info, ok := r.typesInfo[typeString]; ok {
 		if info.Serializer == nil {
@@ -562,9 +566,6 @@ func (r *typeResolver) getTypeInfo(value reflect.Value, create bool) (TypeInfo, 
 	// Early return if type registration is required but not allowed
 	if !create {
 		fmt.Errorf("type %v not registered and create=false", value.Type())
-	}
-	if value.Kind() == reflect.Interface {
-		value = value.Elem()
 	}
 	type_ := value.Type()
 	// Get package path and type name for registration
@@ -804,7 +805,7 @@ func (r *typeResolver) writeSharedTypeMeta(buffer *ByteBuffer, typeInfo TypeInfo
 	buffer.WriteVarUint32(newIndex)
 	context.typeMap[typ] = newIndex
 
-	typeDef, err := r.getOrCreateTypeDef(typeInfo.Type)
+	typeDef, err := r.getTypeDef(typeInfo.Type, true)
 	if err != nil {
 		return err
 	}
@@ -812,9 +813,13 @@ func (r *typeResolver) writeSharedTypeMeta(buffer *ByteBuffer, typeInfo TypeInfo
 	return nil
 }
 
-func (r *typeResolver) getOrCreateTypeDef(typ reflect.Type) (*TypeDef, error) {
+func (r *typeResolver) getTypeDef(typ reflect.Type, create bool) (*TypeDef, error) {
 	if existingTypeDef, exists := r.typeToTypeDef[typ]; exists {
 		return existingTypeDef, nil
+	}
+
+	if !create {
+		return nil, fmt.Errorf("TypeDef not found for type %s", typ)
 	}
 
 	zero := reflect.Zero(typ)
@@ -1234,8 +1239,11 @@ func (r *typeResolver) getTypeById(id int16) (reflect.Type, error) {
 }
 
 func (r *typeResolver) getTypeInfoById(id int16) (TypeInfo, error) {
-	typeInfo := r.typeIDToTypeInfo[int32(id)]
-	return typeInfo, nil
+	if typeInfo, exists := r.typeIDToTypeInfo[int32(id)]; exists {
+		return typeInfo, nil
+	} else {
+		return TypeInfo{}, fmt.Errorf("typeInfo of typeID %d not found", id)
+	}
 }
 
 func (r *typeResolver) writeMetaString(buffer *ByteBuffer, str string) error {
