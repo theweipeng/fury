@@ -140,10 +140,14 @@ cdef class MapRefResolver:
         if not self.ref_tracking:
             return head_flag
         cdef int32_t ref_id
+        cdef PyObject * obj
         if head_flag == REF_FLAG:
             # read reference id and get object from reference resolver
             ref_id = buffer.read_varuint32()
-            self.read_object = <object> (self.read_objects[ref_id])
+            assert 0 <= ref_id < self.read_objects.size(), f"Invalid ref id {ref_id}, current size {self.read_objects.size()}"
+            obj = self.read_objects[ref_id]
+            assert obj != NULL, f"Invalid ref id {ref_id}, current size {self.read_objects.size()}"
+            self.read_object = <object> obj
             return REF_FLAG
         else:
             self.read_object = None
@@ -163,10 +167,16 @@ cdef class MapRefResolver:
             # `refId >= NOT_NULL_VALUE_FLAG` to read data.
             return buffer.read_int8()
         head_flag = buffer.read_int8()
+        cdef int32_t ref_id
+        cdef PyObject *obj
         if head_flag == REF_FLAG:
             # read reference id and get object from reference resolver
             ref_id = buffer.read_varuint32()
-            self.read_object = <object> (self.read_objects[ref_id])
+            # avoid wrong id cause crash
+            assert 0 <= ref_id < self.read_objects.size(), f"Invalid ref id {ref_id}, current size {self.read_objects.size()}"
+            obj = self.read_objects[ref_id]
+            assert obj != NULL, f"Invalid ref id {ref_id}, current size {self.read_objects.size()}"
+            self.read_object = <object> obj
             # `head_flag` except `REF_FLAG` can be used as stub reference id because
             # we use `refId >= NOT_NULL_VALUE_FLAG` to read data.
             return head_flag
@@ -175,6 +185,11 @@ cdef class MapRefResolver:
             if head_flag == REF_VALUE_FLAG:
                 return self.preserve_ref_id()
             return head_flag
+
+    cpdef inline int32_t last_preserved_ref_id(self):
+        cdef int32_t length = self.read_ref_ids.size()
+        assert length > 0
+        return self.read_ref_ids[length - 1]
 
     cpdef inline reference(self, obj):
         if not self.ref_tracking:
@@ -192,7 +207,10 @@ cdef class MapRefResolver:
         if id_ is None:
             return self.read_object
         cdef int32_t ref_id = id_
-        return <object> (self.read_objects[ref_id])
+        cdef PyObject * obj = self.read_objects[ref_id]
+        if obj == NULL:
+            return None
+        return <object> obj
 
     cpdef inline set_read_object(self, int32_t ref_id, obj):
         if not self.ref_tracking:

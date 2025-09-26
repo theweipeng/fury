@@ -137,31 +137,99 @@ class NoneSerializer(Serializer):
         return None
 
 
+__skip_class_attr_names__ = ("__module__", "__qualname__", "__dict__", "__weakref__")
+
+
 class TypeSerializer(Serializer):
-    """Serializer for Python type objects (classes)."""
+    """Serializer for Python type objects (classes), including local classes."""
 
     def __init__(self, fory, cls):
         super().__init__(fory, cls)
         self.cls = cls
 
     def write(self, buffer, value):
-        # Serialize the type by its module and name
-        module_name = getattr(value, "__module__", "")
-        type_name = getattr(value, "__name__", "")
-        buffer.write_string(module_name)
-        buffer.write_string(type_name)
+        module_name = value.__module__
+        qualname = value.__qualname__
+
+        if module_name == "__main__" or "<locals>" in qualname:
+            # Local class - serialize full context
+            buffer.write_int8(1)  # Local class marker
+            self._serialize_local_class(buffer, value)
+        else:
+            buffer.write_int8(0)  # Global class marker
+            buffer.write_string(module_name)
+            buffer.write_string(qualname)
 
     def read(self, buffer):
-        module_name = buffer.read_string()
-        type_name = buffer.read_string()
+        class_type = buffer.read_int8()
 
-        # Import the module and get the type
-        if module_name and module_name != "builtins":
-            module = __import__(module_name, fromlist=[type_name])
-            return getattr(module, type_name)
+        if class_type == 1:
+            # Local class - deserialize from full context
+            return self._deserialize_local_class(buffer)
         else:
-            # Handle built-in types
-            return getattr(builtins, type_name, type)
+            # Global class - import by module and name
+            module_name = buffer.read_string()
+            qualname = buffer.read_string()
+            cls = importlib.import_module(module_name)
+            for name in qualname.split("."):
+                cls = getattr(cls, name)
+            return cls
+
+    def _serialize_local_class(self, buffer, cls):
+        """Serialize a local class by capturing its creation context."""
+        assert self.fory.ref_tracking, "Reference tracking must be enabled for local classes serialization"
+        # Basic class information
+        module = cls.__module__
+        qualname = cls.__qualname__
+        buffer.write_string(module)
+        buffer.write_string(qualname)
+
+        # Serialize base classes
+        # Let Fory's normal serialization handle bases (including other local classes)
+        bases = cls.__bases__
+        buffer.write_varuint32(len(bases))
+        for base in bases:
+            self.fory.serialize_ref(buffer, base)
+
+        # Serialize class dictionary (excluding special attributes)
+        # FunctionSerializer will automatically handle methods with closures
+        class_dict = {}
+        for attr_name, attr_value in cls.__dict__.items():
+            # Skip special attributes that are handled by type() constructor
+            if attr_name in __skip_class_attr_names__:
+                continue
+            class_dict[attr_name] = attr_value
+
+        # Let Fory's normal serialization handle the class dict
+        # This will use FunctionSerializer for methods, which handles closures properly
+        self.fory.serialize_ref(buffer, class_dict)
+
+    def _deserialize_local_class(self, buffer):
+        """Deserialize a local class by recreating it with the captured context."""
+        assert self.fory.ref_tracking, "Reference tracking must be enabled for local classes deserialization"
+        # Read basic class information
+        module = buffer.read_string()
+        qualname = buffer.read_string()
+        name = qualname.rsplit(".", 1)[-1]
+        ref_id = self.fory.ref_resolver.last_preserved_ref_id()
+
+        # Read base classes
+        num_bases = buffer.read_varuint32()
+        bases = tuple([self.fory.deserialize_ref(buffer) for _ in range(num_bases)])
+        # Create the class using type() constructor
+        cls = type(name, bases, {})
+        # `class_dict` may reference to `cls`, which is a circular reference
+        self.fory.ref_resolver.set_read_object(ref_id, cls)
+        # Read class dictionary
+        # Fory's normal deserialization will handle methods via FunctionSerializer
+        class_dict = self.fory.deserialize_ref(buffer)
+        for k, v in class_dict.items():
+            setattr(cls, k, v)
+
+        # Set module and qualname
+        cls.__module__ = module
+        cls.__qualname__ = qualname
+        return cls
 
 
 class PandasRangeIndexSerializer(Serializer):
@@ -244,7 +312,14 @@ from pyfory._struct import _get_hash, _sort_fields, StructFieldSerializerVisitor
 
 
 class DataClassSerializer(Serializer):
-    def __init__(self, fory, clz: type, xlang: bool = False, field_names: List[str] = None, serializers: List[Serializer] = None):
+    def __init__(
+        self,
+        fory,
+        clz: type,
+        xlang: bool = False,
+        field_names: List[str] = None,
+        serializers: List[Serializer] = None,
+    ):
         super().__init__(fory, clz)
         self._xlang = xlang
         # This will get superclass type hints too.
@@ -915,7 +990,14 @@ class ReduceSerializer(CrossLanguageCompatibleSerializer):
             elif len(reduce_result) == 5:
                 # Case 5: (callable, args, state, listitems, dictitems)
                 callable_obj, args, state, listitems, dictitems = reduce_result
-                reduce_data = ("callable", callable_obj, args, state, listitems, dictitems)
+                reduce_data = (
+                    "callable",
+                    callable_obj,
+                    args,
+                    state,
+                    listitems,
+                    dictitems,
+                )
             else:
                 raise ValueError(f"Invalid __reduce__ result length: {len(reduce_result)}")
         else:
@@ -1003,7 +1085,17 @@ class FunctionSerializer(CrossLanguageCompatibleSerializer):
     """
 
     # Cache for function attributes that are handled separately
-    _FUNCTION_ATTRS = frozenset(("__code__", "__name__", "__defaults__", "__closure__", "__globals__", "__module__", "__qualname__"))
+    _FUNCTION_ATTRS = frozenset(
+        (
+            "__code__",
+            "__name__",
+            "__defaults__",
+            "__closure__",
+            "__globals__",
+            "__module__",
+            "__qualname__",
+        )
+    )
 
     def _serialize_function(self, buffer, func):
         """Serialize a function by capturing all its components."""
