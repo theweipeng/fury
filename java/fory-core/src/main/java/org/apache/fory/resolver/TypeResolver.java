@@ -111,6 +111,29 @@ public abstract class TypeResolver {
     metaStringResolver = fory.getMetaStringResolver();
   }
 
+  public abstract void register(Class<?> type);
+
+  public abstract void register(Class<?> type, int id);
+
+  public abstract void register(Class<?> type, String namespace, String typeName);
+
+  public void register(String className) {
+    register(loadClass(className));
+  }
+
+  public void register(String className, int classId) {
+    register(loadClass(className), classId);
+  }
+
+  public void register(String className, String namespace, String typeName) {
+    register(loadClass(className), namespace, typeName);
+  }
+
+  public abstract void registerSerializer(Class<?> type, Serializer<?> serializer);
+
+  public abstract <T> void registerSerializer(
+      Class<T> type, Class<? extends Serializer> serializerClass);
+
   /**
    * Whether to track reference for this type. If false, reference tracing of subclasses may be
    * ignored too.
@@ -369,6 +392,10 @@ public abstract class TypeResolver {
     return loadClass(className, isEnum, arrayDims, fory.getConfig().deserializeNonexistentClass());
   }
 
+  final Class<?> loadClass(String className) {
+    return loadClass(className, false, -1, false);
+  }
+
   final Class<?> loadClass(
       String className, boolean isEnum, int arrayDims, boolean deserializeNonexistentClass) {
     extRegistry.typeChecker.checkType(this, className);
@@ -421,7 +448,15 @@ public abstract class TypeResolver {
       return false;
     }
     try {
+      ClassInfo classInfo = classInfoMap.get(cls);
+      Serializer<?> serializer = null;
+      if (classInfo != null) {
+        serializer = classInfo.serializer;
+      }
       getSerializerClass(cls, false);
+      if (classInfo != null && serializer == null) {
+        classInfo.serializer = null;
+      }
       return true;
     } catch (Throwable t) {
       return false;
@@ -663,5 +698,6 @@ public abstract class TypeResolver {
     final Map<Class, Map<String, GenericType>> classGenericTypes = new HashMap<>();
     final Map<List<ClassLoader>, CodeGenerator> codeGeneratorMap = new HashMap<>();
     final Set<ClassInfo> initialClassInfos = new HashSet<>();
+    boolean ensureSerializersCompiled;
   }
 }

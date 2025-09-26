@@ -360,7 +360,12 @@ public class ClassResolver extends TypeResolver {
     register(EnumSet.allOf(Language.class).getClass());
     register(EnumSet.of(Language.JAVA).getClass());
     register(SerializedLambda.class);
-    register(Throwable.class, StackTraceElement.class, Exception.class, RuntimeException.class);
+    register(
+        Throwable.class,
+        StackTraceElement.class,
+        StackTraceElement[].class,
+        Exception.class,
+        RuntimeException.class);
     register(NullPointerException.class);
     register(IOException.class);
     register(IllegalArgumentException.class);
@@ -389,11 +394,13 @@ public class ClassResolver extends TypeResolver {
     }
   }
 
+  /**
+   * This method has been deprecated, please use {@link #register(Class)} instead, and invoke {@link
+   * #ensureSerializersCompiled} after all classes has been registered.
+   */
+  @Deprecated
   public void register(Class<?> cls, boolean createSerializer) {
     register(cls);
-    if (createSerializer) {
-      createSerializerAhead(cls);
-    }
   }
 
   /**
@@ -430,15 +437,13 @@ public class ClassResolver extends TypeResolver {
     register(loadClass(className, false, 0, false), classId);
   }
 
+  /**
+   * This method has been deprecated, please use {@link #register(Class, int)} instead, and invoke
+   * {@link #ensureSerializersCompiled} after all classes has been registered.
+   */
+  @Deprecated
   public void register(Class<?> cls, int id, boolean createSerializer) {
     register(cls, id);
-    if (createSerializer) {
-      createSerializerAhead(cls);
-    }
-  }
-
-  public void register(String className, Short classId, boolean createSerializer) {
-    register(loadClass(className, false, 0, false), classId, createSerializer);
   }
 
   /**
@@ -446,6 +451,7 @@ public class ClassResolver extends TypeResolver {
    * registered, the serialized class will have smaller payload size. In many cases, it type name
    * has no conflict, namespace can be left as empty.
    */
+  @Override
   public void register(Class<?> cls, String namespace, String name) {
     Preconditions.checkArgument(!Functions.isLambda(cls));
     Preconditions.checkArgument(!ReflectionUtils.isJdkProxy(cls));
@@ -1236,7 +1242,7 @@ public class ClassResolver extends TypeResolver {
     if (!extRegistry.absClassInfo.isEmpty()) {
       Class<?> tmpCls = cls;
       while (tmpCls != null && tmpCls != Object.class) {
-        ClassInfo absClass = null;
+        ClassInfo absClass;
         if ((absClass = extRegistry.absClassInfo.get(tmpCls.getSuperclass())) != null) {
           return absClass.serializer;
         }
@@ -1257,15 +1263,6 @@ public class ClassResolver extends TypeResolver {
     return serializer;
   }
 
-  private void createSerializerAhead(Class<?> cls) {
-    try {
-      fory.getJITContext().lock();
-      createSerializer0(cls);
-    } finally {
-      fory.getJITContext().unlock();
-    }
-  }
-
   private void createSerializer0(Class<?> cls) {
     ClassInfo classInfo = getClassInfo(cls);
     ClassInfo deserializationClassInfo;
@@ -1280,8 +1277,6 @@ public class ClassResolver extends TypeResolver {
             .deserializerClassMap
             .put(classDef.getId(), getGraalvmSerializerClass(deserializationClassInfo.serializer));
         Tuple2<ClassDef, ClassInfo> classDefTuple = extRegistry.classIdToDef.get(classDef.getId());
-        // empty serializer for graalvm build time
-        classDefTuple.f1.serializer = null;
         classInfoCache = NIL_CLASS_INFO;
         extRegistry.classIdToDef.put(classDef.getId(), Tuple2.of(classDefTuple.f0, null));
       }
@@ -1291,7 +1286,6 @@ public class ClassResolver extends TypeResolver {
       getGraalvmClassRegistry()
           .serializerClassMap
           .put(cls, getGraalvmSerializerClass(classInfo.serializer));
-      classInfo.serializer = null;
       classInfoCache = NIL_CLASS_INFO;
       if (RecordUtils.isRecord(cls)) {
         RecordUtils.getRecordConstructor(cls);
@@ -1783,8 +1777,15 @@ public class ClassResolver extends TypeResolver {
   /**
    * Ensure all compilation for serializers and accessors even for lazy initialized serializers.
    * This method will block until all compilation is done.
+   *
+   * <p>Note that this method should be invoked after all registrations and invoked only once.
+   * Repeated invocations will have no effect.
    */
   public void ensureSerializersCompiled() {
+    if (extRegistry.ensureSerializersCompiled) {
+      return;
+    }
+    extRegistry.ensureSerializersCompiled = true;
     try {
       fory.getJITContext().lock();
       Serializers.newSerializer(fory, LambdaSerializer.STUB_LAMBDA_CLASS, LambdaSerializer.class);
@@ -1793,7 +1794,12 @@ public class ClassResolver extends TypeResolver {
       classInfoMap.forEach(
           (cls, classInfo) -> {
             if (classInfo.serializer == null) {
-              getSerializer(classInfo.cls, isSerializable(classInfo.cls));
+              if (isSerializable(classInfo.cls)) {
+                createSerializer0(cls);
+              }
+              if (cls.isArray()) {
+                createSerializer0(TypeUtils.getArrayComponent(cls));
+              }
             }
           });
       if (GraalvmSupport.isGraalBuildtime()) {
