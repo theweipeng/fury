@@ -271,14 +271,6 @@ public class ClassResolver extends TypeResolver {
     addDefaultSerializers();
     shimDispatcher.initialize();
     innerEndClassId = extRegistry.classIdGenerator;
-    if (GraalvmSupport.isGraalBuildtime()) {
-      classInfoMap.forEach(
-          (cls, classInfo) -> {
-            if (classInfo.serializer != null) {
-              extRegistry.initialClassInfos.add(classInfo);
-            }
-          });
-    }
   }
 
   private void addDefaultSerializers() {
@@ -1802,15 +1794,6 @@ public class ClassResolver extends TypeResolver {
               }
             }
           });
-      if (GraalvmSupport.isGraalBuildtime()) {
-        classInfoMap.forEach(
-            (cls, classInfo) -> {
-              if (classInfo.serializer != null
-                  && !extRegistry.initialClassInfos.contains(classInfo)) {
-                classInfo.serializer = null;
-              }
-            });
-      }
       classInfoCache = NIL_CLASS_INFO;
     } finally {
       fory.getJITContext().unlock();
