@@ -23,34 +23,32 @@ use crate::serializer::collection::{
     read_collection, read_collection_type_info, write_collection, write_collection_type_info,
 };
 use crate::serializer::Serializer;
-use crate::types::{ForyGeneralList, TypeId};
+use crate::types::TypeId;
 use std::collections::HashSet;
 use std::mem;
 
 impl<T: Serializer + Eq + std::hash::Hash> Serializer for HashSet<T> {
-    fn write(&self, context: &mut WriteContext, is_field: bool) {
+    fn fory_write_data(&self, context: &mut WriteContext, is_field: bool) {
         write_collection(self, context, is_field);
     }
 
-    fn write_type_info(context: &mut WriteContext, is_field: bool) {
+    fn fory_write_type_info(context: &mut WriteContext, is_field: bool) {
         write_collection_type_info(context, is_field, TypeId::SET as u32);
     }
 
-    fn read(context: &mut ReadContext) -> Result<Self, Error> {
+    fn fory_read_data(context: &mut ReadContext, _is_field: bool) -> Result<Self, Error> {
         read_collection(context)
     }
 
-    fn read_type_info(context: &mut ReadContext, is_field: bool) {
+    fn fory_read_type_info(context: &mut ReadContext, is_field: bool) {
         read_collection_type_info(context, is_field, TypeId::SET as u32)
     }
 
-    fn reserved_space() -> usize {
+    fn fory_reserved_space() -> usize {
         mem::size_of::<i32>()
     }
 
-    fn get_type_id(_fory: &Fory) -> u32 {
+    fn fory_get_type_id(_fory: &Fory) -> u32 {
         TypeId::SET as u32
     }
 }
-
-impl<T: Serializer + Eq + std::hash::Hash> ForyGeneralList for HashSet<T> {}
