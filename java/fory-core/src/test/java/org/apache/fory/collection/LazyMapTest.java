@@ -26,6 +26,7 @@ import static org.testng.Assert.assertTrue;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import org.apache.fory.Fory;
 import org.apache.fory.ForyTestBase;
@@ -37,7 +38,7 @@ public class LazyMapTest extends ForyTestBase {
 
   @Test
   public void testMap() throws NoSuchFieldException, IllegalAccessException {
-    Map<String, Integer> map = new HashMap<>();
+    Map<String, Integer> map = new LinkedHashMap<>();
     map.put("k1", 1);
     map.put("k2", 2);
     LazyMap<String, Integer> map1 = new LazyMap<>(new ArrayList<>(map.entrySet()));
