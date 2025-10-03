@@ -374,7 +374,7 @@ public class CollectionSerializersTest extends ForyTestBase {
   public void tesPriorityQueueSerializer(Fory fory) {
     ImmutableList<String> list = ImmutableList.of("a", "b", "c");
     PriorityQueue<String> copy = fory.copy(new PriorityQueue<>(list));
-    Assert.assertEquals(ImmutableList.copyOf(copy), list);
+    Assert.assertEquals(ImmutableList.sortedCopyOf(copy), list);
   }
 
   @Test
