@@ -15,11 +15,99 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::util::{
+    detect_collection_with_trait_object, is_arc_dyn_trait, is_box_dyn_trait, is_rc_dyn_trait,
+    CollectionTraitInfo,
+};
 use fory_core::types::{TypeId, BASIC_TYPE_NAMES, CONTAINER_TYPE_NAMES, PRIMITIVE_ARRAY_TYPE_MAP};
-use proc_macro2::TokenStream;
-use quote::{quote, ToTokens};
+use proc_macro2::{Ident, TokenStream};
+use quote::{format_ident, quote, ToTokens};
 use std::fmt;
 use syn::{parse_str, Field, GenericArgument, PathArguments, Type};
+
+pub(super) fn contains_trait_object(ty: &Type) -> bool {
+    match ty {
+        Type::TraitObject(_) => true,
+        Type::Path(type_path) => {
+            if is_box_dyn_trait(ty).is_some()
+                || is_rc_dyn_trait(ty).is_some()
+                || is_arc_dyn_trait(ty).is_some()
+            {
+                return true;
+            }
+
+            if let Some(seg) = type_path.path.segments.last() {
+                if let PathArguments::AngleBracketed(args) = &seg.arguments {
+                    return args.args.iter().any(|arg| {
+                        if let GenericArgument::Type(inner_ty) = arg {
+                            contains_trait_object(inner_ty)
+                        } else {
+                            false
+                        }
+                    });
+                }
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+pub(super) struct WrapperTypes {
+    pub wrapper_ty: Ident,
+    pub trait_ident: Ident,
+}
+
+pub(super) fn create_wrapper_types_rc(trait_name: &str) -> WrapperTypes {
+    WrapperTypes {
+        wrapper_ty: format_ident!("{}Rc", trait_name),
+        trait_ident: format_ident!("{}", trait_name),
+    }
+}
+
+pub(super) fn create_wrapper_types_arc(trait_name: &str) -> WrapperTypes {
+    WrapperTypes {
+        wrapper_ty: format_ident!("{}Arc", trait_name),
+        trait_ident: format_ident!("{}", trait_name),
+    }
+}
+
+#[derive(Debug)]
+pub(super) enum TraitObjectField {
+    BoxDyn,
+    RcDyn(String),
+    ArcDyn(String),
+    VecRc(String),
+    VecArc(String),
+    HashMapRc(Box<Type>, String),
+    HashMapArc(Box<Type>, String),
+    ContainsTraitObject,
+    None,
+}
+
+pub(super) fn classify_trait_object_field(ty: &Type) -> TraitObjectField {
+    if is_box_dyn_trait(ty).is_some() {
+        return TraitObjectField::BoxDyn;
+    }
+    if let Some((_, trait_name)) = is_rc_dyn_trait(ty) {
+        return TraitObjectField::RcDyn(trait_name);
+    }
+    if let Some((_, trait_name)) = is_arc_dyn_trait(ty) {
+        return TraitObjectField::ArcDyn(trait_name);
+    }
+    if let Some(collection_info) = detect_collection_with_trait_object(ty) {
+        return match collection_info {
+            CollectionTraitInfo::VecRc(t) => TraitObjectField::VecRc(t),
+            CollectionTraitInfo::VecArc(t) => TraitObjectField::VecArc(t),
+            CollectionTraitInfo::HashMapRc(k, t) => TraitObjectField::HashMapRc(k, t),
+            CollectionTraitInfo::HashMapArc(k, t) => TraitObjectField::HashMapArc(k, t),
+        };
+    }
+    if contains_trait_object(ty) {
+        return TraitObjectField::ContainsTraitObject;
+    }
+    TraitObjectField::None
+}
 
 #[derive(Debug)]
 pub(super) struct TypeNode {
@@ -501,12 +589,22 @@ impl fmt::Display for NullableTypeNode {
 fn extract_type_name(ty: &Type) -> String {
     if let Type::Path(type_path) = ty {
         type_path.path.segments.last().unwrap().ident.to_string()
+    } else if matches!(ty, Type::TraitObject(_)) {
+        "TraitObject".to_string()
     } else {
         quote!(#ty).to_string()
     }
 }
 
 pub(super) fn parse_generic_tree(ty: &Type) -> TypeNode {
+    // Handle trait objects specially - they can't be parsed as normal types
+    if matches!(ty, Type::TraitObject(_)) {
+        return TypeNode {
+            name: "TraitObject".to_string(),
+            generics: vec![],
+        };
+    }
+
     let name = extract_type_name(ty);
 
     let generics = if let Type::Path(type_path) = ty {
@@ -533,11 +631,16 @@ pub(super) fn parse_generic_tree(ty: &Type) -> TypeNode {
 }
 
 pub(super) fn generic_tree_to_tokens(node: &TypeNode, have_context: bool) -> TokenStream {
-    if node.name == "Option" && node.generics.first().unwrap().name == "Option" {
-        return quote! {
-            compile_error!("adjacent Options are not supported");
-        };
+    if node.name == "Option" {
+        if let Some(first_generic) = node.generics.first() {
+            if first_generic.name == "Option" {
+                return quote! {
+                    compile_error!("adjacent Options are not supported");
+                };
+            }
+        }
     }
+
     if let Some(ts) = try_vec_of_option_primitive(node) {
         return ts;
     }
@@ -664,6 +767,7 @@ pub(super) fn get_sort_fields_ts(fields: &[&Field]) -> TokenStream {
         };
 
         for field in fields {
+            let ident = field.ident.as_ref().unwrap().to_string();
             let ty: String = field
                 .ty
                 .to_token_stream()
@@ -671,7 +775,6 @@ pub(super) fn get_sort_fields_ts(fields: &[&Field]) -> TokenStream {
                 .chars()
                 .filter(|c| !c.is_whitespace())
                 .collect::<String>();
-            let ident = field.ident.as_ref().unwrap().to_string();
             // handle Option<Primitive> specially
             if let Some(inner) = extract_option_inner(&ty) {
                 if PRIMITIVE_TYPE_NAMES.contains(&inner) {
@@ -684,6 +787,15 @@ pub(super) fn get_sort_fields_ts(fields: &[&Field]) -> TokenStream {
                 }
             } else {
                 group_field(ident, &ty);
+            }
+        }
+
+        for field in fields {
+            if is_box_dyn_trait(&field.ty).is_some() {
+                let ident = field.ident.as_ref().unwrap().to_string();
+                if let Some(pos) = struct_or_enum_fields.iter().position(|x| x.0 == ident) {
+                    struct_or_enum_fields[pos].2 = TypeId::UNKNOWN as u32;
+                }
             }
         }
 
@@ -836,12 +948,33 @@ pub(super) fn get_sort_fields_ts(fields: &[&Field]) -> TokenStream {
             )
         }
     };
+    let trait_object_fields_ts = {
+        let trait_obj_fields: Vec<_> = struct_or_enum_fields
+            .iter()
+            .filter(|(_, _, type_id)| *type_id == fory_core::types::TypeId::UNKNOWN as u32)
+            .collect();
+
+        if trait_obj_fields.is_empty() {
+            quote! {}
+        } else {
+            let names = trait_obj_fields.iter().map(|(name, _, type_id)| {
+                quote! {
+                    final_fields.push((#type_id, #name.to_string()));
+                }
+            });
+            quote! {
+                #(#names)*
+            }
+        }
+    };
+
     let group_sort_enum_other_fields = {
         if struct_or_enum_fields.is_empty() {
             quote! {}
         } else {
             let ts = struct_or_enum_fields
                 .iter()
+                .filter(|(_, _, type_id)| *type_id != fory_core::types::TypeId::UNKNOWN as u32)
                 .map(|(name, ty, _)| {
                     let ty_type: Type = syn::parse_str(ty).unwrap();
                     quote! {
@@ -877,6 +1010,7 @@ pub(super) fn get_sort_fields_ts(fields: &[&Field]) -> TokenStream {
             #other_declare
             #container_declare
 
+            #trait_object_fields_ts
             #group_sort_enum_other_fields
 
             let mut sorted_field_names: Vec<String> = Vec::new();

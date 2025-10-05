@@ -39,7 +39,7 @@
 //! use fory_derive::Fory;
 //! use std::collections::HashMap;
 //!
-//! #[derive(Fory, Debug, PartialEq, Default)]
+//! #[derive(Fory, Debug, PartialEq)]
 //! struct Person {
 //!     name: String,
 //!     age: i32,
@@ -48,7 +48,7 @@
 //!     metadata: HashMap<String, String>,
 //! }
 //!
-//! #[derive(Fory, Debug, PartialEq, Default)]
+//! #[derive(Fory, Debug, PartialEq)]
 //! struct Address {
 //!     street: String,
 //!     city: String,
@@ -136,7 +136,7 @@
 //! use fory_core::{fory::Fory, error::Error};
 //! use fory_derive::Fory;
 //!
-//! #[derive(Fory, Debug, PartialEq, Default)]
+//! #[derive(Fory, Debug, PartialEq)]
 //! struct MyData {
 //!     value: i32,
 //!     text: String,
@@ -185,14 +185,14 @@ mod util;
 /// ```rust
 /// use fory_derive::Fory;
 ///
-/// #[derive(Fory, Debug, PartialEq, Default)]
+/// #[derive(Fory, Debug, PartialEq)]
 /// struct Person {
 ///     name: String,
 ///     age: i32,
 ///     address: Address,
 /// }
 ///
-/// #[derive(Fory, Debug, PartialEq, Default)]
+/// #[derive(Fory, Debug, PartialEq)]
 /// struct Address {
 ///     street: String,
 ///     city: String,
@@ -201,6 +201,9 @@ mod util;
 #[proc_macro_derive(Fory)]
 pub fn proc_macro_derive_fory_object(input: proc_macro::TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
+
+    // Check if this is being applied to a trait (which is not possible with derive macros)
+    // Derive macros can only be applied to structs, enums, and unions
     object::derive_serializer(&input)
 }
 

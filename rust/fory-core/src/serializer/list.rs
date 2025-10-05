@@ -42,7 +42,7 @@ fn check_primitive<T: 'static>() -> Option<TypeId> {
     })
 }
 
-impl<T: Serializer> Serializer for Vec<T> {
+impl<T: Serializer + Default> Serializer for Vec<T> {
     fn fory_write_data(&self, context: &mut WriteContext, is_field: bool) {
         match check_primitive::<T>() {
             Some(_) => {
@@ -94,5 +94,16 @@ impl<T: Serializer> Serializer for Vec<T> {
             Some(type_id) => type_id as u32,
             None => TypeId::LIST as u32,
         }
+    }
+
+    fn fory_type_id_dyn(&self, _fory: &Fory) -> u32 {
+        match check_primitive::<T>() {
+            Some(type_id) => type_id as u32,
+            None => TypeId::LIST as u32,
+        }
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
