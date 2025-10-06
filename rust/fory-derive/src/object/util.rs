@@ -73,7 +73,7 @@ pub(super) fn create_wrapper_types_arc(trait_name: &str) -> WrapperTypes {
 }
 
 pub(super) enum TraitObjectField {
-    BoxDyn,
+    BoxDyn(String),
     RcDyn(String),
     ArcDyn(String),
     VecRc(String),
@@ -85,8 +85,8 @@ pub(super) enum TraitObjectField {
 }
 
 pub(super) fn classify_trait_object_field(ty: &Type) -> TraitObjectField {
-    if is_box_dyn_trait(ty).is_some() {
-        return TraitObjectField::BoxDyn;
+    if let Some((_, trait_name)) = is_box_dyn_trait(ty) {
+        return TraitObjectField::BoxDyn(trait_name);
     }
     if let Some((_, trait_name)) = is_rc_dyn_trait(ty) {
         return TraitObjectField::RcDyn(trait_name);

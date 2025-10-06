@@ -103,12 +103,16 @@ macro_rules! resolve_and_deserialize {
 /// Macro to register trait object conversions for custom traits.
 ///
 /// This macro automatically generates serializers for `Box<dyn Trait>` trait objects.
-/// Due to Rust's orphan rules, only Box<dyn Trait> is supported for user-defined traits.
+/// Due to Rust's orphan rules, only `Box<dyn Trait>` is supported for user-defined traits.
+/// For `Rc<dyn Trait>` and `Arc<dyn Trait>`, wrapper types are generated (e.g., `TraitRc`, `TraitArc`),
+/// either you use the wrapper types or use the `Rc<dyn Any>` or `Arc<dyn Any>` instead if it's not
+/// inside struct fields. For struct fields, you can use the `Rc<dyn Trait>`, `Arc<dyn Trait>` directly,
+/// fory will generate converters for `Rc<dyn Trait>` and `Arc<dyn Trait>` to convert to wrapper for
+/// serialization/ deserialization automatically.
 ///
 /// The macro generates:
 /// - `Serializer` implementation for `Box<dyn Trait>`
 /// - `Default` implementation for `Box<dyn Trait>` (uses first registered type)
-/// - `from_any_internal()` helper for deserializing trait objects
 ///
 /// **Note**: Your trait must extend the `Serializer` trait.
 /// The `as_any()` method is automatically provided by the `Serializer` trait.
@@ -238,29 +242,31 @@ macro_rules! register_trait_type {
             }
         }
 
-        // Create helper functions for this trait
-        #[allow(non_snake_case)]
-        mod __fory_trait_helpers {
-            use super::*;
+        // Create helper functions for this trait with trait-specific names
+        $crate::paste::paste! {
+            #[allow(non_snake_case)]
+            mod [<__fory_trait_helpers_ $trait_name>] {
+                use super::*;
 
-            #[allow(dead_code)]
-            pub fn from_any_internal(
-                any_box: Box<dyn std::any::Any>,
-                _fory_type_id: u32,
-            ) -> Result<Box<dyn $trait_name>, $crate::error::Error> {
-                $(
-                    if any_box.is::<$impl_type>() {
-                        let concrete = any_box.downcast::<$impl_type>()
-                            .map_err(|_| $crate::error::Error::Other(
-                                $crate::error::AnyhowError::msg(format!("Failed to downcast to {}", stringify!($impl_type)))
-                            ))?;
-                        return Ok(Box::new(*concrete) as Box<dyn $trait_name>);
-                    }
-                )+
+                #[allow(dead_code)]
+                pub fn [<from_any_internal_ $trait_name>](
+                    any_box: Box<dyn std::any::Any>,
+                    _fory_type_id: u32,
+                ) -> Result<Box<dyn $trait_name>, $crate::error::Error> {
+                    $(
+                        if any_box.is::<$impl_type>() {
+                            let concrete = any_box.downcast::<$impl_type>()
+                                .map_err(|_| $crate::error::Error::Other(
+                                    $crate::error::AnyhowError::msg(format!("Failed to downcast to {}", stringify!($impl_type)))
+                                ))?;
+                            return Ok(Box::new(*concrete) as Box<dyn $trait_name>);
+                        }
+                    )+
 
-                Err($crate::error::Error::Other($crate::error::AnyhowError::msg(
-                    format!("No matching type found for trait {}", stringify!($trait_name))
-                )))
+                    Err($crate::error::Error::Other($crate::error::AnyhowError::msg(
+                        format!("No matching type found for trait {}", stringify!($trait_name))
+                    )))
+                }
             }
         }
     };
@@ -638,7 +644,7 @@ impl Serializer for Box<dyn Serializer> {
 /// Helper macros for automatic conversions in derive code
 /// These are used by fory-derive to generate transparent conversions
 ///
-/// Convert field of type Rc<dyn Trait> to wrapper for serialization
+/// Convert field of type `Rc<dyn Trait>` to wrapper for serialization
 #[macro_export]
 macro_rules! wrap_rc {
     ($field:expr, $trait_name:ident) => {
@@ -648,7 +654,7 @@ macro_rules! wrap_rc {
     };
 }
 
-/// Convert wrapper back to Rc<dyn Trait> for deserialization
+/// Convert wrapper back to `Rc<dyn Trait>` for deserialization
 #[macro_export]
 macro_rules! unwrap_rc {
     ($wrapper:expr, $trait_name:ident) => {
@@ -656,7 +662,7 @@ macro_rules! unwrap_rc {
     };
 }
 
-/// Convert Arc<dyn Trait> to wrapper for serialization
+/// Convert `Arc<dyn Trait>` to wrapper for serialization
 #[macro_export]
 macro_rules! wrap_arc {
     ($field:expr, $trait_name:ident) => {
@@ -666,7 +672,7 @@ macro_rules! wrap_arc {
     };
 }
 
-/// Convert Vec<Rc<dyn Trait>> to Vec<wrapper> for serialization
+/// Convert `Vec<Rc<dyn Trait>>` to `Vec<wrapper>` for serialization
 #[macro_export]
 macro_rules! wrap_vec_rc {
     ($vec:expr, $trait_name:ident) => {
