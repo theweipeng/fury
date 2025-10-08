@@ -38,6 +38,8 @@ fn has_existing_default(ast: &syn::DeriveInput, trait_name: &str) -> bool {
 
 pub fn derive_serializer(ast: &syn::DeriveInput) -> TokenStream {
     let name = &ast.ident;
+    use crate::object::util::{clear_struct_context, set_struct_context};
+    set_struct_context(&name.to_string());
 
     // Check if ForyDefault is already derived/implemented
     let has_existing_default = has_existing_default(ast, "ForyDefault");
@@ -56,7 +58,7 @@ pub fn derive_serializer(ast: &syn::DeriveInput) -> TokenStream {
                     misc::gen_actual_type_id(),
                     misc::gen_get_sorted_field_names(&fields),
                     misc::gen_type_def(&fields),
-                    read::gen_read_compatible(&fields, name),
+                    read::gen_read_compatible(&fields),
                 )
             }
             syn::Data::Enum(s) => (
@@ -190,7 +192,9 @@ pub fn derive_serializer(ast: &syn::DeriveInput) -> TokenStream {
             #deserialize_nullable_ts
         }
     };
-    gen.into()
+    let code = gen.into();
+    clear_struct_context();
+    code
 }
 
 fn generate_default_impl(ast: &syn::DeriveInput) -> proc_macro2::TokenStream {
@@ -203,7 +207,7 @@ fn generate_default_impl(ast: &syn::DeriveInput) -> proc_macro2::TokenStream {
 
             use super::util::{
                 classify_trait_object_field, create_wrapper_types_arc, create_wrapper_types_rc,
-                TraitObjectField,
+                StructField,
             };
 
             let field_inits = fields.iter().map(|field| {
@@ -211,7 +215,7 @@ fn generate_default_impl(ast: &syn::DeriveInput) -> proc_macro2::TokenStream {
                 let ty = &field.ty;
 
                 match classify_trait_object_field(ty) {
-                    TraitObjectField::RcDyn(trait_name) => {
+                    StructField::RcDyn(trait_name) => {
                         let types = create_wrapper_types_rc(&trait_name);
                         let wrapper_ty = types.wrapper_ty;
                         let trait_ident = types.trait_ident;
@@ -222,7 +226,7 @@ fn generate_default_impl(ast: &syn::DeriveInput) -> proc_macro2::TokenStream {
                             }
                         }
                     }
-                    TraitObjectField::ArcDyn(trait_name) => {
+                    StructField::ArcDyn(trait_name) => {
                         let types = create_wrapper_types_arc(&trait_name);
                         let wrapper_ty = types.wrapper_ty;
                         let trait_ident = types.trait_ident;
@@ -231,6 +235,11 @@ fn generate_default_impl(ast: &syn::DeriveInput) -> proc_macro2::TokenStream {
                                 let wrapper = #wrapper_ty::default();
                                 std::sync::Arc::<dyn #trait_ident>::from(wrapper)
                             }
+                        }
+                    }
+                    StructField::Forward => {
+                        quote! {
+                            #ident: <#ty as fory_core::serializer::ForyDefault>::fory_default()
                         }
                     }
                     _ => {

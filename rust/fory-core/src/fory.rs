@@ -184,6 +184,7 @@ impl Fory {
         if bytes_to_skip > 0 {
             context.reader.skip(bytes_to_skip as u32);
         }
+        context.ref_reader.resolve_callbacks();
         result
     }
 

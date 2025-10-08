@@ -32,15 +32,18 @@ mod datetime;
 pub mod enum_;
 mod list;
 pub mod map;
+mod mutex;
 mod number;
 mod option;
 mod primitive_list;
 mod rc;
+mod refcell;
 mod set;
 pub mod skip;
 mod string;
 pub mod struct_;
 pub mod trait_object;
+pub mod weak;
 
 pub fn write_ref_info_data<T: Serializer + 'static>(
     record: &T,
@@ -161,6 +164,13 @@ pub trait Serializer: 'static {
     }
 
     fn fory_is_polymorphic() -> bool
+    where
+        Self: Sized,
+    {
+        false
+    }
+
+    fn fory_is_shared_ref() -> bool
     where
         Self: Sized,
     {
