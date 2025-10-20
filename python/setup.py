@@ -16,40 +16,49 @@
 # under the License.
 
 import os
+import platform
 import subprocess
 from os.path import abspath, join as pjoin
 
 from setuptools import setup
 from setuptools.dist import Distribution
 
-DEBUG = os.environ.get("FURY_DEBUG", "False").lower() == "true"
+DEBUG = os.environ.get("FORY_DEBUG", "False").lower() == "true"
 BAZEL_BUILD_EXT = os.environ.get("BAZEL_BUILD_EXT", "True").lower() == "true"
 
 if DEBUG:
     os.environ["CFLAGS"] = "-O0"
     BAZEL_BUILD_EXT = False
 
-print(f"DEBUG = {DEBUG}, BAZEL_BUILD_EXT = {BAZEL_BUILD_EXT}")
+print(f"DEBUG = {DEBUG}, BAZEL_BUILD_EXT = {BAZEL_BUILD_EXT}, PATH = {os.environ.get('PATH')}")
 
 setup_dir = abspath(os.path.dirname(__file__))
 project_dir = abspath(pjoin(setup_dir, os.pardir))
-fury_cpp_src_dir = abspath(pjoin(setup_dir, "../src/"))
+fory_cpp_src_dir = abspath(pjoin(setup_dir, "../src/"))
 
 print(f"setup_dir: {setup_dir}")
-print(f"fury_cpp_src_dir: {fury_cpp_src_dir}")
+print(f"project_dir: {project_dir}")
+print(f"fory_cpp_src_dir: {fory_cpp_src_dir}")
 
 
 class BinaryDistribution(Distribution):
     def __init__(self, attrs=None):
         super().__init__(attrs=attrs)
         if BAZEL_BUILD_EXT:
-            subprocess.check_call(["bazel", "build", "-s", "//:cp_fury_so"])
+            bazel_args = ["bazel", "build", "-s"]
+            arch = platform.machine().lower()
+            if arch in ("x86_64", "amd64"):
+                bazel_args += ["--config=x86_64"]
+            elif arch in ("aarch64", "arm64"):
+                bazel_args += ["--copt=-fsigned-char"]
+            bazel_args += ["//:cp_fory_so"]
+            # Ensure Windows path compatibility
+            cwd_path = os.path.normpath(project_dir)
+            subprocess.check_call(bazel_args, cwd=cwd_path)
 
     def has_ext_modules(self):
         return True
 
 
 if __name__ == "__main__":
-    setup(
-        distclass=BinaryDistribution,
-    )
+    setup(distclass=BinaryDistribution)

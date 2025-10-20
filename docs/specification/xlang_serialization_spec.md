@@ -1,7 +1,7 @@
 ---
-title: Fury Xlang Serialization Format
+title: Xlang Serialization Format
 sidebar_position: 0
-id: fury_xlang_serialization_spec
+id: fory_xlang_serialization_spec
 license: |
   Licensed to the Apache Software Foundation (ASF) under one or more
   contributor license agreements.  See the NOTICE file distributed with
@@ -25,14 +25,14 @@ license: |
 >
 > - Version 0.1 - serialization spec formalized
 
-Fury xlang serialization is an automatic object serialization framework that supports reference and polymorphism.
-Fury will convert an object from/to fury xlang serialization binary format.
-Fury has two core concepts for xlang serialization:
+Apache Fory™ xlang serialization is an automatic object serialization framework that supports reference and polymorphism.
+Apache Fory™ will convert an object from/to fory xlang serialization binary format.
+Apache Fory™ has two core concepts for xlang serialization:
 
-- **Fury xlang binary format**
-- **Framework implemented in different languages to convert object to/from Fury xlang binary format**
+- **Apache Fory™ xlang binary format**
+- **Framework implemented in different languages to convert object to/from Apache Fory™ xlang binary format**
 
-The serialization format is a dynamic binary format. The dynamics and reference/polymorphism support make Fury flexible,
+The serialization format is a dynamic binary format. The dynamics and reference/polymorphism support make Apache Fory™ flexible,
 much more easy to use, but
 also introduce more complexities compared to static serialization frameworks. So the format will be more complex.
 
@@ -44,10 +44,10 @@ also introduce more complexities compared to static serialization frameworks. So
 - int8: a 8-bit signed integer.
 - int16: a 16-bit signed integer.
 - int32: a 32-bit signed integer.
-- var_int32: a 32-bit signed integer which use fury var_int32 encoding.
+- var_int32: a 32-bit signed integer which use fory var_int32 encoding.
 - int64: a 64-bit signed integer.
-- var_int64: a 64-bit signed integer which use fury PVL encoding.
-- sli_int64: a 64-bit signed integer which use fury SLI encoding.
+- var_int64: a 64-bit signed integer which use fory PVL encoding.
+- sli_int64: a 64-bit signed integer which use fory SLI encoding.
 - float16: a 16-bit floating point number.
 - float32: a 32-bit floating point number.
 - float64: a 64-bit floating point number including NaN and Infinity.
@@ -55,9 +55,9 @@ also introduce more complexities compared to static serialization frameworks. So
 - enum: a data type consisting of a set of named values. Rust enum with non-predefined field values are not supported as
   an enum.
 - named_enum: an enum whose value will be serialized as the registered name.
-- struct: a morphic(final) type serialized by Fury Struct serializer. i.e. it doesn't have subclasses. Suppose we're
+- struct: a morphic(final) type serialized by Fory Struct serializer. i.e. it doesn't have subclasses. Suppose we're
   deserializing `List<SomeClass>`, we can save dynamic serializer dispatch since `SomeClass` is morphic(final).
-- compatible_struct: a morphic(final) type serialized by Fury compatible Struct serializer.
+- compatible_struct: a morphic(final) type serialized by Fory compatible Struct serializer.
 - named_struct: a `struct` whose type mapping will be encoded as a name.
 - named_compatible_struct: a `compatible_struct` whose type mapping will be encoded as a name.
 - ext: a type which will be serialized by a customized serializer.
@@ -101,7 +101,7 @@ to the field of struct.
 ### Type disambiguation
 
 Due to differences between type systems of languages, those types can't be mapped one-to-one between languages. When
-deserializing, Fury use the target data structure type and the data type in the data jointly to determine how to
+deserializing, Fory use the target data structure type and the data type in the data jointly to determine how to
 deserialize and populate the target data structure. For example:
 
 ```java
@@ -126,13 +126,13 @@ Users can also provide meta hints for fields of a type, or the type whole. Here 
 annotation to provide such information.
 
 ```java
-@FuryObject(fieldsNullable = false, trackingRef = false)
+@ForyObject(fieldsNullable = false, trackingRef = false)
 class Foo {
-  @FuryField(trackingRef = false)
+  @ForyField(trackingRef = false)
   int[] intArray;
-  @FuryField(polymorphic = true)
+  @ForyField(polymorphic = true)
   Object object;
-  @FuryField(tagId = 1, nullable = true)
+  @ForyField(tagId = 1, nullable = true)
   List<Object> objectList;
 }
 ```
@@ -158,15 +158,15 @@ See [Type mapping](../guide/xlang_type_mapping.md)
 Here is the overall format:
 
 ```
-| fury header | object ref meta | object type meta | object value data |
+| fory header | object ref meta | object type meta | object value data |
 ```
 
 The data are serialized using little endian byte order overall. If bytes swap is costly for some object,
-Fury will write the byte order for that object into the data instead of converting it to little endian.
+Fory will write the byte order for that object into the data instead of converting it to little endian.
 
-## Fury header
+## Fory header
 
-Fury header consists starts one byte:
+Fory header consists starts one byte:
 
 ```
 |    2 bytes   |     4 bits    | 1 bit | 1 bit | 1 bit  | 1 bit |   1 byte   |          optional 4 bytes          |
@@ -174,12 +174,12 @@ Fury header consists starts one byte:
 | magic number | reserved bits |  oob  | xlang | endian | null  |  language  | unsigned int for meta start offset |
 ```
 
-- magic number: used to identify fury serialization protocol, current version use `0x62d4`.
+- magic number: used to identify fory serialization protocol, current version use `0x62d4`.
 - null flag: 1 when object is null, 0 otherwise. If an object is null, other bits won't be set.
 - endian flag: 1 when data is encoded by little endian, 0 for big endian.
-- xlang flag: 1 when serialization uses xlang format, 0 when serialization uses Fury java format.
+- xlang flag: 1 when serialization uses xlang format, 0 when serialization uses Fory java format.
 - oob flag: 1 when passed `BufferCallback` is not null, 0 otherwise.
-- language: the language when serializing objects, such as JAVA, PYTHON, GO, etc. Fury can use this flag to determine whether spend more time on serialization to make the deserialization faster for dynamic languages.
+- language: the language when serializing objects, such as JAVA, PYTHON, GO, etc. Fory can use this flag to determine whether spend more time on serialization to make the deserialization faster for dynamic languages.
 
 If meta share mode is enabled, an uncompressed unsigned int is appended to indicate the start offset of metadata.
 
@@ -191,23 +191,23 @@ corresponding flags and maintaining internal state.
 Reference flags:
 
 | Flag                | Byte Value | Description                                                                                                                                             |
-|---------------------|------------|---------------------------------------------------------------------------------------------------------------------------------------------------------|
+| ------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | NULL FLAG           | `-3`       | This flag indicates the object is a null value. We don't use another byte to indicate REF, so that we can save one byte.                                |
-| REF FLAG            | `-2`       | This flag indicates the object is already serialized previously, and fury will write a ref id with unsigned varint format instead of serialize it again |
-| NOT_NULL VALUE FLAG | `-1`       | This flag indicates the object is a non-null value and fury doesn't track ref for this type of object.                                                  |
+| REF FLAG            | `-2`       | This flag indicates the object is already serialized previously, and fory will write a ref id with unsigned varint format instead of serialize it again |
+| NOT_NULL VALUE FLAG | `-1`       | This flag indicates the object is a non-null value and fory doesn't track ref for this type of object.                                                  |
 | REF VALUE FLAG      | `0`        | This flag indicates the object is referencable and the first time to serialize.                                                                         |
 
 When reference tracking is disabled globally or for specific types, or for certain types within a particular
 context(e.g., a field of a type), only the `NULL` and `NOT_NULL VALUE` flags will be used for reference meta.
 
 For languages which doesn't support reference such as rust, reference tracking must be disabled for correct
-deserialization by fury rust implementation.
+deserialization by fory rust implementation.
 
 For languages whose object values are not null by default:
 
-- In rust, Fury takes `Option:None` as a null value
-- In c++, Fury takes `std::nullopt` as a null value
-- In golang, Fury takes `null interface/pointer` as a null value
+- In rust, Fory takes `Option:None` as a null value
+- In c++, Fory takes `std::nullopt` as a null value
+- In golang, Fory takes `null interface/pointer` as a null value
 
 If one want to deserialize in languages like `Java/Python/JavaScript`, he should mark the type with all fields
 not-null by default, or using schema-evolution mode to carry the not-null fields info in the data.
@@ -233,30 +233,30 @@ For every type to be serialized, it have a type id to indicate its type.
 Every type must be registered with an ID or name first. The registration can be used for security check and type
 identification.
 
-Struct is a special type, depending whether schema compatibility is enabled, Fury will write struct meta
+Struct is a special type, depending whether schema compatibility is enabled, Fory will write struct meta
 differently.
 
 ### Struct Schema consistent
 
-- If schema consistent mode is enabled globally when creating fury, type meta will be written as a fury unsigned varint
+- If schema consistent mode is enabled globally when creating fory, type meta will be written as a fory unsigned varint
   of `type_id`. Schema evolution related meta will be ignored.
-- If schema evolution mode is enabled globally when creating fury, and current class is configured to use schema
+- If schema evolution mode is enabled globally when creating fory, and current class is configured to use schema
   consistent mode like `struct` vs `table` in flatbuffers:
   - Type meta will be add to `captured_type_defs`: `captured_type_defs[type def stub] = map size` ahead when
-      registering type.
+    registering type.
   - Get index of the meta in `captured_type_defs`, write that index as `| unsigned varint: index |`.
 
 ### Struct Schema evolution
 
-If schema evolution mode is enabled globally when creating fury, and enabled for current type, type meta will be written
-using one of the following mode. Which mode to use is configured when creating fury.
+If schema evolution mode is enabled globally when creating fory, and enabled for current type, type meta will be written
+using one of the following mode. Which mode to use is configured when creating fory.
 
 - Normal mode(meta share not enabled):
   - If type meta hasn't been written before, add `type def`
-      to `captured_type_defs`: `captured_type_defs[type def] = map size`.
+    to `captured_type_defs`: `captured_type_defs[type def] = map size`.
   - Get index of the meta in `captured_type_defs`, write that index as `| unsigned varint: index |`.
-  - After finished the serialization of the object graph, fury will start to write `captured_type_defs`:
-    - Firstly, set current to `meta start offset` of fury header
+  - After finished the serialization of the object graph, fory will start to write `captured_type_defs`:
+    - Firstly, set current to `meta start offset` of fory header
     - Then write `captured_type_defs` one by one:
 
       ```python
@@ -270,31 +270,32 @@ using one of the following mode. Which mode to use is configured when creating f
 - Meta share mode: the writing steps are same as the normal mode, but `captured_type_defs` will be shared across
   multiple serializations of different objects. For example, suppose we have a batch to serialize:
 
-    ```python
-    captured_type_defs = {}
-    stream = ...
-    # add `Type1` to `captured_type_defs` and write `Type1`
-    fury.serialize(stream, [Type1()])
-    # add `Type2` to `captured_type_defs` and write `Type2`, `Type1` is written before.
-    fury.serialize(stream, [Type1(), Type2()])
-    # `Type1` and `Type2` are written before, no need to write meta.
-    fury.serialize(stream, [Type1(), Type2()])
-    ```
+  ```python
+  captured_type_defs = {}
+  stream = ...
+  # add `Type1` to `captured_type_defs` and write `Type1`
+  fory.serialize(stream, [Type1()])
+  # add `Type2` to `captured_type_defs` and write `Type2`, `Type1` is written before.
+  fory.serialize(stream, [Type1(), Type2()])
+  # `Type1` and `Type2` are written before, no need to write meta.
+  fory.serialize(stream, [Type1(), Type2()])
+  ```
 
 - Streaming mode(streaming mode doesn't support meta share):
   - If type meta hasn't been written before, the data will be written as:
 
-      ```
-      | unsigned varint: 0b11111111 | type def |
-      ```
+    ```
+    | unsigned varint: 0b11111111 | type def |
+    ```
 
   - If type meta has been written before, the data will be written as:
 
-      ```
-      | unsigned varint: written index << 1 |
-      ```
+    ```
+    | unsigned varint: written index << 1 |
+    ```
 
-      `written index` is the id in `captured_type_defs`.
+    `written index` is the id in `captured_type_defs`.
+
   - With this mode, `meta start offset` can be omitted.
 
 > The normal mode and meta share mode will forbid streaming writing since it needs to look back for update the start
@@ -318,8 +319,8 @@ subclass.
 
 `50 bits hash + 1bit compress flag + write fields meta + 12 bits meta size`. Right is the lower bits.
 
-- lower 12 bits are used to encode meta size. If meta size `>= 0b111_1111_1111`, then write
-  `meta_ size - 0b111_1111_1111` next.
+- lower 12 bits are used to encode meta size. If meta size `>= 0b1111_1111_1111`, then write
+  `meta_ size - 0b1111_1111_1111` next.
 - 13rd bit is used to indicate whether to write fields meta. When this class is schema-consistent or use registered
   serializer, fields meta will be skipped. Class Meta will be used for share namespace + type name only.
 - 14rd bit is used to indicate whether meta is compressed.
@@ -329,11 +330,11 @@ subclass.
 
 Meta header is a 8 bits number value.
 
-- Lowest 5 digits `0b00000~0b11110` are used to record num fields. `0b11111` is preserved to indicate that Fury need to
-  read more bytes for length using Fury unsigned int encoding. Note that num_fields is the number of compatible fields.
+- Lowest 5 digits `0b00000~0b11110` are used to record num fields. `0b11111` is preserved to indicate that Fory need to
+  read more bytes for length using Fory unsigned int encoding. Note that num_fields is the number of compatible fields.
   Users can use tag id to mark some fields as compatible fields in schema consistent context. In such cases, schema
   consistent fields will be serialized first, then compatible fields will be serialized next. At deserialization,
-  Fury will use fields info of those fields which aren't annotated by tag id for deserializing schema consistent
+  Fory will use fields info of those fields which aren't annotated by tag id for deserializing schema consistent
   fields, then use fields info in meta for deserializing compatible fields.
 - The 6th bit: 0 for registered by id, 1 for registered by name.
 - Remaining 2 bits are reserved for future extension.
@@ -350,7 +351,7 @@ Format:
 
 ###### Field Header
 
-Field Header is 8 bits, annotation can be used to provide more specific info. If annotation not exists, fury will infer
+Field Header is 8 bits, annotation can be used to provide more specific info. If annotation not exists, fory will infer
 those info automatically.
 
 The format for field header is:
@@ -365,8 +366,8 @@ Detailed spec:
   - encoding: `UTF8/ALL_TO_LOWER_SPECIAL/LOWER_UPPER_DIGIT_SPECIAL/TAG_ID`
   - If tag id is used, field name will be written by an unsigned varint tag id, and 2 bits encoding will be `11`.
 - size of field name:
-  - The `4 bits size: 0~14`  will be used to indicate length `1~15`, the value `15` indicates to read more bytes,
-          the encoding will encode `size - 15` as a varint next.
+  - The `4 bits size: 0~14` will be used to indicate length `1~15`, the value `15` indicates to read more bytes,
+    the encoding will encode `size - 15` as a varint next.
   - If encoding is `TAG_ID`, then num_bytes of field name will be used to store tag id.
 - ref tracking: when set to 1, ref tracking will be enabled for this field.
 - nullability: when set to 1, this field can be null.
@@ -386,7 +387,7 @@ Field type info is written as unsigned int8. Detailed id spec is:
 - For multi-dimensional primitive array type with same size on each dim, it will be written as `Type.TENSOR`.
 - For other array type, it will be written as `Type.LIST`, then write element type recursively.
 - For map type, it will be written as `Type.MAP`, then write key and value type recursively.
-- For other types supported by fury directly, it will be fury type id for that type.
+- For other types supported by fory directly, it will be fory type id for that type.
 - For other types not determined at compile time, write `Type.UNKNOWN` instead. For such types, actual type
   will be written when serializing such field values.
 
@@ -399,7 +400,7 @@ Polymorphism spec:
   will be skipped.
 - `list/map/set` are taken as morphic, when serializing values of those type, the concrete types won't be written
   again.
-- Other types that fury supported are taken as morphic too.
+- Other types that fory supported are taken as morphic too.
 
 List/Set/Map nested type spec:
 
@@ -411,12 +412,12 @@ List/Set/Map nested type spec:
 
 ###### Field Name
 
-If tag id is set, tag id will be used instead. Otherwise meta string of field name will  be written instead.
+If tag id is set, tag id will be used instead. Otherwise meta string of field name will be written instead.
 
 ###### Field order
 
 Field order are left as implementation details, which is not exposed to specification, the deserialization need to
-resort fields based on Fury fields sort algorithms. In this way, fury can compute statistics for field names or types and
+resort fields based on Fory fields sort algorithms. In this way, fory can compute statistics for field names or types and
 using a more compact encoding.
 
 ## Extended Type Meta with Inheritance support
@@ -425,7 +426,7 @@ If one want to support inheritance for struct, one can implement following spec.
 
 ### Schema consistent
 
-Fields are serialized from parent type to leaf type. Fields are sorted using fury struct fields sort algorithms.
+Fields are serialized from parent type to leaf type. Fields are sorted using fory struct fields sort algorithms.
 
 ### Schema Evolution
 
@@ -441,8 +442,8 @@ Meta layout for schema evolution mode:
 
 Meta header is a 64 bits number value encoded in little endian order.
 
-- Lowest 4 digits `0b0000~0b1110` are used to record num classes. `0b1111` is preserved to indicate that Fury need to
-  read more bytes for length using Fury unsigned int encoding. If current type doesn't has parent type, or parent
+- Lowest 4 digits `0b0000~0b1110` are used to record num classes. `0b1111` is preserved to indicate that Fory need to
+  read more bytes for length using Fory unsigned int encoding. If current type doesn't has parent type, or parent
   type doesn't have fields to serialize, or we're in a context which serialize fields of current type
   only, num classes will be 1.
 - The 5th bit is used to indicate whether this type needs schema evolution.
@@ -468,16 +469,16 @@ Meta string is mainly used to encode meta strings such as field names.
 
 String binary encoding algorithm:
 
-| Algorithm                 | Pattern       | Description                                                                                                                                                                                                                                                                              |
-|---------------------------|---------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| LOWER_SPECIAL             | `a-z._$\|`    | every char is written using 5 bits, `a-z`: `0b00000~0b11001`, `._$\|`: `0b11010~0b11101`, prepend one bit at the start to indicate whether strip last char since last byte may have 7 redundant bits(1 indicates strip last char)                                                        |
-| LOWER_UPPER_DIGIT_SPECIAL | `a-zA-Z0~9._` | every char is written using 6 bits, `a-z`: `0b00000~0b11001`, `A-Z`: `0b11010~0b110011`, `0~9`: `0b110100~0b111101`, `._`: `0b111110~0b111111`,  prepend one bit at the start to indicate whether strip last char since last byte may have 7 redundant bits(1 indicates strip last char) |
-| UTF-8                     | any chars     | UTF-8 encoding                                                                                                                                                                                                                                                                           |
+| Algorithm                 | Pattern       | Description                                                                                                                                                                                                                                                                             |
+| ------------------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| LOWER_SPECIAL             | `a-z._$\|`    | every char is written using 5 bits, `a-z`: `0b00000~0b11001`, `._$\|`: `0b11010~0b11101`, prepend one bit at the start to indicate whether strip last char since last byte may have 7 redundant bits(1 indicates strip last char)                                                       |
+| LOWER_UPPER_DIGIT_SPECIAL | `a-zA-Z0~9._` | every char is written using 6 bits, `a-z`: `0b00000~0b11001`, `A-Z`: `0b11010~0b110011`, `0~9`: `0b110100~0b111101`, `._`: `0b111110~0b111111`, prepend one bit at the start to indicate whether strip last char since last byte may have 7 redundant bits(1 indicates strip last char) |
+| UTF-8                     | any chars     | UTF-8 encoding                                                                                                                                                                                                                                                                          |
 
 Encoding flags:
 
 | Encoding Flag             | Pattern                                                  | Encoding Algorithm                                                                                                                                          |
-|---------------------------|----------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| ------------------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | LOWER_SPECIAL             | every char is in `a-z._\|`                               | `LOWER_SPECIAL`                                                                                                                                             |
 | FIRST_TO_LOWER_SPECIAL    | every char is in `a-z._` except first char is upper case | replace first upper case char to lower case, then use `LOWER_SPECIAL`                                                                                       |
 | ALL_TO_LOWER_SPECIAL      | every char is in `a-zA-Z._`                              | replace every upper case char by `\|` + `lower case`, then use `LOWER_SPECIAL`, use this encoding if it's smaller than Encoding `LOWER_UPPER_DIGIT_SPECIAL` |
@@ -541,12 +542,12 @@ Notes:
 #### unsigned varint64
 
 - size: 1~9 byte
-- Fury SLI(Small long as int) Encoding:
+- Fory SLI(Small long as int) Encoding:
   - If long is in `[0, 2147483647]`, encode as 4 bytes int: `| little-endian: ((int) value) << 1 |`
   - Otherwise write as 9 bytes: `| 0b1 | little-endian 8 bytes long |`
-- Fury PVL(Progressive Variable-length Long) Encoding:
+- Fory PVL(Progressive Variable-length Long) Encoding:
   - positive long format: first bit in every byte indicates whether to have the next byte. If first bit is set
-      i.e. `b & 0x80 == 0x80`, then the next byte should be read until the first bit is unset.
+    i.e. `b & 0x80 == 0x80`, then the next byte should be read until the first bit is unset.
 
 #### signed int64
 
@@ -556,12 +557,12 @@ Notes:
 #### signed varint64
 
 - size: 1~9 byte
-- Fury SLI(Small long as int) Encoding:
+- Fory SLI(Small long as int) Encoding:
   - If long is in `[-1073741824, 1073741823]`, encode as 4 bytes int: `| little-endian: ((int) value) << 1 |`
   - Otherwise write as 9 bytes: `| 0b1 | little-endian 8 bytes long |`
-- Fury PVL(Progressive Variable-length Long) Encoding:
+- Fory PVL(Progressive Variable-length Long) Encoding:
   - First convert the number into positive unsigned long by `(v << 1) ^ (v >> 63)` ZigZag algorithm to reduce cost of
-      small negative numbers, then encoding it as an unsigned long.
+    small negative numbers, then encoding it as an unsigned long.
 
 #### float32
 
@@ -590,13 +591,13 @@ Format:
 
 Which encoding to choose:
 
-- For JDK8: fury detect `latin` at runtime, if string is `latin` string, then use `latin` encoding, otherwise
+- For JDK8: fory detect `latin` at runtime, if string is `latin` string, then use `latin` encoding, otherwise
   use `utf-16`.
-- For JDK9+: fury use `coder` in `String` object for encoding, `latin`/`utf-16` will be used for encoding.
-- If the string is encoded by `utf-8`, then fury will use `utf-8` to decode the data. Cross-language string
-  serialization of fury uses `utf-8` by default.
+- For JDK9+: fory use `coder` in `String` object for encoding, `latin`/`utf-16` will be used for encoding.
+- If the string is encoded by `utf-8`, then fory will use `utf-8` to decode the data. Cross-language string
+  serialization of fory uses `utf-8` by default.
 
-### list
+### collection/list
 
 Format:
 
@@ -613,8 +614,8 @@ which will be encoded by elements header, each use one bit:
 - If track elements ref, use the first bit `0b1` of the header to flag it.
 - If the elements have null, use the second bit `0b10` of the header to flag it. If ref tracking is enabled for this
   element type, this flag is invalid.
-- If the element types are not the declared type, use the 3rd bit `0b100` of the header to flag it.
-- If the element types are different, use the 4rd bit `0b1000` header to flag it.
+- If the element types are the declared type, use the 3rd bit `0b100` of the header to flag it.
+- If the element types are smae, use the 4th bit `0b1000` header to flag it.
 
 By default, all bits are unset, which means all elements won't track ref, all elements are same type, not null and
 the actual element is the declared type in the custom type field.
@@ -627,12 +628,12 @@ a linear map/list.
 Based on the elements header, the serialization of elements data may skip `ref flag`/`null flag`/`element type info`.
 
 ```python
-fury = ...
+fory = ...
 buffer = ...
 elems = ...
 if element_type_is_same:
     if not is_declared_type:
-        fury.write_type(buffer, elem_type)
+        fory.write_type(buffer, elem_type)
     elem_serializer = get_serializer(...)
     if track_ref:
         for elem in elems:
@@ -651,16 +652,16 @@ if element_type_is_same:
 else:
     if track_ref:
         for elem in elems:
-            fury.write_ref(buffer, elem)
+            fory.write_ref(buffer, elem)
     elif has_null:
         for elem in elems:
-            fury.write_nullable(buffer, elem)
+            fory.write_nullable(buffer, elem)
     else:
         for elem in elems:
-            fury.write_value(buffer, elem)
+            fory.write_value(buffer, elem)
 ```
 
-[`CollectionSerializer#writeElements`](https://github.com/apache/fury/blob/20a1a78b17a75a123a6f5b7094c06ff77defc0fe/java/fury-core/src/main/java/org/apache/fury/serializer/collection/AbstractCollectionSerializer.java#L302)
+[`CollectionSerializer#writeElements`](https://github.com/apache/fory/blob/20a1a78b17a75a123a6f5b7094c06ff77defc0fe/java/fory-core/src/main/java/org/apache/fory/serializer/collection/CollectionLikeSerializer.java#L302)
 can be taken as an example.
 
 ### array
@@ -699,12 +700,12 @@ Map uses a chunk by chunk based Format:
 
 #### map key-value chunk data
 
-Map iteration is too expensive, Fury won't compute the header like for list since it introduce
-[considerable overhead](https://github.com/apache/fury/issues/925).
-Users can use `MapFieldInfo` annotation to provide the header in advance. Otherwise Fury will use first key-value pair
+Map iteration is too expensive, Fory won't compute the header like for list since it introduce
+[considerable overhead](https://github.com/apache/fory/issues/925).
+Users can use `MapFieldInfo` annotation to provide the header in advance. Otherwise Fory will use first key-value pair
 to predict header optimistically, and update the chunk header if the prediction failed at some pair.
 
-Fury will serialize the map chunk by chunk, every chunk has 255 pairs at most.
+Fory will serialize the map chunk by chunk, every chunk has 255 pairs at most.
 
 ```
 |    1 byte      |     1 byte     | variable bytes  |
@@ -717,15 +718,15 @@ KV header:
 - If track key ref, use the first bit `0b1` of the header to flag it.
 - If the key has null, use the second bit `0b10` of the header to flag it. If ref tracking is enabled for this
   key type, this flag is invalid.
-- If the actual key type of map is not the declared key type, use the 3rd bit `0b100` of the header to flag it.
+- If the actual key type of map is the declared key type, use the 3rd bit `0b100` of the header to flag it.
 - If track value ref, use the 4th bit `0b1000` of the header to flag it.
 - If the value has null, use the 5th bit `0b10000` of the header to flag it. If ref tracking is enabled for this
   value type, this flag is invalid.
-- If the value type of map is not the declared value type, use the 6rd bit `0b100000` of the header to flag it.
+- If the value type of map is the declared value type, use the 6rd bit `0b100000` of the header to flag it.
 - If key or value is null, that key and value will be written as a separate chunk, and chunk size writing will be
   skipped too.
 
-If streaming write is enabled, which means Fury can't update written `chunk size`. In such cases, map key-value data
+If streaming write is enabled, which means Fory can't update written `chunk size`. In such cases, map key-value data
 format will be:
 
 ```
@@ -740,7 +741,7 @@ header, and look up the generated code from a linear map/list.
 
 #### Why serialize chunk by chunk?
 
-When fury will use first key-value pair to predict header optimistically, it can't know how many pairs have same
+When fory will use first key-value pair to predict header optimistically, it can't know how many pairs have same
 meta(tracking kef ref, key has null and so on). If we don't write chunk by chunk with max chunk size, we must write at
 least `X` bytes to take up a place for later to update the number which has same elements, `X` is the num_bytes for
 encoding varint encoding of map size.
@@ -766,7 +767,7 @@ Not supported for now.
 ### struct
 
 Struct means object of `class/pojo/struct/bean/record` type.
-Struct will be serialized by writing its fields data in fury order.
+Struct will be serialized by writing its fields data in fory order.
 
 Depending on schema compatibility, structs will have different formats.
 
@@ -780,24 +781,11 @@ Field will be ordered as following, every group of fields will have its own orde
   - when same size and type id, sort by snake case field name
   - types: bool/int8/int16/int32/varint32/int64/varint64/sliint64/float16/float32/float64
 - nullable primitive fields: same order as primitive fields
-- morphic fields: same type together, then sorted by field name lexicographically using snake case style.
-- unknown fields: same sort algorithms as morphic fields
-- list fields: same sort algorithms as morphic fields
-- set fields: same sort algorithms as morphic fields
-- map fields: same sort algorithms as morphic fields
-
-#### Field order
-
-Fields in a struct are sorted in a ascending order by:
-
-- primitive fields first: bool/int8/int16/int32/varint32/int64/varint64/sliint64/float16/float32/float64, sorted by
-  type id.
-- nullable primitive fields
-- morphic types except `list/set/map`
-- unknown types
-- list types
-- set types
-- map types
+- other internal type fields: sort by type id then snake case field name
+- list fields: sort by snake case field name
+- set fields: sort by snake case field name
+- map fields: sort by snake case field name
+- other fields: sort by snake case field name
 
 If two fields have same type, then sort by snake_case styled field name.
 
@@ -921,17 +909,17 @@ When process A received serialized `Foo2` from process B, here is how it deseria
 
 ```c++
 Foo1 foo1 = ...;
-const std::vector<fury::FieldInfo> &field_infos = type_meta.field_infos;
+const std::vector<fory::FieldInfo> &field_infos = type_meta.field_infos;
 for (const auto &field_info : field_infos) {
   switch (field_info.field_id) {
     case 0:
       foo1.v1 = buffer.read_varint32();
       break;
     case 1:
-      foo1.v2 = fury.read_string();
+      foo1.v2 = fory.read_string();
       break;
     default:
-      fury.skip_data(field_info);
+      fory.skip_data(field_info);
   }
 }
 ```

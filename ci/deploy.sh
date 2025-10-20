@@ -18,70 +18,25 @@
 # under the License.
 
 
-set -x
+# Print commands and their arguments as they are executed.
+if [ "${DEPLOY_QUIET:-0}" != "1" ]; then
+    set -x
+fi
 
 # Cause the script to exit if a single command fails.
 set -e
 
-# configure ~/.pypirc before run this script
-#if [ ! -f ~/.pypirc ]; then
-#  echo  "Please configure .pypirc before run this script"
-#  exit 1
-#fi
+# Prefer Python from $PYTHON_PATH if it exists, otherwise use default python
+if [ -n "$PYTHON_PATH" ] && [ -x "$PYTHON_PATH" ]; then
+  PYTHON_CMD="$PYTHON_PATH"
+  PIP_CMD="$PYTHON_PATH -m pip"
+else
+  PYTHON_CMD="python"
+  PIP_CMD="pip"
+fi
 
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
-WHEEL_DIR="$ROOT/.whl"
-
-PYTHONS=("cp37-cp37m"
-         "cp38-cp38"
-         "cp39-cp39"
-         "cp310-cp310"
-         "cp310-cp311"
-         "cp312-cp312"
-         "cp313-cp313")
-
-VERSIONS=("3.7"
-          "3.8"
-          "3.9"
-          "3.10"
-          "3.11"
-          "3.12"
-          "3.13")
-
-create_py_envs() {
-  source $(conda info --base)/etc/profile.d/conda.sh
-  for version in "${VERSIONS[@]}"; do
-    conda create -y --name "py$version" python="$version"
-  done
-  conda env list
-}
-
-rename_wheels() {
-  for path in "$1"/*.whl; do
-    if [ -f "${path}" ]; then
-      # Rename linux to manylinux1
-      new_path="${path//linux/manylinux1}"
-      if [ "${path}" != "${new_path}" ]; then
-        mv "${path}" "${new_path}"
-      fi
-
-      # Copy macosx_14_0_x86_64 to macosx_10_12_x86_64
-      if [[ "${path}" == *macosx_14_0_x86_64.whl ]]; then
-        copy_path="${path//macosx_14_0_x86_64/macosx_10_12_x86_64}"
-        mv "${path}" "${copy_path}"
-      fi
-    fi
-  done
-}
-
-rename_mac_wheels() {
-  for path in "$WHEEL_DIR"/*.whl; do
-    if [ -f "${path}" ]; then
-      cp "${path}" "${path//macosx_12_0_x86_64/macosx_10_13_x86_64}"
-    fi
-  done
-}
 
 bump_version() {
   python "$ROOT/ci/release.py" bump_version -l all -version "$1"
@@ -91,16 +46,27 @@ bump_java_version() {
   python "$ROOT/ci/release.py" bump_version -l java -version "$1"
 }
 
-bump_py_version() {
+# Replicates the behavior of _update_python_version in ci/release.py
+parse_py_version() {
   local version="$1"
   if [ -z "$version" ]; then
     # Get the latest tag from the current Git repository
     version=$(git describe --tags --abbrev=0)
-    # Check if the tag starts with 'v' and strip it
-    if [[ $version == v* ]]; then
-      version="${version:1}"
-    fi
   fi
+  # Check if the tag starts with 'v' and strip it
+  if [[ $version == v* ]]; then
+    version="${version:1}"
+  fi
+  version="${version//-alpha/a}"
+  version="${version//-beta/b}"
+  version="${version//-rc/rc}"
+  version="${version//-/}"
+  echo "$version"
+}
+
+bump_py_version() {
+  local version
+  version=$(parse_py_version "$1")
   python "$ROOT/ci/release.py" bump_version -l python -version "$version"
 }
 
@@ -113,58 +79,67 @@ deploy_jars() {
   mvn -T10 clean deploy --no-transfer-progress -DskipTests -Prelease
 }
 
-build_pyfury() {
-  echo "Python version $(python -V), path $(which python)"
+build_pyfory() {
+  echo "$($PYTHON_CMD -V), path $(which "$PYTHON_CMD")"
   install_pyarrow
-  pip install Cython wheel pytest
+  $PIP_CMD install cython wheel pytest
   pushd "$ROOT/python"
-  pip list
-  echo "Install pyfury"
+  $PIP_CMD list
+  echo "Install pyfory"
   # Fix strange installed deps not found
-  pip install setuptools -U
-  bazel build //:cp_fury_so
-  python setup.py bdist_wheel --dist-dir=../dist
+  $PIP_CMD install setuptools -U
+
+  if [[ "$OSTYPE" == "darwin"* ]]; then
+    MACOS_VERSION=$(sw_vers -productVersion | cut -d. -f1-2)
+    echo "MACOS_VERSION: $MACOS_VERSION"
+    if [[ "$MACOS_VERSION" == "13"* ]]; then
+      export MACOSX_DEPLOYMENT_TARGET=10.13
+      $PYTHON_CMD setup.py bdist_wheel --plat-name macosx_10_13_x86_64 --dist-dir="$ROOT/dist"
+    else
+      $PYTHON_CMD setup.py bdist_wheel --dist-dir="$ROOT/dist"
+    fi
+  elif [[ "$OSTYPE" == "msys" || "$OSTYPE" == "win32" ]]; then
+
+    # Windows tends to drop alpha/beta markers - force it through setup.cfg
+    if [ -n "$GITHUB_REF_NAME" ]; then
+      version=$(parse_py_version "$GITHUB_REF_NAME")
+      echo "Using version from GITHUB_REF_NAME: $version"
+      echo "[metadata]" > setup.cfg
+      echo "version = $version" >> setup.cfg
+    fi
+
+    $PYTHON_CMD setup.py bdist_wheel --dist-dir="$ROOT/dist"
+    # Clean up
+    rm setup.cfg
+  else
+    $PYTHON_CMD setup.py bdist_wheel --dist-dir="$ROOT/dist"
+  fi
+
+  if [ -n "$PLAT" ]; then
+    # In manylinux container, repair the wheel to embed shared libraries
+    # and rename the wheel with the manylinux tag.
+    PYARROW_LIB_DIR=$($PYTHON_CMD -c 'import pyarrow; print(":".join(pyarrow.get_library_dirs()))')
+    export LD_LIBRARY_PATH="$PYARROW_LIB_DIR:$LD_LIBRARY_PATH"
+    auditwheel repair "$ROOT/dist"/pyfory-*-linux_*.whl --plat "$PLAT" --exclude '*arrow*' --exclude '*parquet*' --exclude '*numpy*' -w "$ROOT/dist"
+    rm "$ROOT/dist"/pyfory-*-linux_*.whl
+  elif [[ "$OSTYPE" == "darwin"* ]]; then
+    echo "Skip macos wheel repair"
+  elif [[ "$OSTYPE" == "msys" || "$OSTYPE" == "win32" ]]; then
+    echo "Skip windows wheel repair"
+  fi
+
+  echo "Wheels for $PYTHON_CMD:"
+  ls -l "$ROOT/dist"
   popd
 }
 
-deploy_python() {
-  source $(conda info --base)/etc/profile.d/conda.sh
-  if command -v pyenv; then
-    pyenv local system
-  fi
-  cd "$ROOT/python"
-  rm -rf "$WHEEL_DIR"
-  mkdir -p "$WHEEL_DIR"
-  for ((i=0; i<${#PYTHONS[@]}; ++i)); do
-    PYTHON=${PYTHONS[i]}
-    ENV="py${VERSIONS[i]}"
-    conda activate "$ENV"
-    python -V
-    git clean -f -f -x -d -e .whl
-    # Ensure bazel select the right version of python
-    bazel clean --expunge
-    install_pyarrow
-    pip install --ignore-installed twine setuptools cython numpy
-    pyarrow_dir=$(python -c "import importlib.util; import os; print(os.path.dirname(importlib.util.find_spec('pyarrow').origin))")
-    # ensure pyarrow is clean
-    rm -rf "$pyarrow_dir"
-    pip install --ignore-installed pyarrow==$pyarrow_version
-    python setup.py clean
-    python setup.py bdist_wheel
-    mv dist/pyfury*.whl "$WHEEL_DIR"
-  done
-  rename_wheels "$WHEEL_DIR"
-  twine check "$WHEEL_DIR"/pyfury*.whl
-  twine upload -r pypi "$WHEEL_DIR"/pyfury*.whl
-}
-
 install_pyarrow() {
-  pyversion=$(python -V | cut -d' ' -f2)
+  pyversion=$($PYTHON_CMD -V | cut -d' ' -f2)
   if [[ $pyversion  ==  3.13* ]]; then
-    pip install pyarrow==18.0.0
-    pip install numpy
+    $PIP_CMD install pyarrow==18.0.0
+    $PIP_CMD install numpy
   else
-    pip install pyarrow==15.0.0
+    $PIP_CMD install pyarrow==15.0.0
     # Automatically install numpy
   fi
 }
@@ -182,9 +157,6 @@ deploy_scala() {
 case "$1" in
 java) # Deploy jars to maven repository.
   deploy_jars
-  ;;
-python) # Deploy wheel to pypi
-  deploy_python
   ;;
 *)
   echo "Execute command $*"

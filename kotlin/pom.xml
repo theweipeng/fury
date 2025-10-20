@@ -28,9 +28,9 @@
         <version>29</version>
     </parent>
 
-    <groupId>org.apache.fury</groupId>
-    <artifactId>fury-kotlin</artifactId>
-    <version>0.11.0-SNAPSHOT</version>
+    <groupId>org.apache.fory</groupId>
+    <artifactId>fory-kotlin</artifactId>
+    <version>0.13.0-SNAPSHOT</version>
     <modelVersion>4.0.0</modelVersion>
 
     <properties>
@@ -95,7 +95,7 @@
                     <configuration>
                         <doclint>none</doclint>
                         <bottom>
-                            Copyright © 2023-2025, The Apache Software Foundation. Apache Fury™, Fury™, and Apache
+                            Copyright © 2023-2025, The Apache Software Foundation. Apache Fory™, Fory™, and Apache
                             are either registered trademarks or trademarks of the Apache Software Foundation.
                         </bottom>
                     </configuration>
@@ -103,7 +103,7 @@
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-shade-plugin</artifactId>
-                    <version>3.2.1</version>
+                    <version>3.6.0</version>
                 </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
@@ -204,8 +204,8 @@
 
     <dependencies>
         <dependency>
-            <groupId>org.apache.fury</groupId>
-            <artifactId>fury-core</artifactId>
+            <groupId>org.apache.fory</groupId>
+            <artifactId>fory-core</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
@@ -217,6 +217,11 @@
         <dependency>
             <groupId>org.jetbrains.kotlin</groupId>
             <artifactId>kotlin-stdlib</artifactId>
+            <version>${kotlin.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.jetbrains.kotlin</groupId>
+            <artifactId>kotlin-reflect</artifactId>
             <version>${kotlin.version}</version>
         </dependency>
     </dependencies>

@@ -16,8 +16,9 @@
 # under the License.
 
 """
-    process fury/kryo/fst/hession performance data
+process fory/kryo/fst/hession performance data
 """
+
 import datetime
 import matplotlib.pyplot as plt
 import os
@@ -89,8 +90,8 @@ def process_data(filepath: str):
 
 
 color_map = {
-    "Fury": "#7845FD",
-    "Furymetashared": "#B237ED",  # (1, 0.65, 0.55)
+    "Fory": "#7845FD",
+    "Forymetashared": "#B237ED",  # (1, 0.65, 0.55)
     # "Kryo": (1, 0.5, 1),
     # "Kryo": (1, 0.84, 0.25),
     "Kryo": "#55BCC2",
@@ -128,13 +129,13 @@ def plot(df: pd.DataFrame, file_dir, filename, column="Tps"):
         jdk = data[data["Lib"].str.contains("Jdk")].copy()
         jdk["Benchmark"] = jdk["Benchmark"] + "_compatible"
         data = pd.concat([data, jdk])
-        fury_metashared_color = plot_color_map["Furymetashared"]
-        fury_color = plot_color_map["Fury"]
-        plot_color_map["Fury"] = fury_metashared_color
-        plot_color_map["Furymetashared"] = fury_color
-    ylable = column
+        fory_metashared_color = plot_color_map["Forymetashared"]
+        fory_color = plot_color_map["Fory"]
+        plot_color_map["Fory"] = fory_metashared_color
+        plot_color_map["Forymetashared"] = fory_color
+    ylabel = column
     if column == "Tps":
-        ylable = f"Tps/{scaler}"
+        ylabel = f"Tps/{scaler}"
         data[column] = (data[column] / scaler).apply(format_scaler)
     grouped = data.groupby(group_cols)
     files_dict = {}
@@ -168,7 +169,7 @@ def plot(df: pd.DataFrame, file_dir, filename, column="Tps"):
         for container in ax.containers:
             ax.bar_label(container)
         ax.set_xlabel("enable_references")
-        ax.set_ylabel(ylable)
+        ax.set_ylabel(ylabel)
         libs = libs.str.replace("metashared", "meta\nshared")
         ax.legend(libs, loc="upper right", prop={"size": 13})
         save_dir = get_plot_dir(file_dir)
@@ -183,9 +184,9 @@ def plot_zero_copy(df: pd.DataFrame, file_dir, filename, column="Tps"):
         group_cols = ["Benchmark", "dataType", "bufferType"]
     else:
         group_cols = ["Benchmark", "bufferType"]
-    ylable = column
+    ylabel = column
     if column == "Tps":
-        ylable = f"Tps/{scaler}"
+        ylabel = f"Tps/{scaler}"
         data[column] = (data[column] / scaler).apply(format_scaler)
     grouped = data.groupby(group_cols)
     files_dict = {}
@@ -217,7 +218,7 @@ def plot_zero_copy(df: pd.DataFrame, file_dir, filename, column="Tps"):
         for container in ax.containers:
             ax.bar_label(container)
         ax.set_xlabel("array_size")
-        ax.set_ylabel(ylable)
+        ax.set_ylabel(ylabel)
         ax.legend(libs, bbox_to_anchor=(0.23, 0.99), prop={"size": 13})
         save_dir = get_plot_dir(file_dir)
         sub_plot.get_figure().savefig(save_dir + "/" + save_filename)
