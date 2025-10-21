@@ -556,7 +556,6 @@ impl TypeMeta {
     pub fn get_hash(&self) -> i64 {
         self.hash
     }
-
     pub fn get_type_name(&self) -> Rc<MetaString> {
         self.layer.get_type_name()
     }
@@ -639,6 +638,21 @@ impl TypeMeta {
             meta_size += reader.read_varuint32()? as i64;
         }
         reader.skip(meta_size as usize)
+    }
+
+    /// Check class version consistency, similar to Java's checkClassVersion
+    pub fn check_struct_version(
+        read_version: i32,
+        local_version: i32,
+        type_name: &str,
+    ) -> Result<(), Error> {
+        if read_version != local_version {
+            return Err(Error::struct_version_mismatch(format!(
+                "Read class {} version {} is not consistent with {}",
+                type_name, read_version, local_version
+            )));
+        }
+        Ok(())
     }
 
     pub fn to_bytes(&self) -> Result<Vec<u8>, Error> {
