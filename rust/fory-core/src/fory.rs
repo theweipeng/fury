@@ -544,7 +544,6 @@ impl Fory {
             Pool::new(factory)
         });
         let mut context = pool.get();
-        context.writer.attach_buffer(vec![]);
         let result = self.serialize_with_context(record, &mut context)?;
         pool.put(context);
         Ok(result)
@@ -555,6 +554,7 @@ impl Fory {
         record: &T,
         context: &mut WriteContext,
     ) -> Result<Vec<u8>, Error> {
+        context.writer.attach_buffer(vec![]);
         let is_none = record.fory_is_none();
         self.write_head::<T>(is_none, &mut context.writer);
         let meta_start_offset = context.writer.len();
