@@ -26,7 +26,7 @@ use crate::resolver::ref_resolver::{RefReader, RefWriter};
 use crate::resolver::type_resolver::{TypeInfo, TypeResolver};
 use crate::types;
 use std::rc::Rc;
-use std::sync::Mutex;
+use crate::util::Spinlock;
 
 /// Serialization state container used on a single thread at a time.
 /// Sharing the same instance across threads simultaneously causes undefined behavior.
@@ -405,7 +405,7 @@ impl ReadContext {
 }
 
 pub struct Pool<T> {
-    items: Mutex<Vec<T>>,
+    items: Spinlock<Vec<T>>,
     factory: Box<dyn Fn() -> T + Send + Sync>,
 }
 
@@ -415,7 +415,7 @@ impl<T> Pool<T> {
         F: Fn() -> T + Send + Sync + 'static,
     {
         Pool {
-            items: Mutex::new(vec![]),
+            items: Spinlock::new(vec![]),
             factory: Box::new(factory),
         }
     }
@@ -425,16 +425,17 @@ impl<T> Pool<T> {
         let item = self
             .items
             .lock()
-            .unwrap()
             .pop()
             .unwrap_or_else(|| (self.factory)());
         // println!("Object address: {:p}", &item);
+        self.items.unlock();
         item
     }
 
     // put back manually
     #[inline(always)]
     pub fn put(&self, item: T) {
-        self.items.lock().unwrap().push(item);
+        self.items.lock().push(item);
+        self.items.unlock();
     }
 }

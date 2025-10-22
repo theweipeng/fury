@@ -15,9 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::cell::UnsafeCell;
 use crate::types::TypeId;
 use chrono::NaiveDate;
 use std::ptr;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub const EPOCH: NaiveDate = match NaiveDate::from_ymd_opt(1970, 1, 1) {
     None => {
@@ -128,4 +130,30 @@ pub fn get_ext_actual_type_id(type_id: u32, register_by_name: bool) -> u32 {
         } else {
             TypeId::EXT as u32
         }
+}
+
+pub struct Spinlock<T> {
+    data: UnsafeCell<T>,
+    flag: AtomicBool,
+}
+
+impl<T> Spinlock<T> {
+    pub fn new(data: T) -> Self {
+        Spinlock {
+            data: UnsafeCell::new(data),
+            flag: AtomicBool::new(false),
+        }
+    }
+
+    pub fn lock(&self) -> &mut T {
+        while self.flag.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
+            std::hint::spin_loop();
+        }
+        // The flag provided the safety
+        unsafe { &mut *self.data.get() }
+    }
+
+    pub fn unlock(&self) {
+        self.flag.store(false, Ordering::Release);
+    }
 }

@@ -32,9 +32,14 @@ pub struct Writer {
 
 impl Writer {
     #[inline(always)]
-    pub fn reset(&mut self) {
-        // keep capacity and reset len to 0
-        self.bf.clear();
+    pub fn attach_buffer(&mut self, bf: Vec<u8>) {
+        self.reserved = 0;
+        self.bf = bf;
+    }
+
+    #[inline(always)]
+    pub fn detach_buffer(&mut self) -> Vec<u8> {
+        std::mem::replace(&mut self.bf, vec![])
     }
 
     #[inline(always)]
