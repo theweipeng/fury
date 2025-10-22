@@ -714,7 +714,7 @@ fn basic() {
     // serialize
     let writer = Writer::default();
     let mut write_context = WriteContext::new_from_fory(writer, &fory);
-    let mut bins = serialize_non_null(&fory, &mut write_context);
+    let bins = serialize_non_null(&fory, &mut write_context);
     // deserialize
     deserialize_non_null(&fory, bins, false);
 }
@@ -726,7 +726,7 @@ fn basic_nullable() {
     // serialize
     let writer = Writer::default();
     let mut write_context = WriteContext::new_from_fory(writer, &fory);
-    let mut bins = serialize_nullable(&fory, &mut write_context);
+    let bins = serialize_nullable(&fory, &mut write_context);
     // deserialize
     deserialize_nullable(&fory, bins, false);
 }
@@ -738,12 +738,12 @@ fn auto_conv() {
     // serialize_non-null
     let writer = Writer::default();
     let mut write_context = WriteContext::new_from_fory(writer, &fory);
-    let mut bins = serialize_non_null(&fory, &mut write_context);
+    let bins = serialize_non_null(&fory, &mut write_context);
     deserialize_nullable(&fory, bins, true);
     // serialize_nullable
     let writer = Writer::default();
     let mut write_context = WriteContext::new_from_fory(writer, &fory);
-    let mut bins = serialize_nullable(&fory, &mut write_context);
+    let bins = serialize_nullable(&fory, &mut write_context);
     // deserialize_non-null
     deserialize_non_null(&fory, bins, true);
 }
