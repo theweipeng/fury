@@ -25,8 +25,8 @@ use crate::resolver::metastring_resolver::{MetaStringReaderResolver, MetaStringW
 use crate::resolver::ref_resolver::{RefReader, RefWriter};
 use crate::resolver::type_resolver::{TypeInfo, TypeResolver};
 use crate::types;
-use std::rc::Rc;
 use crate::util::Spinlock;
+use std::rc::Rc;
 
 /// Serialization state container used on a single thread at a time.
 /// Sharing the same instance across threads simultaneously causes undefined behavior.
@@ -422,11 +422,7 @@ impl<T> Pool<T> {
 
     #[inline(always)]
     pub fn get(&self) -> T {
-        let item = self
-            .items
-            .lock()
-            .pop()
-            .unwrap_or_else(|| (self.factory)());
+        let item = self.items.lock().pop().unwrap_or_else(|| (self.factory)());
         // println!("Object address: {:p}", &item);
         self.items.unlock();
         item

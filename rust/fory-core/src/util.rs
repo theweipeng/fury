@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::cell::UnsafeCell;
 use crate::types::TypeId;
 use chrono::NaiveDate;
+use std::cell::UnsafeCell;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -149,7 +149,11 @@ impl<T> Spinlock<T> {
     }
 
     pub fn lock(&self) -> &mut T {
-        while self.flag.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
+        while self
+            .flag
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
             std::hint::spin_loop();
         }
         // The flag provided the safety
