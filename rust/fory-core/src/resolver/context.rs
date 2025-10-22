@@ -422,16 +422,12 @@ impl<T> Pool<T> {
 
     #[inline(always)]
     pub fn get(&self) -> T {
-        let item = self.items.lock().pop().unwrap_or_else(|| (self.factory)());
-        // println!("Object address: {:p}", &item);
-        self.items.unlock();
-        item
+        self.items.lock().pop().unwrap_or_else(|| (self.factory)())
     }
 
     // put back manually
     #[inline(always)]
     pub fn put(&self, item: T) {
         self.items.lock().push(item);
-        self.items.unlock();
     }
 }

@@ -18,8 +18,9 @@
 use crate::types::TypeId;
 use chrono::NaiveDate;
 use std::cell::UnsafeCell;
-use std::ptr;
+use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::{ptr, thread};
 
 pub const EPOCH: NaiveDate = match NaiveDate::from_ymd_opt(1970, 1, 1) {
     None => {
@@ -137,8 +138,8 @@ pub struct Spinlock<T> {
     flag: AtomicBool,
 }
 
-unsafe impl<T: Send + Sync> Send for Spinlock<T> {}
-unsafe impl<T: Send + Sync> Sync for Spinlock<T> {}
+unsafe impl<T: Send> Send for Spinlock<T> {}
+unsafe impl<T: Sync> Sync for Spinlock<T> {}
 
 impl<T> Spinlock<T> {
     pub fn new(data: T) -> Self {
@@ -148,19 +149,50 @@ impl<T> Spinlock<T> {
         }
     }
 
-    pub fn lock(&self) -> &mut T {
+    pub fn lock(&self) -> SpinlockGuard<T> {
+        let mut spins = 0;
         while self
             .flag
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
             .is_err()
         {
-            std::hint::spin_loop();
+            // Spin for a few iterations
+            if spins < 10 {
+                std::hint::spin_loop();
+                spins += 1;
+            } else {
+                // Then yield to the scheduler
+                thread::yield_now();
+                spins = 0; // reset spin counter
+            }
         }
-        // The flag provided the safety
-        unsafe { &mut *self.data.get() }
+        SpinlockGuard { lock: self }
     }
 
     pub fn unlock(&self) {
         self.flag.store(false, Ordering::Release);
+    }
+}
+
+pub struct SpinlockGuard<'a, T> {
+    lock: &'a Spinlock<T>,
+}
+
+impl<'a, T> Drop for SpinlockGuard<'a, T> {
+    fn drop(&mut self) {
+        self.lock.unlock();
+    }
+}
+
+impl<'a, T> Deref for SpinlockGuard<'a, T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*self.lock.data.get() }
+    }
+}
+
+impl<'a, T> DerefMut for SpinlockGuard<'a, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { &mut *self.lock.data.get() }
     }
 }
