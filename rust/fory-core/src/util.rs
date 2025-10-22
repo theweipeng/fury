@@ -169,7 +169,7 @@ impl<T> Spinlock<T> {
         SpinlockGuard { lock: self }
     }
 
-    pub fn unlock(&self) {
+    fn unlock(&self) {
         self.flag.store(false, Ordering::Release);
     }
 }
