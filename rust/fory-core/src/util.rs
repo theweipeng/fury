@@ -149,7 +149,7 @@ impl<T> Spinlock<T> {
         }
     }
 
-    pub fn lock(&self) -> SpinlockGuard<T> {
+    pub fn lock(&self) -> SpinlockGuard<'_, T> {
         let mut spins = 0;
         while self
             .flag
