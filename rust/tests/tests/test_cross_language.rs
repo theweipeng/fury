@@ -27,7 +27,7 @@ use fory_derive::ForyObject;
 use std::collections::{HashMap, HashSet};
 use std::{fs, vec};
 
-// RUSTFLAGS="-Awarnings" cargo expand -p fory-tests --test test_cross_language
+// RUSTFLAGS="-Awarnings" cargo expand -p tests --test test_cross_language
 fn get_data_file() -> String {
     std::env::var("DATA_FILE").expect("DATA_FILE not set")
 }
@@ -663,25 +663,6 @@ fn _test_skip_custom(fory1: &Fory, fory2: &Fory) {
 }
 
 #[test]
-fn test_kankankan() {
-    let mut fory1 = Fory::default().compatible(true);
-    fory1.register_serializer::<MyExt>(103).unwrap();
-    fory1.register::<Empty>(104).unwrap();
-    let mut fory2 = Fory::default().compatible(true);
-    fory2.register::<Color>(101).unwrap();
-    fory2.register::<MyStruct>(102).unwrap();
-    fory2.register_serializer::<MyExt>(103).unwrap();
-    fory2.register::<MyWrapper>(104).unwrap();
-    let wrapper = MyWrapper {
-        color: Color::White,
-        my_struct: MyStruct { id: 42 },
-        my_ext: MyExt { id: 43 },
-    };
-    let bytes = fory2.serialize(&wrapper).unwrap();
-    fory1.deserialize::<Empty>(&bytes).unwrap();
-}
-
-#[test]
 #[ignore]
 fn test_skip_id_custom() {
     let mut fory1 = Fory::default().compatible(true);
@@ -716,7 +697,7 @@ fn test_skip_name_custom() {
 #[test]
 #[ignore]
 fn test_consistent_named() {
-    let mut fory = Fory::default().compatible(true);
+    let mut fory = Fory::default().compatible(false);
     fory.register_by_name::<Color>("color").unwrap();
     fory.register_by_name::<MyStruct>("my_struct").unwrap();
     fory.register_serializer_by_name::<MyExt>("my_ext").unwrap();
@@ -730,47 +711,63 @@ fn test_consistent_named() {
     let reader = Reader::new(bytes.as_slice());
     let mut context = ReadContext::new_from_fory(reader, &fory);
 
-    assert_eq!(
-        fory.deserialize_with_context::<Color>(&mut context)
-            .unwrap(),
-        color
-    );
-    assert_eq!(
-        fory.deserialize_with_context::<Color>(&mut context)
-            .unwrap(),
-        color
-    );
-    assert_eq!(
-        fory.deserialize_with_context::<Color>(&mut context)
-            .unwrap(),
-        color
-    );
+    for _ in 0..3 {
+        assert_eq!(
+            fory.deserialize_with_context::<Color>(&mut context)
+                .unwrap(),
+            color
+        );
+    }
+    for _ in 0..3 {
+        assert_eq!(
+            fory.deserialize_with_context::<MyExt>(&mut context)
+                .unwrap(),
+            my_ext
+        );
+    }
     // assert_eq!(fory.deserialize_with_context::<MyStruct>(&mut context).unwrap(), my_struct);
-    assert_eq!(
-        fory.deserialize_with_context::<MyExt>(&mut context)
-            .unwrap(),
-        my_ext
-    );
-    assert_eq!(
-        fory.deserialize_with_context::<MyExt>(&mut context)
-            .unwrap(),
-        my_ext
-    );
-    assert_eq!(
-        fory.deserialize_with_context::<MyExt>(&mut context)
-            .unwrap(),
-        my_ext
-    );
 
     let writer = Writer::default();
     let mut context = WriteContext::new_from_fory(writer, &fory);
-    fory.serialize_with_context(&color, &mut context).unwrap();
-    fory.serialize_with_context(&color, &mut context).unwrap();
-    fory.serialize_with_context(&color, &mut context).unwrap();
-    // todo: checkVersion
-    // fory.serialize_with_context(&my_struct, &mut context);
-    fory.serialize_with_context(&my_ext, &mut context).unwrap();
-    fory.serialize_with_context(&my_ext, &mut context).unwrap();
-    fory.serialize_with_context(&my_ext, &mut context).unwrap();
+    for _ in 0..3 {
+        fory.serialize_with_context(&color, &mut context).unwrap();
+    }
+    for _ in 0..3 {
+        fory.serialize_with_context(&my_ext, &mut context).unwrap();
+    }
+    // // todo: checkVersion
+    // // fory.serialize_with_context(&my_struct, &mut context);
     fs::write(&data_file_path, context.writer.dump()).unwrap();
+}
+
+#[derive(ForyObject, Debug, PartialEq)]
+#[fory_debug]
+struct VersionCheckStruct {
+    f1: i32,
+    f2: Option<String>,
+    f3: f64,
+}
+
+#[test]
+#[ignore]
+fn test_struct_version_check() {
+    let data_file_path = get_data_file();
+    let bytes = fs::read(&data_file_path).unwrap();
+    let mut fory = Fory::default()
+        .compatible(false)
+        .xlang(true)
+        .check_struct_version(true);
+    fory.register::<VersionCheckStruct>(201).unwrap();
+
+    let local_obj = VersionCheckStruct {
+        f1: 10,
+        f2: Some("test".to_string()),
+        f3: 3.2,
+    };
+    let remote_obj: VersionCheckStruct = fory.deserialize(&bytes).unwrap();
+    assert_eq!(remote_obj, local_obj);
+    let new_bytes = fory.serialize(&remote_obj).unwrap();
+    let new_local_obj: VersionCheckStruct = fory.deserialize(&new_bytes).unwrap();
+    assert_eq!(new_local_obj, local_obj);
+    fs::write(&data_file_path, new_bytes).unwrap();
 }

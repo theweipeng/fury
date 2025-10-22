@@ -232,22 +232,22 @@ __NAMESPACED_TYPES__ = {
     TypeId.NAMED_STRUCT,
     TypeId.NAMED_COMPATIBLE_STRUCT,
 }
-Int8Type = TypeVar("Int8Type", bound=int)
-Int16Type = TypeVar("Int16Type", bound=int)
-Int32Type = TypeVar("Int32Type", bound=int)
-Int64Type = TypeVar("Int64Type", bound=int)
-Float32Type = TypeVar("Float32Type", bound=float)
-Float64Type = TypeVar("Float64Type", bound=float)
+int8 = TypeVar("int8", bound=int)
+int16 = TypeVar("int16", bound=int)
+int32 = TypeVar("int32", bound=int)
+int64 = TypeVar("int64", bound=int)
+float32 = TypeVar("float32", bound=float)
+float64 = TypeVar("float64", bound=float)
 
 _primitive_types = {
     int,
     float,
-    Int8Type,
-    Int16Type,
-    Int32Type,
-    Int64Type,
-    Float32Type,
-    Float64Type,
+    int8,
+    int16,
+    int32,
+    int64,
+    float32,
+    float64,
 }
 
 _primitive_types_ids = {
@@ -415,14 +415,14 @@ class TypeVisitor(ABC):
         pass
 
 
-def infer_field_types(type_):
+def infer_field_types(type_, field_nullable=False):
     type_hints = typing.get_type_hints(type_)
     from pyfory._struct import StructTypeVisitor
 
     visitor = StructTypeVisitor(type_)
     result = {}
     for name, hint in sorted(type_hints.items()):
-        unwrapped, _ = unwrap_optional(hint)
+        unwrapped, _ = unwrap_optional(hint, field_nullable=field_nullable)
         result[name] = infer_field(name, unwrapped, visitor)
     return result
 
@@ -435,9 +435,9 @@ def is_optional_type(type_):
     return False
 
 
-def unwrap_optional(type_):
+def unwrap_optional(type_, field_nullable=False):
     if not is_optional_type(type_):
-        return type_, False
+        return type_, False or field_nullable
     args = typing.get_args(type_) if hasattr(typing, "get_args") else getattr(type_, "__args__", ())
     non_none_types = [arg for arg in args if arg is not type(None)]
     if len(non_none_types) == 1:

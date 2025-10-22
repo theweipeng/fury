@@ -69,22 +69,27 @@ impl Harness {
         }
     }
 
+    #[inline(always)]
     pub fn get_write_fn(&self) -> WriteFn {
         self.write_fn
     }
 
+    #[inline(always)]
     pub fn get_read_fn(&self) -> ReadFn {
         self.read_fn
     }
 
+    #[inline(always)]
     pub fn get_write_data_fn(&self) -> WriteDataFn {
         self.write_data_fn
     }
 
+    #[inline(always)]
     pub fn get_read_data_fn(&self) -> ReadDataFn {
         self.read_data_fn
     }
 
+    #[inline(always)]
     pub fn get_to_serializer(&self) -> ToSerializerFn {
         self.to_serializer
     }
@@ -95,8 +100,8 @@ pub struct TypeInfo {
     type_def: Rc<Vec<u8>>,
     type_meta: Rc<TypeMeta>,
     type_id: u32,
-    namespace: MetaString,
-    type_name: MetaString,
+    namespace: Rc<MetaString>,
+    type_name: Rc<MetaString>,
     register_by_name: bool,
     harness: Harness,
 }
@@ -147,8 +152,8 @@ impl TypeInfo {
             type_def: Rc::from(type_def_bytes),
             type_meta,
             type_id,
-            namespace: namespace_metastring,
-            type_name: type_name_metastring,
+            namespace: Rc::from(namespace_metastring),
+            type_name: Rc::from(type_name_metastring),
             register_by_name,
             harness,
         })
@@ -179,55 +184,120 @@ impl TypeInfo {
             type_def: Rc::from(type_def),
             type_meta: Rc::new(meta),
             type_id,
-            namespace: namespace_metastring,
-            type_name: type_name_metastring,
+            namespace: Rc::from(namespace_metastring),
+            type_name: Rc::from(type_name_metastring),
             register_by_name,
             harness,
         })
     }
 
+    #[inline(always)]
     pub fn get_type_id(&self) -> u32 {
         self.type_id
     }
 
-    pub fn get_namespace(&self) -> &MetaString {
-        &self.namespace
+    #[inline(always)]
+    pub fn get_namespace(&self) -> Rc<MetaString> {
+        self.namespace.clone()
     }
 
-    pub fn get_type_name(&self) -> &MetaString {
-        &self.type_name
+    #[inline(always)]
+    pub fn get_type_name(&self) -> Rc<MetaString> {
+        self.type_name.clone()
     }
 
+    #[inline(always)]
     pub fn get_type_def(&self) -> Rc<Vec<u8>> {
         self.type_def.clone()
     }
 
+    #[inline(always)]
     pub fn get_type_meta(&self) -> Rc<TypeMeta> {
         self.type_meta.clone()
     }
 
+    #[inline(always)]
     pub fn is_registered_by_name(&self) -> bool {
         self.register_by_name
     }
 
+    #[inline(always)]
     pub fn get_harness(&self) -> &Harness {
         &self.harness
     }
 
-    /// Create a new TypeInfo with the same properties but different type_meta.
-    /// This is used during deserialization to create a TypeInfo with remote metadata
-    /// while keeping the local harness for deserialization functions.
-    pub fn with_remote_meta(&self, remote_meta: Rc<TypeMeta>) -> TypeInfo {
+    /// Create a TypeInfo from remote TypeMeta with a stub harness
+    /// Used when the type doesn't exist locally during deserialization
+    pub fn from_remote_meta(
+        remote_meta: Rc<TypeMeta>,
+        local_harness: Option<&Harness>,
+    ) -> TypeInfo {
+        let type_id = remote_meta.get_type_id();
+        let namespace = remote_meta.get_namespace();
+        let type_name = remote_meta.get_type_name();
+        let type_def_bytes = remote_meta.to_bytes().unwrap_or_default();
+        let register_by_name = !namespace.original.is_empty() || !type_name.original.is_empty();
+
+        let harness = if let Some(h) = local_harness {
+            h.clone()
+        } else {
+            // Create a stub harness that returns errors when called
+            Harness::new(
+                stub_write_fn,
+                stub_read_fn,
+                stub_write_data_fn,
+                stub_read_data_fn,
+                stub_to_serializer_fn,
+            )
+        };
+
         TypeInfo {
-            type_def: self.type_def.clone(),
+            type_def: Rc::from(type_def_bytes),
             type_meta: remote_meta,
-            type_id: self.type_id,
-            namespace: self.namespace.clone(),
-            type_name: self.type_name.clone(),
-            register_by_name: self.register_by_name,
-            harness: self.harness.clone(),
+            type_id,
+            namespace,
+            type_name,
+            register_by_name,
+            harness,
         }
     }
+}
+
+// Stub functions for when a type doesn't exist locally
+fn stub_write_fn(
+    _: &dyn Any,
+    _: &mut WriteContext,
+    _: bool,
+    _: bool,
+    _: bool,
+) -> Result<(), Error> {
+    Err(Error::type_error(
+        "Cannot serialize unknown remote type - type not registered locally",
+    ))
+}
+
+fn stub_read_fn(_: &mut ReadContext, _: bool, _: bool) -> Result<Box<dyn Any>, Error> {
+    Err(Error::type_error(
+        "Cannot deserialize unknown remote type - type not registered locally",
+    ))
+}
+
+fn stub_write_data_fn(_: &dyn Any, _: &mut WriteContext, _: bool) -> Result<(), Error> {
+    Err(Error::type_error(
+        "Cannot serialize unknown remote type - type not registered locally",
+    ))
+}
+
+fn stub_read_data_fn(_: &mut ReadContext) -> Result<Box<dyn Any>, Error> {
+    Err(Error::type_error(
+        "Cannot deserialize unknown remote type - type not registered locally",
+    ))
+}
+
+fn stub_to_serializer_fn(_: Box<dyn Any>) -> Result<Box<dyn Serializer>, Error> {
+    Err(Error::type_error(
+        "Cannot convert unknown remote type to serializer",
+    ))
 }
 
 /// TypeResolver is a resolver for fast type/serializer dispatch.
@@ -236,7 +306,7 @@ pub struct TypeResolver {
     type_info_map_by_id: HashMap<u32, Rc<TypeInfo>>,
     type_info_map: HashMap<std::any::TypeId, Rc<TypeInfo>>,
     type_info_map_by_name: HashMap<(String, String), Rc<TypeInfo>>,
-    type_info_map_by_ms_name: HashMap<(MetaString, MetaString), Rc<TypeInfo>>,
+    type_info_map_by_ms_name: HashMap<(Rc<MetaString>, Rc<MetaString>), Rc<TypeInfo>>,
     // Fast lookup by numeric ID for common types
     type_id_index: Vec<u32>,
     compatible: bool,
@@ -277,27 +347,31 @@ impl TypeResolver {
             .cloned()
     }
 
+    #[inline(always)]
     pub fn get_type_info_by_id(&self, id: u32) -> Option<Rc<TypeInfo>> {
         self.type_info_map_by_id.get(&id).cloned()
     }
 
+    #[inline(always)]
     pub fn get_type_info_by_name(&self, namespace: &str, type_name: &str) -> Option<Rc<TypeInfo>> {
         self.type_info_map_by_name
             .get(&(namespace.to_owned(), type_name.to_owned()))
             .cloned()
     }
 
+    #[inline(always)]
     pub fn get_type_info_by_msname(
         &self,
-        namespace: &MetaString,
-        type_name: &MetaString,
+        namespace: Rc<MetaString>,
+        type_name: Rc<MetaString>,
     ) -> Option<Rc<TypeInfo>> {
         self.type_info_map_by_ms_name
-            .get(&(namespace.clone(), type_name.clone()))
+            .get(&(namespace, type_name))
             .cloned()
     }
 
     /// Fast path for getting type info by numeric ID (avoids HashMap lookup by TypeId)
+    #[inline(always)]
     pub fn get_type_id(&self, type_id: &std::any::TypeId, id: u32) -> Result<u32, Error> {
         let id_usize = id as usize;
         if id_usize < self.type_id_index.len() {
@@ -312,23 +386,26 @@ impl TypeResolver {
         )))
     }
 
+    #[inline(always)]
     pub fn get_harness(&self, id: u32) -> Option<Rc<Harness>> {
         self.type_info_map_by_id
             .get(&id)
             .map(|info| Rc::new(info.get_harness().clone()))
     }
 
+    #[inline(always)]
     pub fn get_name_harness(
         &self,
-        namespace: &MetaString,
-        type_name: &MetaString,
+        namespace: Rc<MetaString>,
+        type_name: Rc<MetaString>,
     ) -> Option<Rc<Harness>> {
-        let key = (namespace.clone(), type_name.clone());
+        let key = (namespace, type_name);
         self.type_info_map_by_ms_name
             .get(&key)
             .map(|info| Rc::new(info.get_harness().clone()))
     }
 
+    #[inline(always)]
     pub fn get_ext_harness(&self, id: u32) -> Result<Rc<Harness>, Error> {
         self.type_info_map_by_id
             .get(&id)
@@ -336,18 +413,20 @@ impl TypeResolver {
             .ok_or_else(|| Error::type_error("ext type must be registered in both peers"))
     }
 
+    #[inline(always)]
     pub fn get_ext_name_harness(
         &self,
-        namespace: &MetaString,
-        type_name: &MetaString,
+        namespace: Rc<MetaString>,
+        type_name: Rc<MetaString>,
     ) -> Result<Rc<Harness>, Error> {
-        let key = (namespace.clone(), type_name.clone());
+        let key = (namespace, type_name);
         self.type_info_map_by_ms_name
             .get(&key)
             .map(|info| Rc::new(info.get_harness().clone()))
             .ok_or_else(|| Error::type_error("named_ext type must be registered in both peers"))
     }
 
+    #[inline(always)]
     pub fn get_fory_type_id(&self, rust_type_id: std::any::TypeId) -> Option<u32> {
         self.type_info_map
             .get(&rust_type_id)
@@ -426,7 +505,8 @@ impl TypeResolver {
                     T2::fory_write(v, context, write_ref_info, write_type_info, has_generics)
                 }
                 None => Err(Error::type_error(format!(
-                    "Cast type error when writing: {:?}",
+                    "Cast type to {:?} error when writing: {:?}",
+                    std::any::type_name::<T2>(),
                     T2::fory_static_type_id()
                 ))),
             }
@@ -452,7 +532,11 @@ impl TypeResolver {
             let this = this.downcast_ref::<T2>();
             match this {
                 Some(v) => T2::fory_write_data_generic(v, context, has_generics),
-                None => todo!(),
+                None => Err(Error::type_error(format!(
+                    "Cast type to {:?} error when writing data: {:?}",
+                    std::any::type_name::<T2>(),
+                    T2::fory_static_type_id()
+                ))),
             }
         }
 
@@ -602,7 +686,8 @@ impl TypeResolver {
                     Ok(v.fory_write(context, write_ref_info, write_type_info, has_generics)?)
                 }
                 None => Err(Error::type_error(format!(
-                    "Cast type error when writing: {:?}",
+                    "Cast type to {:?} error when writing: {:?}",
+                    std::any::type_name::<T2>(),
                     T2::fory_static_type_id()
                 ))),
             }
@@ -628,7 +713,11 @@ impl TypeResolver {
             let this = this.downcast_ref::<T2>();
             match this {
                 Some(v) => T2::fory_write_data_generic(v, context, has_generics),
-                None => todo!(),
+                None => Err(Error::type_error(format!(
+                    "Cast type to {:?} error when writing data: {:?}",
+                    std::any::type_name::<T2>(),
+                    T2::fory_static_type_id()
+                ))),
             }
         }
 

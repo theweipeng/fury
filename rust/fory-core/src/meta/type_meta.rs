@@ -26,6 +26,7 @@ use crate::types::{TypeId, PRIMITIVE_TYPES};
 use std::clone::Clone;
 use std::cmp::min;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 const SMALL_NUM_FIELDS_THRESHOLD: usize = 0b11111;
 const REGISTER_BY_NAME_FLAG: u8 = 0b100000;
@@ -236,8 +237,8 @@ impl PartialEq for FieldType {
 #[derive(Debug)]
 pub struct TypeMetaLayer {
     type_id: u32,
-    namespace: MetaString,
-    type_name: MetaString,
+    namespace: Rc<MetaString>,
+    type_name: Rc<MetaString>,
     register_by_name: bool,
     field_infos: Vec<FieldInfo>,
 }
@@ -252,8 +253,8 @@ impl TypeMetaLayer {
     ) -> TypeMetaLayer {
         TypeMetaLayer {
             type_id,
-            namespace,
-            type_name,
+            namespace: Rc::from(namespace),
+            type_name: Rc::from(type_name),
             register_by_name,
             field_infos,
         }
@@ -262,8 +263,8 @@ impl TypeMetaLayer {
     pub fn empty() -> TypeMetaLayer {
         TypeMetaLayer {
             type_id: 0,
-            namespace: MetaString::default(),
-            type_name: MetaString::default(),
+            namespace: Rc::from(MetaString::get_empty().clone()),
+            type_name: Rc::from(MetaString::get_empty().clone()),
             register_by_name: false,
             field_infos: vec![],
         }
@@ -273,12 +274,12 @@ impl TypeMetaLayer {
         self.type_id
     }
 
-    pub fn get_type_name(&self) -> &MetaString {
-        &self.type_name
+    pub fn get_type_name(&self) -> Rc<MetaString> {
+        self.type_name.clone()
     }
 
-    pub fn get_namespace(&self) -> &MetaString {
-        &self.namespace
+    pub fn get_namespace(&self) -> Rc<MetaString> {
+        self.namespace.clone()
     }
 
     pub fn get_field_infos(&self) -> &Vec<FieldInfo> {
@@ -544,26 +545,32 @@ pub struct TypeMeta {
 }
 
 impl TypeMeta {
+    #[inline(always)]
     pub fn get_field_infos(&self) -> &Vec<FieldInfo> {
         self.layer.get_field_infos()
     }
 
+    #[inline(always)]
     pub fn get_type_id(&self) -> u32 {
         self.layer.get_type_id()
     }
 
+    #[inline(always)]
     pub fn get_hash(&self) -> i64 {
         self.hash
     }
 
-    pub fn get_type_name(&self) -> MetaString {
-        self.layer.get_type_name().clone()
+    #[inline(always)]
+    pub fn get_type_name(&self) -> Rc<MetaString> {
+        self.layer.get_type_name()
     }
 
-    pub fn get_namespace(&self) -> MetaString {
-        self.layer.get_namespace().clone()
+    #[inline(always)]
+    pub fn get_namespace(&self) -> Rc<MetaString> {
+        self.layer.get_namespace()
     }
 
+    #[inline(always)]
     pub fn empty() -> TypeMeta {
         TypeMeta {
             hash: 0,
@@ -632,12 +639,29 @@ impl TypeMeta {
         })
     }
 
+    #[inline(always)]
     pub fn skip_bytes(reader: &mut Reader, header: i64) -> Result<(), Error> {
         let mut meta_size = header & META_SIZE_MASK;
         if meta_size == META_SIZE_MASK {
             meta_size += reader.read_varuint32()? as i64;
         }
         reader.skip(meta_size as usize)
+    }
+
+    /// Check class version consistency, similar to Java's checkClassVersion
+    #[inline(always)]
+    pub fn check_struct_version(
+        read_version: i32,
+        local_version: i32,
+        type_name: &str,
+    ) -> Result<(), Error> {
+        if read_version != local_version {
+            return Err(Error::struct_version_mismatch(format!(
+                "Read class {} version {} is not consistent with {}",
+                type_name, read_version, local_version
+            )));
+        }
+        Ok(())
     }
 
     pub fn to_bytes(&self) -> Result<Vec<u8>, Error> {

@@ -19,11 +19,9 @@ use crate::buffer::{Reader, Writer};
 
 use crate::error::Error;
 use crate::fory::Fory;
-use crate::meta::{MetaString, TypeMeta};
+use crate::meta::MetaString;
 use crate::resolver::meta_resolver::{MetaReaderResolver, MetaWriterResolver};
-use crate::resolver::metastring_resolver::{
-    MetaStringBytes, MetaStringReaderResolver, MetaStringWriterResolver,
-};
+use crate::resolver::metastring_resolver::{MetaStringReaderResolver, MetaStringWriterResolver};
 use crate::resolver::ref_resolver::{RefReader, RefWriter};
 use crate::resolver::type_resolver::{TypeInfo, TypeResolver};
 use crate::types;
@@ -39,6 +37,7 @@ pub struct WriteContext {
     share_meta: bool,
     compress_string: bool,
     xlang: bool,
+    check_struct_version: bool,
 
     // Context-specific fields
     pub writer: Writer,
@@ -55,6 +54,7 @@ impl WriteContext {
         share_meta: bool,
         compress_string: bool,
         xlang: bool,
+        check_struct_version: bool,
     ) -> WriteContext {
         WriteContext {
             type_resolver,
@@ -62,6 +62,7 @@ impl WriteContext {
             share_meta,
             compress_string,
             xlang,
+            check_struct_version,
             writer,
             meta_resolver: MetaWriterResolver::default(),
             meta_string_resolver: MetaStringWriterResolver::default(),
@@ -76,6 +77,7 @@ impl WriteContext {
             share_meta: fory.is_share_meta(),
             compress_string: fory.is_compress_string(),
             xlang: fory.is_xlang(),
+            check_struct_version: fory.is_check_struct_version(),
             writer,
             meta_resolver: MetaWriterResolver::default(),
             meta_string_resolver: MetaStringWriterResolver::default(),
@@ -116,6 +118,12 @@ impl WriteContext {
     #[inline(always)]
     pub fn is_xlang(&self) -> bool {
         self.xlang
+    }
+
+    /// Check if class version checking is enabled
+    #[inline(always)]
+    pub fn is_check_struct_version(&self) -> bool {
+        self.check_struct_version
     }
 
     #[inline(always)]
@@ -170,8 +178,8 @@ impl WriteContext {
                         as u32;
                     self.writer.write_varuint32(meta_index);
                 } else {
-                    namespace.write_to(&mut self.writer);
-                    type_name.write_to(&mut self.writer);
+                    self.write_meta_string_bytes(namespace)?;
+                    self.write_meta_string_bytes(type_name)?;
                 }
             }
             _ => {
@@ -182,7 +190,7 @@ impl WriteContext {
     }
 
     #[inline(always)]
-    pub fn write_meta_string_bytes(&mut self, ms: &MetaString) -> Result<(), Error> {
+    pub fn write_meta_string_bytes(&mut self, ms: Rc<MetaString>) -> Result<(), Error> {
         self.meta_string_resolver
             .write_meta_string_bytes(&mut self.writer, ms)
     }
@@ -190,8 +198,8 @@ impl WriteContext {
     #[inline(always)]
     pub fn reset(&mut self) {
         self.meta_resolver.reset();
+        self.meta_string_resolver.reset();
         self.ref_writer.reset();
-        self.writer.reset();
     }
 }
 
@@ -211,6 +219,7 @@ pub struct ReadContext {
     share_meta: bool,
     xlang: bool,
     max_dyn_depth: u32,
+    check_struct_version: bool,
 
     // Context-specific fields
     pub reader: Reader,
@@ -235,6 +244,7 @@ impl ReadContext {
         share_meta: bool,
         xlang: bool,
         max_dyn_depth: u32,
+        check_struct_version: bool,
     ) -> ReadContext {
         ReadContext {
             type_resolver,
@@ -242,6 +252,7 @@ impl ReadContext {
             share_meta,
             xlang,
             max_dyn_depth,
+            check_struct_version,
             reader,
             meta_resolver: MetaReaderResolver::default(),
             meta_string_resolver: MetaStringReaderResolver::default(),
@@ -257,6 +268,7 @@ impl ReadContext {
             share_meta: fory.is_share_meta(),
             xlang: fory.is_xlang(),
             max_dyn_depth: fory.get_max_dyn_depth(),
+            check_struct_version: fory.is_check_struct_version(),
             reader,
             meta_resolver: MetaReaderResolver::default(),
             meta_string_resolver: MetaStringReaderResolver::default(),
@@ -289,6 +301,12 @@ impl ReadContext {
         self.xlang
     }
 
+    /// Check if class version checking is enabled
+    #[inline(always)]
+    pub fn is_check_struct_version(&self) -> bool {
+        self.check_struct_version
+    }
+
     /// Get maximum dynamic depth
     #[inline(always)]
     pub fn max_dyn_depth(&self) -> u32 {
@@ -303,14 +321,14 @@ impl ReadContext {
     }
 
     #[inline(always)]
-    pub fn get_meta(&self, type_index: usize) -> Result<&Rc<TypeMeta>, Error> {
+    pub fn get_type_info_by_index(&self, type_index: usize) -> Result<&Rc<TypeInfo>, Error> {
         self.meta_resolver.get(type_index).ok_or_else(|| {
-            Error::type_error(format!("Meta not found for type index: {}", type_index))
+            Error::type_error(format!("TypeInfo not found for type index: {}", type_index))
         })
     }
 
     #[inline(always)]
-    pub fn load_meta(&mut self, offset: usize) -> Result<usize, Error> {
+    pub fn load_type_meta(&mut self, offset: usize) -> Result<usize, Error> {
         self.meta_resolver.load(
             &self.type_resolver,
             &mut Reader::new(&self.reader.slice_after_cursor()[offset..]),
@@ -323,27 +341,21 @@ impl ReadContext {
         match fory_type_id & 0xff {
             types::NAMED_COMPATIBLE_STRUCT | types::COMPATIBLE_STRUCT => {
                 let meta_index = self.reader.read_varuint32()? as usize;
-                let remote_meta = self.get_meta(meta_index)?.clone();
-                let local_type_info = self
-                    .type_resolver
-                    .get_type_info_by_id(fory_type_id)
-                    .ok_or_else(|| Error::type_error("ID harness not found"))?;
-                // Create a new TypeInfo with remote metadata but local harness
-                // TODO: make self.get_meta return type info
-                Ok(Rc::new(local_type_info.with_remote_meta(remote_meta)))
+                let type_info = self.get_type_info_by_index(meta_index)?.clone();
+                Ok(type_info)
             }
             types::NAMED_ENUM | types::NAMED_EXT | types::NAMED_STRUCT => {
                 if self.is_share_meta() {
                     let meta_index = self.reader.read_varuint32()? as usize;
-                    self.get_meta(meta_index)?;
-                    self.type_resolver
-                        .get_type_info_by_id(fory_type_id)
-                        .ok_or_else(|| Error::type_error("ID harness not found"))
+                    let type_info = self.get_type_info_by_index(meta_index)?.clone();
+                    Ok(type_info)
                 } else {
-                    let namespace = self.meta_resolver.read_metastring(&mut self.reader)?;
-                    let type_name = self.meta_resolver.read_metastring(&mut self.reader)?;
+                    let namespace = self.read_meta_string()?.to_owned();
+                    let type_name = self.read_meta_string()?.to_owned();
+                    let rc_namespace = Rc::from(namespace);
+                    let rc_type_name = Rc::from(type_name);
                     self.type_resolver
-                        .get_type_info_by_msname(&namespace, &type_name)
+                        .get_type_info_by_msname(rc_namespace, rc_type_name)
                         .ok_or_else(|| Error::type_error("Name harness not found"))
                 }
             }
@@ -359,9 +371,9 @@ impl ReadContext {
         self.type_resolver.get_type_info(type_id)
     }
 
-    pub fn read_meta_string_bytes(&mut self) -> Result<MetaStringBytes, Error> {
-        self.meta_string_resolver
-            .read_meta_string_bytes(&mut self.reader)
+    #[inline(always)]
+    pub fn read_meta_string(&mut self) -> Result<&MetaString, Error> {
+        self.meta_string_resolver.read_meta_string(&mut self.reader)
     }
 
     #[inline(always)]
@@ -386,8 +398,8 @@ impl ReadContext {
 
     #[inline(always)]
     pub fn reset(&mut self) {
-        self.reader.reset();
         self.meta_resolver.reset();
+        self.meta_string_resolver.reset();
         self.ref_reader.reset();
     }
 }
