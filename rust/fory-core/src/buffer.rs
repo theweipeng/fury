@@ -39,7 +39,7 @@ impl Writer {
 
     #[inline(always)]
     pub fn detach_buffer(&mut self) -> Vec<u8> {
-        std::mem::replace(&mut self.bf, vec![])
+        std::mem::take(&mut self.bf)
     }
 
     #[inline(always)]
