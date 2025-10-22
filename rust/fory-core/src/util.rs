@@ -137,6 +137,9 @@ pub struct Spinlock<T> {
     flag: AtomicBool,
 }
 
+unsafe impl<T: Send + Sync> Send for Spinlock<T> {}
+unsafe impl<T: Send + Sync> Sync for Spinlock<T> {}
+
 impl<T> Spinlock<T> {
     pub fn new(data: T) -> Self {
         Spinlock {
