@@ -725,6 +725,25 @@ impl Fory {
         result
     }
 
+    pub fn deserialize_from<T: Serializer + ForyDefault>(
+        &self,
+        reader: &mut Reader,
+    ) -> Result<T, Error> {
+        let pool = self.get_read_pool()?;
+        let mut context = pool.get();
+        context.init(self.max_dyn_depth);
+        let outlive_buffer = unsafe { mem::transmute::<&[u8], &[u8]>(reader.bf) };
+        let mut new_reader = Reader::new(outlive_buffer);
+        new_reader.set_cursor(reader.cursor);
+        context.attach_reader(new_reader);
+        let result = self.deserialize_with_context(&mut context);
+        let end = context.detach_reader().get_cursor();
+        reader.set_cursor(end);
+        pool.put(context);
+        result
+    }
+
+    #[inline(always)]
     fn get_read_pool(&self) -> Result<&Pool<Box<ReadContext<'static>>>, Error> {
         let pool_result = self.read_context_pool.get_or_init(|| {
             let type_resolver = self.type_resolver.build_final_type_resolver()?;
@@ -749,24 +768,6 @@ impl Fory {
         pool_result
             .as_ref()
             .map_err(|e| Error::type_error(format!("Failed to build type resolver: {}", e)))
-    }
-
-    pub fn deserialize_from<T: Serializer + ForyDefault>(
-        &self,
-        reader: &mut Reader,
-    ) -> Result<T, Error> {
-        let pool = self.get_read_pool()?;
-        let mut context = pool.get();
-        context.init(self.max_dyn_depth);
-        let outlive_buffer = unsafe { mem::transmute::<&[u8], &[u8]>(reader.bf) };
-        let mut new_reader = Reader::new(outlive_buffer);
-        new_reader.set_cursor(reader.cursor);
-        context.attach_reader(new_reader);
-        let result = self.deserialize_with_context(&mut context);
-        let end = context.detach_reader().get_cursor();
-        reader.set_cursor(end);
-        pool.put(context);
-        result
     }
 
     #[inline(always)]
