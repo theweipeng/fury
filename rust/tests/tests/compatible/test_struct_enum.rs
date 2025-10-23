@@ -16,7 +16,6 @@
 // under the License.
 
 use chrono::{NaiveDate, NaiveDateTime};
-use fory_core::buffer::Reader;
 use fory_core::error::Error;
 use fory_core::resolver::context::{ReadContext, WriteContext};
 use fory_core::serializer::{ForyDefault, Serializer};
@@ -97,19 +96,13 @@ fn basic() {
         let person = Person::default();
         let bytes1 = fory.serialize(&person).unwrap();
         let bytes2 = fory.serialize(&person).unwrap();
-        let reader1 = Reader::new(bytes1.as_slice());
-        let mut read_context1 = ReadContext::new_from_fory(reader1, &fory);
         assert_eq!(
             person,
-            fory.deserialize_with_context::<Person>(&mut read_context1)
-                .unwrap()
+            fory.deserialize::<Person>(bytes1.as_slice()).unwrap()
         );
-        let reader2 = Reader::new(bytes2.as_slice());
-        let mut read_context2 = ReadContext::new_from_fory(reader2, &fory);
         assert_eq!(
             person,
-            fory.deserialize_with_context::<Person>(&mut read_context2)
-                .unwrap()
+            fory.deserialize::<Person>(bytes2.as_slice()).unwrap()
         );
     }
 }

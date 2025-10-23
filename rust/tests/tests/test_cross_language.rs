@@ -231,13 +231,15 @@ fn test_string_serializer() {
         .compatible(true)
         .xlang(true)
         .compress_string(false);
-    let mut context = ReadContext::new_from_fory(reader, &fory);
+    let mut context = ReadContext::new_from_fory(&fory);
+    context.attach_reader(reader);
     let reader_compress = Reader::new(bytes.as_slice());
     let fory_compress = Fory::default()
         .compatible(true)
         .xlang(true)
         .compress_string(true);
-    let mut context_compress = ReadContext::new_from_fory(reader_compress, &fory_compress);
+    let mut context_compress = ReadContext::new_from_fory(&fory_compress);
+    context_compress.attach_reader(reader_compress);
     let test_strings: Vec<String> = vec![
         // Latin1
         "ab".to_string(),
@@ -264,8 +266,8 @@ fn test_string_serializer() {
 }
 
 macro_rules! assert_de {
-    ($fory:expr, $context:expr, $ty:ty, $expected:expr) => {{
-        let v: $ty = $fory.deserialize_with_context(&mut $context).unwrap();
+    ($fory:expr, $reader:expr, $ty:ty, $expected:expr) => {{
+        let v: $ty = ($fory.deserialize_from(&mut $reader).unwrap()).0;
         assert_eq!(v, $expected);
     }};
 }
@@ -286,36 +288,35 @@ fn test_cross_language_serializer() {
 
     let data_file_path = get_data_file();
     let bytes = fs::read(&data_file_path).unwrap();
-    let reader = Reader::new(bytes.as_slice());
+    let mut reader = Reader::new(bytes.as_slice());
     let mut fory = Fory::default().compatible(true).xlang(true);
     fory.register::<Color>(101).unwrap();
-    let mut context = ReadContext::new_from_fory(reader, &fory);
-    assert_de!(fory, context, bool, true);
-    assert_de!(fory, context, bool, false);
-    assert_de!(fory, context, i32, -1);
-    assert_de!(fory, context, i8, i8::MAX);
-    assert_de!(fory, context, i8, i8::MIN);
-    assert_de!(fory, context, i16, i16::MAX);
-    assert_de!(fory, context, i16, i16::MIN);
-    assert_de!(fory, context, i32, i32::MAX);
-    assert_de!(fory, context, i32, i32::MIN);
-    assert_de!(fory, context, i64, i64::MAX);
-    assert_de!(fory, context, i64, i64::MIN);
-    assert_de!(fory, context, f32, -1f32);
-    assert_de!(fory, context, f64, -1f64);
-    assert_de!(fory, context, String, "str".to_string());
-    assert_de!(fory, context, NaiveDate, day);
-    assert_de!(fory, context, NaiveDateTime, instant);
-    assert_de!(fory, context, Vec<bool>, [true, false]);
-    assert_de!(fory, context, Vec<i16>, [1, i16::MAX]);
-    assert_de!(fory, context, Vec<i32>, [1, i32::MAX]);
-    assert_de!(fory, context, Vec<i64>, [1, i64::MAX]);
-    assert_de!(fory, context, Vec<f32>, [1f32, 2f32]);
-    assert_de!(fory, context, Vec<f64>, [1f64, 2f64]);
-    assert_de!(fory, context, Vec<String>, str_list);
-    assert_de!(fory, context, HashSet<String>, str_set);
-    assert_de!(fory, context, HashMap::<String, String>, str_map);
-    assert_de!(fory, context, Color, color);
+    assert_de!(fory, reader, bool, true);
+    assert_de!(fory, reader, bool, false);
+    assert_de!(fory, reader, i32, -1);
+    assert_de!(fory, reader, i8, i8::MAX);
+    assert_de!(fory, reader, i8, i8::MIN);
+    assert_de!(fory, reader, i16, i16::MAX);
+    assert_de!(fory, reader, i16, i16::MIN);
+    assert_de!(fory, reader, i32, i32::MAX);
+    assert_de!(fory, reader, i32, i32::MIN);
+    assert_de!(fory, reader, i64, i64::MAX);
+    assert_de!(fory, reader, i64, i64::MIN);
+    assert_de!(fory, reader, f32, -1f32);
+    assert_de!(fory, reader, f64, -1f64);
+    assert_de!(fory, reader, String, "str".to_string());
+    assert_de!(fory, reader, NaiveDate, day);
+    assert_de!(fory, reader, NaiveDateTime, instant);
+    assert_de!(fory, reader, Vec<bool>, [true, false]);
+    assert_de!(fory, reader, Vec<i16>, [1, i16::MAX]);
+    assert_de!(fory, reader, Vec<i32>, [1, i32::MAX]);
+    assert_de!(fory, reader, Vec<i64>, [1, i64::MAX]);
+    assert_de!(fory, reader, Vec<f32>, [1f32, 2f32]);
+    assert_de!(fory, reader, Vec<f64>, [1f64, 2f64]);
+    assert_de!(fory, reader, Vec<String>, str_list);
+    assert_de!(fory, reader, HashSet<String>, str_set);
+    assert_de!(fory, reader, HashMap::<String, String>, str_map);
+    assert_de!(fory, reader, Color, color);
 
     let context = WriteContext::new_from_fory(&fory);
     fory.serialize(&true).unwrap();
@@ -419,9 +420,7 @@ fn test_list() {
 
     let mut fory = Fory::default().compatible(true);
     fory.register::<Item>(102).unwrap();
-    let reader = Reader::new(bytes.as_slice());
-    let mut context = ReadContext::new_from_fory(reader, &fory);
-
+    let mut reader = Reader::new(bytes.as_slice());
     let str_list = vec![Some("a".to_string()), Some("b".to_string())];
     let str_list2 = vec![None, Some("b".to_string())];
     let item = Item {
@@ -436,14 +435,13 @@ fn test_list() {
     let item_list = vec![Some(item), Some(item2)];
     let item_list2 = vec![None, Some(item3)];
 
-    let remote_str_list: Vec<Option<String>> = fory.deserialize_with_context(&mut context).unwrap();
+    let remote_str_list: Vec<Option<String>> = fory.deserialize_from(&mut reader).unwrap().0;
     assert_eq!(remote_str_list, str_list);
-    let remote_str_list2: Vec<Option<String>> =
-        fory.deserialize_with_context(&mut context).unwrap();
+    let remote_str_list2: Vec<Option<String>> = fory.deserialize_from(&mut reader).unwrap().0;
     assert_eq!(remote_str_list2, str_list2);
-    let remote_item_list: Vec<Option<Item>> = fory.deserialize_with_context(&mut context).unwrap();
+    let remote_item_list: Vec<Option<Item>> = fory.deserialize_from(&mut reader).unwrap().0;
     assert_eq!(remote_item_list, item_list);
-    let remote_item_list2: Vec<Option<Item>> = fory.deserialize_with_context(&mut context).unwrap();
+    let remote_item_list2: Vec<Option<Item>> = fory.deserialize_from(&mut reader).unwrap().0;
     assert_eq!(remote_item_list2, item_list2);
 
     let context = WriteContext::new_from_fory(&fory);
@@ -463,8 +461,7 @@ fn test_map() {
 
     let mut fory = Fory::default().compatible(true);
     fory.register::<Item>(102).unwrap();
-    let reader = Reader::new(bytes.as_slice());
-    let mut context = ReadContext::new_from_fory(reader, &fory);
+    let mut reader = Reader::new(bytes.as_slice());
 
     let str_map = HashMap::from([
         (Some("k1".to_string()), Some("v1".to_string())),
@@ -495,7 +492,7 @@ fn test_map() {
     ]);
 
     let remote_str_map: HashMap<Option<String>, Option<String>> =
-        fory.deserialize_with_context(&mut context).unwrap();
+        fory.deserialize_from(&mut reader).unwrap().0;
     assert_eq!(remote_str_map, str_map);
     let data_bytes1 = fory.serialize(&remote_str_map).unwrap();
     let new_local_str_map: HashMap<Option<String>, Option<String>> =
@@ -503,7 +500,7 @@ fn test_map() {
     assert_eq!(new_local_str_map, str_map);
 
     let remote_item_map: HashMap<Option<String>, Option<Item>> =
-        fory.deserialize_with_context(&mut context).unwrap();
+        fory.deserialize_from(&mut reader).unwrap().0;
     assert_eq!(remote_item_map, item_map);
     let data_bytes2 = fory.serialize(&remote_item_map).unwrap();
     let new_local_item_map: HashMap<Option<String>, Option<Item>> =
@@ -532,8 +529,7 @@ fn test_integer() {
 
     let mut fory = Fory::default().compatible(true);
     fory.register::<Item2>(101).unwrap();
-    let reader = Reader::new(bytes.as_slice());
-    let mut context = ReadContext::new_from_fory(reader, &fory);
+    let mut reader = Reader::new(bytes.as_slice());
     let f1 = 1;
     let f2 = Some(2);
     let f3 = Some(3);
@@ -549,19 +545,19 @@ fn test_integer() {
         f5,
         f6,
     };
-    let remote_item2: Item2 = fory.deserialize_with_context(&mut context).unwrap();
+    let remote_item2: Item2 = fory.deserialize_from(&mut reader).unwrap().0;
     assert_eq!(remote_item2, local_item2);
-    let remote_f1: i32 = fory.deserialize_with_context(&mut context).unwrap();
+    let remote_f1: i32 = fory.deserialize_from(&mut reader).unwrap().0;
     assert_eq!(remote_f1, f1);
-    let remote_f2: Option<i32> = fory.deserialize_with_context(&mut context).unwrap();
+    let remote_f2: Option<i32> = fory.deserialize_from(&mut reader).unwrap().0;
     assert_eq!(remote_f2, f2);
-    let remote_f3: Option<i32> = fory.deserialize_with_context(&mut context).unwrap();
+    let remote_f3: Option<i32> = fory.deserialize_from(&mut reader).unwrap().0;
     assert_eq!(remote_f3, f3);
-    let remote_f4: i32 = fory.deserialize_with_context(&mut context).unwrap();
+    let remote_f4: i32 = fory.deserialize_from(&mut reader).unwrap().0;
     assert_eq!(remote_f4, f4);
-    let remote_f5: i32 = fory.deserialize_with_context(&mut context).unwrap();
+    let remote_f5: i32 = fory.deserialize_from(&mut reader).unwrap().0;
     assert_eq!(remote_f5, f5);
-    let remote_f6: Option<i32> = fory.deserialize_with_context(&mut context).unwrap();
+    let remote_f6: Option<i32> = fory.deserialize_from(&mut reader).unwrap().0;
     assert_eq!(remote_f6, f6);
 
     let context = WriteContext::new_from_fory(&fory);
@@ -681,24 +677,21 @@ fn test_consistent_named() {
 
     let data_file_path = get_data_file();
     let bytes = fs::read(&data_file_path).unwrap();
-    let reader = Reader::new(bytes.as_slice());
-    let mut context = ReadContext::new_from_fory(reader, &fory);
+    let mut reader = Reader::new(bytes.as_slice());
 
     for _ in 0..3 {
         assert_eq!(
-            fory.deserialize_with_context::<Color>(&mut context)
-                .unwrap(),
+            fory.deserialize_from::<Color>(&mut reader).unwrap().0,
             color
         );
     }
     for _ in 0..3 {
         assert_eq!(
-            fory.deserialize_with_context::<MyExt>(&mut context)
-                .unwrap(),
+            fory.deserialize_from::<MyExt>(&mut reader).unwrap().0,
             my_ext
         );
     }
-    // assert_eq!(fory.deserialize_with_context::<MyStruct>(&mut context).unwrap(), my_struct);
+    // assert_eq!(fory.deserialize::<MyStruct>(&mut context).unwrap(), my_struct);
 
     let context = WriteContext::new_from_fory(&fory);
     for _ in 0..3 {
