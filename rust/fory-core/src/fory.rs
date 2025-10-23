@@ -769,6 +769,7 @@ impl Fory {
         result
     }
 
+    #[inline(always)]
     fn deserialize_with_context<T: Serializer + ForyDefault>(
         &self,
         context: &mut ReadContext,
