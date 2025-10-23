@@ -17,8 +17,6 @@
 
 use crate::buffer::{Reader, Writer};
 use std::mem;
-use std::ops::{Deref, DerefMut};
-use std::ptr::NonNull;
 
 use crate::error::Error;
 use crate::fory::Fory;
