@@ -340,7 +340,7 @@ pub struct Reader<'a> {
 
 impl<'a> Reader<'a> {
     #[inline(always)]
-    pub fn new(bf: &[u8]) -> Reader {
+    pub fn new(bf: &[u8]) -> Reader<'_> {
         Reader { bf, cursor: 0 }
     }
 
