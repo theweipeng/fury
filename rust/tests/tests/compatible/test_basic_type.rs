@@ -19,6 +19,8 @@ use chrono::{NaiveDate, NaiveDateTime};
 use fory_core::buffer::Reader;
 use fory_core::fory::Fory;
 use fory_core::resolver::context::{ReadContext, WriteContext};
+use fory_core::{Error, Serializer, Writer};
+use std::mem;
 
 // primitive_val
 const BOOL_VAL: bool = true;
@@ -44,107 +46,78 @@ const INT64_ARRAY: [i64; 1] = [51];
 const FLOAT32_ARRAY: [f32; 1] = [52.0];
 const FLOAT64_ARRAY: [f64; 1] = [53.0];
 
+pub fn serialize_with_context<'a, T: Serializer>(
+    fory: &Fory,
+    record: &T,
+    context: &mut WriteContext<'a>,
+) -> Result<Vec<u8>, Error> {
+    let mut buf = vec![];
+    let outlive_buffer = unsafe { mem::transmute::<&mut Vec<u8>, &mut Vec<u8>>(&mut buf) };
+    let mut writer = Writer::from_buffer(outlive_buffer);
+    context.attach_writer(&mut writer);
+    fory.serialize_with_context(record, context)?;
+    context.detach_writer();
+    Ok(buf)
+}
+
 fn serialize_non_null(fory: &Fory, context: &mut WriteContext) -> Vec<Vec<u8>> {
     vec![
-        fory.serialize_with_context(&BOOL_VAL, context).unwrap(),
-        fory.serialize_with_context(&I8_VAL, context).unwrap(),
-        fory.serialize_with_context(&I16_VAL, context).unwrap(),
-        fory.serialize_with_context(&I32_VAL, context).unwrap(),
-        fory.serialize_with_context(&I64_VAL, context).unwrap(),
-        fory.serialize_with_context(&F32_VAL, context).unwrap(),
-        fory.serialize_with_context(&F64_VAL, context).unwrap(),
-        fory.serialize_with_context(&STR_LATIN1_VAL.to_string(), context)
-            .unwrap(),
-        fory.serialize_with_context(&LOCAL_DATE_VAL, context)
-            .unwrap(),
-        fory.serialize_with_context(&TIMESTAMP_VAL, context)
-            .unwrap(),
-        fory.serialize_with_context(&BOOL_ARRAY.to_vec(), context)
-            .unwrap(),
-        fory.serialize_with_context(&INT8_ARRAY.to_vec(), context)
-            .unwrap(),
-        fory.serialize_with_context(&INT16_ARRAY.to_vec(), context)
-            .unwrap(),
-        fory.serialize_with_context(&INT32_ARRAY.to_vec(), context)
-            .unwrap(),
-        fory.serialize_with_context(&INT64_ARRAY.to_vec(), context)
-            .unwrap(),
-        fory.serialize_with_context(&FLOAT32_ARRAY.to_vec(), context)
-            .unwrap(),
-        fory.serialize_with_context(&FLOAT64_ARRAY.to_vec(), context)
-            .unwrap(),
+        serialize_with_context(fory, &BOOL_VAL, context).unwrap(),
+        serialize_with_context(fory, &I8_VAL, context).unwrap(),
+        serialize_with_context(fory, &I16_VAL, context).unwrap(),
+        serialize_with_context(fory, &I32_VAL, context).unwrap(),
+        serialize_with_context(fory, &I64_VAL, context).unwrap(),
+        serialize_with_context(fory, &F32_VAL, context).unwrap(),
+        serialize_with_context(fory, &F64_VAL, context).unwrap(),
+        serialize_with_context(fory, &STR_LATIN1_VAL.to_string(), context).unwrap(),
+        serialize_with_context(fory, &LOCAL_DATE_VAL, context).unwrap(),
+        serialize_with_context(fory, &TIMESTAMP_VAL, context).unwrap(),
+        serialize_with_context(fory, &BOOL_ARRAY.to_vec(), context).unwrap(),
+        serialize_with_context(fory, &INT8_ARRAY.to_vec(), context).unwrap(),
+        serialize_with_context(fory, &INT16_ARRAY.to_vec(), context).unwrap(),
+        serialize_with_context(fory, &INT32_ARRAY.to_vec(), context).unwrap(),
+        serialize_with_context(fory, &INT64_ARRAY.to_vec(), context).unwrap(),
+        serialize_with_context(fory, &FLOAT32_ARRAY.to_vec(), context).unwrap(),
+        serialize_with_context(fory, &FLOAT64_ARRAY.to_vec(), context).unwrap(),
     ]
 }
 
 fn serialize_nullable(fory: &Fory, context: &mut WriteContext) -> Vec<Vec<u8>> {
     vec![
-        fory.serialize_with_context(&Some(BOOL_VAL), context)
-            .unwrap(),
-        fory.serialize_with_context(&Some(I8_VAL), context).unwrap(),
-        fory.serialize_with_context(&Some(I16_VAL), context)
-            .unwrap(),
-        fory.serialize_with_context(&Some(I32_VAL), context)
-            .unwrap(),
-        fory.serialize_with_context(&Some(I64_VAL), context)
-            .unwrap(),
-        fory.serialize_with_context(&Some(F32_VAL), context)
-            .unwrap(),
-        fory.serialize_with_context(&Some(F64_VAL), context)
-            .unwrap(),
-        fory.serialize_with_context(&Some(STR_LATIN1_VAL.to_string()), context)
-            .unwrap(),
-        fory.serialize_with_context(&Some(LOCAL_DATE_VAL), context)
-            .unwrap(),
-        fory.serialize_with_context(&Some(TIMESTAMP_VAL), context)
-            .unwrap(),
-        fory.serialize_with_context(&Some(BOOL_ARRAY.to_vec()), context)
-            .unwrap(),
-        fory.serialize_with_context(&Some(INT8_ARRAY.to_vec()), context)
-            .unwrap(),
-        fory.serialize_with_context(&Some(INT16_ARRAY.to_vec()), context)
-            .unwrap(),
-        fory.serialize_with_context(&Some(INT32_ARRAY.to_vec()), context)
-            .unwrap(),
-        fory.serialize_with_context(&Some(INT64_ARRAY.to_vec()), context)
-            .unwrap(),
-        fory.serialize_with_context(&Some(FLOAT32_ARRAY.to_vec()), context)
-            .unwrap(),
-        fory.serialize_with_context(&Some(FLOAT64_ARRAY.to_vec()), context)
-            .unwrap(),
-        fory.serialize_with_context(&Option::<bool>::None, context)
-            .unwrap(),
-        fory.serialize_with_context(&Option::<i8>::None, context)
-            .unwrap(),
-        fory.serialize_with_context(&Option::<i16>::None, context)
-            .unwrap(),
-        fory.serialize_with_context(&Option::<i32>::None, context)
-            .unwrap(),
-        fory.serialize_with_context(&Option::<i64>::None, context)
-            .unwrap(),
-        fory.serialize_with_context(&Option::<f32>::None, context)
-            .unwrap(),
-        fory.serialize_with_context(&Option::<f64>::None, context)
-            .unwrap(),
-        fory.serialize_with_context(&Option::<String>::None, context)
-            .unwrap(),
-        fory.serialize_with_context(&Option::<NaiveDate>::None, context)
-            .unwrap(),
-        fory.serialize_with_context(&Option::<NaiveDateTime>::None, context)
-            .unwrap(),
-        fory.serialize_with_context(&Option::<Vec<bool>>::None, context)
-            .unwrap(),
-        fory.serialize_with_context(&Option::<Vec<i8>>::None, context)
-            .unwrap(),
-        fory.serialize_with_context(&Option::<Vec<i16>>::None, context)
-            .unwrap(),
-        fory.serialize_with_context(&Option::<Vec<i32>>::None, context)
-            .unwrap(),
-        fory.serialize_with_context(&Option::<Vec<i64>>::None, context)
-            .unwrap(),
-        fory.serialize_with_context(&Option::<Vec<f32>>::None, context)
-            .unwrap(),
-        fory.serialize_with_context(&Option::<Vec<f64>>::None, context)
-            .unwrap(),
+        serialize_with_context(fory, &Some(BOOL_VAL), context).unwrap(),
+        serialize_with_context(fory, &Some(I8_VAL), context).unwrap(),
+        serialize_with_context(fory, &Some(I16_VAL), context).unwrap(),
+        serialize_with_context(fory, &Some(I32_VAL), context).unwrap(),
+        serialize_with_context(fory, &Some(I64_VAL), context).unwrap(),
+        serialize_with_context(fory, &Some(F32_VAL), context).unwrap(),
+        serialize_with_context(fory, &Some(F64_VAL), context).unwrap(),
+        serialize_with_context(fory, &Some(STR_LATIN1_VAL.to_string()), context).unwrap(),
+        serialize_with_context(fory, &Some(LOCAL_DATE_VAL), context).unwrap(),
+        serialize_with_context(fory, &Some(TIMESTAMP_VAL), context).unwrap(),
+        serialize_with_context(fory, &Some(BOOL_ARRAY.to_vec()), context).unwrap(),
+        serialize_with_context(fory, &Some(INT8_ARRAY.to_vec()), context).unwrap(),
+        serialize_with_context(fory, &Some(INT16_ARRAY.to_vec()), context).unwrap(),
+        serialize_with_context(fory, &Some(INT32_ARRAY.to_vec()), context).unwrap(),
+        serialize_with_context(fory, &Some(INT64_ARRAY.to_vec()), context).unwrap(),
+        serialize_with_context(fory, &Some(FLOAT32_ARRAY.to_vec()), context).unwrap(),
+        serialize_with_context(fory, &Some(FLOAT64_ARRAY.to_vec()), context).unwrap(),
+        serialize_with_context(fory, &Option::<bool>::None, context).unwrap(),
+        serialize_with_context(fory, &Option::<i8>::None, context).unwrap(),
+        serialize_with_context(fory, &Option::<i16>::None, context).unwrap(),
+        serialize_with_context(fory, &Option::<i32>::None, context).unwrap(),
+        serialize_with_context(fory, &Option::<i64>::None, context).unwrap(),
+        serialize_with_context(fory, &Option::<f32>::None, context).unwrap(),
+        serialize_with_context(fory, &Option::<f64>::None, context).unwrap(),
+        serialize_with_context(fory, &Option::<String>::None, context).unwrap(),
+        serialize_with_context(fory, &Option::<NaiveDate>::None, context).unwrap(),
+        serialize_with_context(fory, &Option::<NaiveDateTime>::None, context).unwrap(),
+        serialize_with_context(fory, &Option::<Vec<bool>>::None, context).unwrap(),
+        serialize_with_context(fory, &Option::<Vec<i8>>::None, context).unwrap(),
+        serialize_with_context(fory, &Option::<Vec<i16>>::None, context).unwrap(),
+        serialize_with_context(fory, &Option::<Vec<i32>>::None, context).unwrap(),
+        serialize_with_context(fory, &Option::<Vec<i64>>::None, context).unwrap(),
+        serialize_with_context(fory, &Option::<Vec<f32>>::None, context).unwrap(),
+        serialize_with_context(fory, &Option::<Vec<f64>>::None, context).unwrap(),
     ]
 }
 

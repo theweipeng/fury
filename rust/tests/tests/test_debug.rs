@@ -16,6 +16,7 @@
 // under the License.
 
 use std::any::Any;
+use std::mem;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use fory_core::buffer::Reader;
@@ -25,12 +26,27 @@ use fory_core::serializer::struct_::{
     reset_struct_debug_hooks, set_after_read_field_func, set_after_write_field_func,
     set_before_read_field_func, set_before_write_field_func,
 };
+use fory_core::{Error, Serializer, Writer};
 
 #[derive(fory_derive::ForyObject)]
 #[fory_debug]
 struct DebugSample {
     a: i32,
     b: String,
+}
+
+pub fn serialize_with_context<'a, T: Serializer>(
+    fory: &Fory,
+    record: &T,
+    context: &mut WriteContext<'a>,
+) -> Result<Vec<u8>, Error> {
+    let mut buf = vec![];
+    let outlive_buffer = unsafe { mem::transmute::<&mut Vec<u8>, &mut Vec<u8>>(&mut buf) };
+    let mut writer = Writer::from_buffer(outlive_buffer);
+    context.attach_writer(&mut writer);
+    fory.serialize_with_context(record, context)?;
+    context.detach_writer();
+    Ok(buf)
 }
 
 fn event_log() -> &'static Mutex<Vec<String>> {
@@ -154,9 +170,7 @@ fn debug_hooks_trigger_for_struct() {
     let mut fory_compat = Fory::default().compatible(true);
     fory_compat.register::<DebugSample>(4001).unwrap();
     let mut write_ctx = WriteContext::new_from_fory(&fory_compat);
-    let compat_bytes = fory_compat
-        .serialize_with_context(&sample, &mut write_ctx)
-        .unwrap();
+    let compat_bytes = serialize_with_context(&fory_compat, &sample, &mut write_ctx).unwrap();
     let reader = Reader::new(compat_bytes.as_slice());
     let mut read_ctx = ReadContext::new_from_fory(reader, &fory_compat);
     let _: DebugSample = fory_compat.deserialize_with_context(&mut read_ctx).unwrap();

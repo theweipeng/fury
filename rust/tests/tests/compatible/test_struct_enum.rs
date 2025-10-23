@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::compatible::test_basic_type::serialize_with_context;
 use chrono::{NaiveDate, NaiveDateTime};
 use fory_core::buffer::Reader;
 use fory_core::error::Error;
@@ -96,12 +97,8 @@ fn basic() {
     for fory in [fory1, fory2] {
         let mut write_context = WriteContext::new_from_fory(&fory);
         let person = Person::default();
-        let bytes1 = fory
-            .serialize_with_context(&person, &mut write_context)
-            .unwrap();
-        let bytes2 = fory
-            .serialize_with_context(&person, &mut write_context)
-            .unwrap();
+        let bytes1 = serialize_with_context(&fory, &person, &mut write_context).unwrap();
+        let bytes2 = serialize_with_context(&fory, &person, &mut write_context).unwrap();
         let reader1 = Reader::new(bytes1.as_slice());
         let mut read_context1 = ReadContext::new_from_fory(reader1, &fory);
         assert_eq!(

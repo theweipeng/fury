@@ -17,6 +17,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::compatible::test_basic_type::serialize_with_context;
 use fory_core::buffer::Reader;
 use fory_core::fory::Fory;
 use fory_core::resolver::context::{ReadContext, WriteContext};
@@ -224,9 +225,7 @@ fn container_outer_auto_conv() {
     let fory = Fory::default().compatible(true);
     // serialize_outer_non-null
     let mut write_context = WriteContext::new_from_fory(&fory);
-    let bytes = fory
-        .serialize_with_context(&basic_list(), &mut write_context)
-        .unwrap();
+    let bytes = serialize_with_context(&fory, &basic_list(), &mut write_context).unwrap();
     let reader = Reader::new(bytes.as_slice());
     let mut read_context = ReadContext::new_from_fory(reader, &fory);
     assert_eq!(
@@ -234,9 +233,7 @@ fn container_outer_auto_conv() {
         fory.deserialize_with_context::<Option<Vec<String>>>(&mut read_context)
             .unwrap()
     );
-    let bytes = fory
-        .serialize_with_context(&basic_set(), &mut write_context)
-        .unwrap();
+    let bytes = serialize_with_context(&fory, &basic_set(), &mut write_context).unwrap();
     let reader = Reader::new(bytes.as_slice());
     let mut read_context = ReadContext::new_from_fory(reader, &fory);
     assert_eq!(
@@ -244,9 +241,7 @@ fn container_outer_auto_conv() {
         fory.deserialize_with_context::<Option<HashSet<String>>>(&mut read_context)
             .unwrap()
     );
-    let bytes = fory
-        .serialize_with_context(&basic_map(), &mut write_context)
-        .unwrap();
+    let bytes = serialize_with_context(&fory, &basic_map(), &mut write_context).unwrap();
     // deserialize_outer_nullable
     let reader = Reader::new(bytes.as_slice());
     let mut read_context = ReadContext::new_from_fory(reader, &fory);
@@ -259,18 +254,18 @@ fn container_outer_auto_conv() {
     // serialize_outer_nullable
     let mut write_context = WriteContext::new_from_fory(&fory);
     let mut bins = vec![
-        fory.serialize_with_context(&Some(basic_list()), &mut write_context)
+        serialize_with_context(&fory, &Some(basic_list()), &mut write_context).unwrap(),
+        serialize_with_context(&fory, &Some(basic_set()), &mut write_context).unwrap(),
+        serialize_with_context(&fory, &Some(basic_map()), &mut write_context).unwrap(),
+        serialize_with_context(&fory, &Option::<Vec<String>>::None, &mut write_context).unwrap(),
+        serialize_with_context(&fory, &Option::<HashSet<String>>::None, &mut write_context)
             .unwrap(),
-        fory.serialize_with_context(&Some(basic_set()), &mut write_context)
-            .unwrap(),
-        fory.serialize_with_context(&Some(basic_map()), &mut write_context)
-            .unwrap(),
-        fory.serialize_with_context(&Option::<Vec<String>>::None, &mut write_context)
-            .unwrap(),
-        fory.serialize_with_context(&Option::<HashSet<String>>::None, &mut write_context)
-            .unwrap(),
-        fory.serialize_with_context(&Option::<HashMap<String, String>>::None, &mut write_context)
-            .unwrap(),
+        serialize_with_context(
+            &fory,
+            &Option::<HashMap<String, String>>::None,
+            &mut write_context,
+        )
+        .unwrap(),
     ];
     bins.reverse();
     assert_eq!(
@@ -334,22 +329,14 @@ fn collection_inner() {
         // serialize
         let mut write_context = WriteContext::new_from_fory(&fory);
         let mut bins = vec![
-            fory.serialize_with_context(&basic_list(), &mut write_context)
-                .unwrap(),
-            fory.serialize_with_context(&item_list(), &mut write_context)
-                .unwrap(),
-            fory.serialize_with_context(&basic_set(), &mut write_context)
-                .unwrap(),
-            fory.serialize_with_context(&item_set(), &mut write_context)
-                .unwrap(),
-            fory.serialize_with_context(&nullable_basic_list(false), &mut write_context)
-                .unwrap(),
-            fory.serialize_with_context(&nullable_item_list(false), &mut write_context)
-                .unwrap(),
-            fory.serialize_with_context(&nullable_basic_set(false), &mut write_context)
-                .unwrap(),
-            fory.serialize_with_context(&nullable_item_set(false), &mut write_context)
-                .unwrap(),
+            serialize_with_context(&fory, &basic_list(), &mut write_context).unwrap(),
+            serialize_with_context(&fory, &item_list(), &mut write_context).unwrap(),
+            serialize_with_context(&fory, &basic_set(), &mut write_context).unwrap(),
+            serialize_with_context(&fory, &item_set(), &mut write_context).unwrap(),
+            serialize_with_context(&fory, &nullable_basic_list(false), &mut write_context).unwrap(),
+            serialize_with_context(&fory, &nullable_item_list(false), &mut write_context).unwrap(),
+            serialize_with_context(&fory, &nullable_basic_set(false), &mut write_context).unwrap(),
+            serialize_with_context(&fory, &nullable_item_set(false), &mut write_context).unwrap(),
         ];
         bins.reverse();
         // deserialize
@@ -428,14 +415,10 @@ fn collection_inner_auto_conv() {
         // serialize_non_null
         let mut write_context = WriteContext::new_from_fory(&fory);
         let mut bins = vec![
-            fory.serialize_with_context(&basic_list(), &mut write_context)
-                .unwrap(),
-            fory.serialize_with_context(&item_list(), &mut write_context)
-                .unwrap(),
-            fory.serialize_with_context(&basic_set(), &mut write_context)
-                .unwrap(),
-            fory.serialize_with_context(&item_set(), &mut write_context)
-                .unwrap(),
+            serialize_with_context(&fory, &basic_list(), &mut write_context).unwrap(),
+            serialize_with_context(&fory, &item_list(), &mut write_context).unwrap(),
+            serialize_with_context(&fory, &basic_set(), &mut write_context).unwrap(),
+            serialize_with_context(&fory, &item_set(), &mut write_context).unwrap(),
         ];
         bins.reverse();
         // deserialize_nullable
@@ -472,14 +455,10 @@ fn collection_inner_auto_conv() {
         // serialize_nullable
         let mut write_context = WriteContext::new_from_fory(&fory);
         let mut bins = vec![
-            fory.serialize_with_context(&nullable_basic_list(false), &mut write_context)
-                .unwrap(),
-            fory.serialize_with_context(&nullable_item_list(false), &mut write_context)
-                .unwrap(),
-            fory.serialize_with_context(&nullable_basic_set(false), &mut write_context)
-                .unwrap(),
-            fory.serialize_with_context(&nullable_item_set(false), &mut write_context)
-                .unwrap(),
+            serialize_with_context(&fory, &nullable_basic_list(false), &mut write_context).unwrap(),
+            serialize_with_context(&fory, &nullable_item_list(false), &mut write_context).unwrap(),
+            serialize_with_context(&fory, &nullable_basic_set(false), &mut write_context).unwrap(),
+            serialize_with_context(&fory, &nullable_item_set(false), &mut write_context).unwrap(),
         ];
         bins.reverse();
         // deserialize_non-null
@@ -527,9 +506,7 @@ fn map_inner() {
     for fory in [fory1, fory2] {
         // serialize
         let mut write_context = WriteContext::new_from_fory(&fory);
-        let bytes = fory
-            .serialize_with_context(&basic_map(), &mut write_context)
-            .unwrap();
+        let bytes = serialize_with_context(&fory, &basic_map(), &mut write_context).unwrap();
         assert_eq!(
             basic_map(),
             fory.deserialize_with_context::<HashMap<String, String>>(
@@ -538,9 +515,7 @@ fn map_inner() {
             .unwrap()
         );
 
-        let bytes = fory
-            .serialize_with_context(&item_map(), &mut write_context)
-            .unwrap();
+        let bytes = serialize_with_context(&fory, &item_map(), &mut write_context).unwrap();
         assert_eq!(
             item_map(),
             fory.deserialize_with_context::<HashMap<Item, Item>>(&mut ReadContext::new_from_fory(
@@ -550,9 +525,8 @@ fn map_inner() {
             .unwrap()
         );
 
-        let bytes = fory
-            .serialize_with_context(&nullable_basic_map(false), &mut write_context)
-            .unwrap();
+        let bytes =
+            serialize_with_context(&fory, &nullable_basic_map(false), &mut write_context).unwrap();
         assert_eq!(
             nullable_basic_map(false),
             fory.deserialize_with_context::<HashMap<Option<String>, Option<String>>>(
@@ -560,9 +534,8 @@ fn map_inner() {
             )
             .unwrap()
         );
-        let bytes = fory
-            .serialize_with_context(&nullable_item_map(false), &mut write_context)
-            .unwrap();
+        let bytes =
+            serialize_with_context(&fory, &nullable_item_map(false), &mut write_context).unwrap();
         assert_eq!(
             nullable_item_map(false),
             fory.deserialize_with_context::<HashMap<Option<Item>, Option<Item>>>(
@@ -582,9 +555,7 @@ fn map_inner_auto_conv() {
     for fory in [fory1, fory2] {
         // serialize_non_null
         let mut write_context = WriteContext::new_from_fory(&fory);
-        let bytes = fory
-            .serialize_with_context(&basic_map(), &mut write_context)
-            .unwrap();
+        let bytes = serialize_with_context(&fory, &basic_map(), &mut write_context).unwrap();
         // deserialize_nullable
         let reader = Reader::new(bytes.as_slice());
         let mut read_context = ReadContext::new_from_fory(reader, &fory);
@@ -595,9 +566,7 @@ fn map_inner_auto_conv() {
             )
             .unwrap()
         );
-        let bytes = fory
-            .serialize_with_context(&item_map(), &mut write_context)
-            .unwrap();
+        let bytes = serialize_with_context(&fory, &item_map(), &mut write_context).unwrap();
         // deserialize_nullable
         let reader = Reader::new(bytes.as_slice());
         let mut read_context = ReadContext::new_from_fory(reader, &fory);
@@ -609,9 +578,8 @@ fn map_inner_auto_conv() {
         assert_eq!(read_context.reader.slice_after_cursor().len(), 0);
         // serialize_nullable
         let mut write_context = WriteContext::new_from_fory(&fory);
-        let bytes = fory
-            .serialize_with_context(&nullable_basic_map(false), &mut write_context)
-            .unwrap();
+        let bytes =
+            serialize_with_context(&fory, &nullable_basic_map(false), &mut write_context).unwrap();
         // deserialize_non-null
         let reader = Reader::new(bytes.as_slice());
         let mut read_context = ReadContext::new_from_fory(reader, &fory);
@@ -620,9 +588,8 @@ fn map_inner_auto_conv() {
             fory.deserialize_with_context::<HashMap<String, String>>(&mut read_context)
                 .unwrap()
         );
-        let bytes = fory
-            .serialize_with_context(&nullable_item_map(false), &mut write_context)
-            .unwrap();
+        let bytes =
+            serialize_with_context(&fory, &nullable_item_map(false), &mut write_context).unwrap();
         // deserialize_non-null
         let reader = Reader::new(bytes.as_slice());
         let mut read_context = ReadContext::new_from_fory(reader, &fory);
@@ -644,12 +611,9 @@ fn complex() {
     for fory in [fory1, fory2] {
         let mut write_context = WriteContext::new_from_fory(&fory);
         let mut bins = vec![
-            fory.serialize_with_context(&nested_collection(), &mut write_context)
-                .unwrap(),
-            fory.serialize_with_context(&complex_container1(), &mut write_context)
-                .unwrap(),
-            fory.serialize_with_context(&complex_container2(), &mut write_context)
-                .unwrap(),
+            serialize_with_context(&fory, &nested_collection(), &mut write_context).unwrap(),
+            serialize_with_context(&fory, &complex_container1(), &mut write_context).unwrap(),
+            serialize_with_context(&fory, &complex_container2(), &mut write_context).unwrap(),
         ];
         bins.reverse();
         assert_eq!(

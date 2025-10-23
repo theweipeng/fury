@@ -395,23 +395,23 @@ impl Fory {
             Pool::new(factory)
         });
         let mut context = pool.get();
-        // Context got from poll would be 'static. but context hold the buffer through `writer` field, so we should make buffer live longer.
+        // Context go from pool would be 'static. but context hold the buffer through `writer` field, so we should make buffer live longer.
         // After serializing, `detach_writer` will be called, the writer in context will be set to dangling pointer.
         // So it's safe to make buf live to the end of this method.
         let outlive_buffer = unsafe { mem::transmute::<&mut Vec<u8>, &mut Vec<u8>>(buf) };
-        self.serialize_with_context_to(record, &mut context, outlive_buffer)?;
+        let mut writer = Writer::from_buffer(outlive_buffer);
+        context.attach_writer(&mut writer);
+        let result = self.serialize_with_context(record, &mut context);
+        context.detach_writer();
         pool.put(context);
-        Ok(())
+        result
     }
 
-    pub fn serialize_with_context_to<'a, 'b: 'a, T: Serializer>(
+    pub fn serialize_with_context<T: Serializer>(
         &self,
         record: &T,
-        context: &mut WriteContext<'a>,
-        buf: &'b mut Vec<u8>,
+        context: &mut WriteContext,
     ) -> Result<(), Error> {
-        let mut writer = Writer::from_buffer(buf);
-        context.attach_writer(&mut writer);
         let is_none = record.fory_is_none();
         self.write_head::<T>(is_none, &mut context.writer);
         let meta_start_offset = context.writer.len();
@@ -424,20 +424,8 @@ impl Fory {
                 context.write_meta(meta_start_offset);
             }
         }
-        context.detach_writer();
         context.reset();
         Ok(())
-    }
-
-    pub fn serialize_with_context<'a, T: Serializer>(
-        &self,
-        record: &T,
-        context: &mut WriteContext<'a>,
-    ) -> Result<Vec<u8>, Error> {
-        let mut buf = vec![];
-        let outlive_buffer = unsafe { mem::transmute::<&mut Vec<u8>, &mut Vec<u8>>(&mut buf) };
-        self.serialize_with_context_to(record, context, outlive_buffer)?;
-        Ok(buf)
     }
 
     /// Registers a struct type with a numeric type ID for serialization.
