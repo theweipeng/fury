@@ -95,7 +95,7 @@ impl<'a> WriteContext<'a> {
         self.writer = WriterDeref(NonNull::dangling());
     }
 
-    pub fn new_from_fory(fory: &Fory) -> WriteContext {
+    pub fn new_from_fory(fory: &Fory) -> WriteContext<'_> {
         WriteContext {
             writer: WriterDeref(NonNull::dangling()),
             type_resolver: fory.get_type_resolver().clone(),
