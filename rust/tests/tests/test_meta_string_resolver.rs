@@ -16,7 +16,7 @@
 // under the License.
 
 use fory_core::meta::NAMESPACE_ENCODER;
-use fory_core::resolver::metastring_resolver::{
+use fory_core::resolver::meta_string_resolver::{
     MetaStringReaderResolver, MetaStringWriterResolver,
 };
 use fory_core::{Reader, Writer};
@@ -24,102 +24,112 @@ use std::rc::Rc;
 
 #[test]
 pub fn empty() {
-    let mut ms_writer = MetaStringWriterResolver::default();
-    let mut ms_reader = MetaStringReaderResolver::default();
+    let mut meta_string_writer = MetaStringWriterResolver::default();
+    let mut meta_string_reader = MetaStringReaderResolver::default();
 
     for _ in 0..3 {
-        let ms = NAMESPACE_ENCODER.encode("").unwrap();
-        let rc_ms = Rc::from(ms);
+        let meta_string = NAMESPACE_ENCODER.encode("").unwrap();
+        let rc_meta_string = Rc::from(meta_string);
 
         let mut buffer = vec![];
         let mut writer = Writer::from_buffer(&mut buffer);
-        ms_writer
-            .write_meta_string_bytes(&mut writer, rc_ms.clone())
+        meta_string_writer
+            .write_meta_string_bytes(&mut writer, rc_meta_string.clone())
             .unwrap();
 
         let binding = writer.dump();
         let mut reader = Reader::new(binding.as_slice());
 
-        let read_ms = ms_reader.read_meta_string(&mut reader).unwrap();
-        assert_eq!(&*rc_ms, read_ms);
-        ms_writer.reset();
-        ms_reader.reset();
+        let new_meta_string = meta_string_reader.read_meta_string(&mut reader).unwrap();
+        assert_eq!(&*rc_meta_string, new_meta_string);
+        meta_string_writer.reset();
+        meta_string_reader.reset();
     }
 }
 
 #[test]
 pub fn small_ms() {
-    let mut ms_writer = MetaStringWriterResolver::default();
-    let mut ms_reader = MetaStringReaderResolver::default();
+    let mut meta_string_writer = MetaStringWriterResolver::default();
+    let mut meta_string_reader = MetaStringReaderResolver::default();
     // test reset
     for _ in 0..3 {
         // write
         let mut data = Vec::new();
         for i in 0..20 {
-            let ms = NAMESPACE_ENCODER.encode(&format!("ms_{i}")).unwrap();
-            let rc_ms = Rc::from(ms);
+            let meta_string = NAMESPACE_ENCODER.encode(&format!("s_{i}")).unwrap();
+            let rc_meta_string = Rc::from(meta_string);
             // test cache
             for _ in 0..3 {
-                data.push(rc_ms.clone());
+                data.push(rc_meta_string.clone());
             }
         }
         let mut buffer = vec![];
         let mut writer = Writer::from_buffer(&mut buffer);
-        for ms in data.iter() {
-            ms_writer
-                .write_meta_string_bytes(&mut writer, ms.clone())
+        for meta_string in data.iter() {
+            meta_string_writer
+                .write_meta_string_bytes(&mut writer, meta_string.clone())
                 .unwrap();
         }
         // read
         let binding = writer.dump();
         let mut reader = Reader::new(binding.as_slice());
         let read_data: Vec<_> = (0..60)
-            .map(|_| ms_reader.read_meta_string(&mut reader).unwrap().clone())
+            .map(|_| {
+                meta_string_reader
+                    .read_meta_string(&mut reader)
+                    .unwrap()
+                    .clone()
+            })
             .collect();
         for i in 0..60 {
             assert_eq!(*data[i], read_data[i]);
         }
-        ms_writer.reset();
-        ms_reader.reset();
+        meta_string_writer.reset();
+        meta_string_reader.reset();
     }
 }
 
 #[test]
 pub fn big_ms() {
     let long_string = "a".repeat(50);
-    let mut ms_writer = MetaStringWriterResolver::default();
-    let mut ms_reader = MetaStringReaderResolver::default();
+    let mut meta_string_writer = MetaStringWriterResolver::default();
+    let mut meta_string_reader = MetaStringReaderResolver::default();
     // test reset
     for _ in 0..3 {
         // write
         let mut data = Vec::new();
         for i in 0..20 {
-            let ms = NAMESPACE_ENCODER
+            let meta_string = NAMESPACE_ENCODER
                 .encode(&format!("{long_string}_{i}"))
                 .unwrap();
-            let rc_ms = Rc::from(ms);
+            let rc_meta_string = Rc::from(meta_string);
             // test cache
             for _ in 0..3 {
-                data.push(rc_ms.clone());
+                data.push(rc_meta_string.clone());
             }
         }
         let mut buffer = vec![];
         let mut writer = Writer::from_buffer(&mut buffer);
-        for ms in data.iter() {
-            ms_writer
-                .write_meta_string_bytes(&mut writer, ms.clone())
+        for meta_string in data.iter() {
+            meta_string_writer
+                .write_meta_string_bytes(&mut writer, meta_string.clone())
                 .unwrap();
         }
         // read
         let binding = writer.dump();
         let mut reader = Reader::new(binding.as_slice());
         let read_data: Vec<_> = (0..60)
-            .map(|_| ms_reader.read_meta_string(&mut reader).unwrap().clone())
+            .map(|_| {
+                meta_string_reader
+                    .read_meta_string(&mut reader)
+                    .unwrap()
+                    .clone()
+            })
             .collect();
         for i in 0..60 {
             assert_eq!(*data[i], read_data[i]);
         }
-        ms_writer.reset();
-        ms_reader.reset();
+        meta_string_writer.reset();
+        meta_string_reader.reset();
     }
 }

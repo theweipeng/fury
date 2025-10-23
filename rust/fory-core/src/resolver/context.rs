@@ -23,7 +23,7 @@ use crate::error::Error;
 use crate::fory::Fory;
 use crate::meta::MetaString;
 use crate::resolver::meta_resolver::{MetaReaderResolver, MetaWriterResolver};
-use crate::resolver::metastring_resolver::{MetaStringReaderResolver, MetaStringWriterResolver};
+use crate::resolver::meta_string_resolver::{MetaStringReaderResolver, MetaStringWriterResolver};
 use crate::resolver::ref_resolver::{RefReader, RefWriter};
 use crate::resolver::type_resolver::{TypeInfo, TypeResolver};
 use crate::types;
@@ -379,7 +379,7 @@ impl ReadContext {
                     let rc_namespace = Rc::from(namespace);
                     let rc_type_name = Rc::from(type_name);
                     self.type_resolver
-                        .get_type_info_by_msname(rc_namespace, rc_type_name)
+                        .get_type_info_by_meta_string_name(rc_namespace, rc_type_name)
                         .ok_or_else(|| Error::type_error("Name harness not found"))
                 }
             }
