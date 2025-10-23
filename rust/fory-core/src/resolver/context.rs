@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::buffer::{Reader, Writer};
+use std::mem;
 use std::ops::{Deref, DerefMut};
 use std::ptr::NonNull;
 
@@ -42,7 +43,8 @@ pub struct WriteContext<'a> {
     check_struct_version: bool,
 
     // Context-specific fields
-    pub writer: WriterDeref<'a>,
+    default_writer: Option<Writer<'a>>,
+    pub writer: Writer<'a>,
     meta_resolver: MetaWriterResolver,
     meta_string_resolver: MetaStringWriterResolver,
     pub ref_writer: RefWriter,
@@ -80,24 +82,32 @@ impl<'a> WriteContext<'a> {
             compress_string,
             xlang,
             check_struct_version,
-            writer: WriterDeref(NonNull::dangling()),
+            default_writer: None,
+            writer: Writer::from_buffer(Self::get_leak_buffer()),
             meta_resolver: MetaWriterResolver::default(),
             meta_string_resolver: MetaStringWriterResolver::default(),
             ref_writer: RefWriter::new(),
         }
     }
 
-    pub fn attach_writer(&mut self, writer: &mut Writer<'a>) {
-        self.writer = WriterDeref(NonNull::new(writer).unwrap())
+    fn get_leak_buffer() -> &'static mut Vec<u8> {
+        Box::leak(Box::new(vec![]))
+    }
+
+    pub fn attach_writer(&mut self, writer: Writer<'a>) {
+        let old = mem::replace(&mut self.writer, writer);
+        self.default_writer = Some(old);
     }
 
     pub fn detach_writer(&mut self) {
-        self.writer = WriterDeref(NonNull::dangling());
+        let default = mem::take(&mut self.default_writer);
+        self.writer = default.unwrap();
     }
 
     pub fn new_from_fory(fory: &Fory) -> WriteContext<'_> {
         WriteContext {
-            writer: WriterDeref(NonNull::dangling()),
+            default_writer: None,
+            writer: Writer::from_buffer(Self::get_leak_buffer()),
             type_resolver: fory.get_type_resolver().clone(),
             compatible: fory.is_compatible(),
             share_meta: fory.is_share_meta(),
@@ -224,6 +234,14 @@ impl<'a> WriteContext<'a> {
         self.meta_resolver.reset();
         self.meta_string_resolver.reset();
         self.ref_writer.reset();
+    }
+}
+
+impl<'a> Drop for WriteContext<'a> {
+    fn drop(&mut self) {
+        unsafe {
+            drop(Box::from_raw(self.writer.bf));
+        }
     }
 }
 

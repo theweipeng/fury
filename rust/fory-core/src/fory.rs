@@ -368,13 +368,39 @@ impl Fory {
     /// let bytes = fory.serialize(&point);
     /// ```
     pub fn serialize<T: Serializer>(&self, record: &T) -> Result<Vec<u8>, Error> {
-        let mut buf = vec![];
-        self.serialize_to(record, &mut buf)?;
-        Ok(buf)
+        let pool = self.get_pool();
+        let mut context = pool.get();
+        match self.serialize_with_context(record, &mut context) {
+            Ok(_) => {
+                let result = context.writer.dump();
+                context.writer.reset();
+                pool.put(context);
+                Ok(result)
+            }
+            Err(err) => {
+                context.writer.reset();
+                pool.put(context);
+                Err(err)
+            }
+        }
     }
 
     pub fn serialize_to<T: Serializer>(&self, record: &T, buf: &mut Vec<u8>) -> Result<(), Error> {
-        let pool = self.write_context_pool.get_or_init(|| {
+        let pool = self.get_pool();
+        let mut context = pool.get();
+        // Context go from pool would be 'static. but context hold the buffer through `writer` field, so we should make buffer live longer.
+        // After serializing, `detach_writer` will be called, the writer in context will be set to dangling pointer.
+        // So it's safe to make buf live to the end of this method.
+        let outlive_buffer = unsafe { mem::transmute::<&mut Vec<u8>, &mut Vec<u8>>(buf) };
+        context.attach_writer(Writer::from_buffer(outlive_buffer));
+        let result = self.serialize_with_context(record, &mut context);
+        context.detach_writer();
+        pool.put(context);
+        result
+    }
+
+    fn get_pool(&self) -> &Pool<Box<WriteContext<'static>>> {
+        self.write_context_pool.get_or_init(|| {
             let type_resolver = self.type_resolver.clone();
             let compatible = self.compatible;
             let share_meta = self.share_meta;
@@ -393,21 +419,10 @@ impl Fory {
                 ))
             };
             Pool::new(factory)
-        });
-        let mut context = pool.get();
-        // Context go from pool would be 'static. but context hold the buffer through `writer` field, so we should make buffer live longer.
-        // After serializing, `detach_writer` will be called, the writer in context will be set to dangling pointer.
-        // So it's safe to make buf live to the end of this method.
-        let outlive_buffer = unsafe { mem::transmute::<&mut Vec<u8>, &mut Vec<u8>>(buf) };
-        let mut writer = Writer::from_buffer(outlive_buffer);
-        context.attach_writer(&mut writer);
-        let result = self.serialize_with_context(record, &mut context);
-        context.detach_writer();
-        pool.put(context);
-        result
+        })
     }
 
-    pub fn serialize_with_context<T: Serializer>(
+    fn serialize_with_context<T: Serializer>(
         &self,
         record: &T,
         context: &mut WriteContext,

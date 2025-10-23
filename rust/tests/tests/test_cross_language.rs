@@ -25,7 +25,7 @@ use fory_core::TypeResolver;
 use fory_core::{read_data, write_data, Fory};
 use fory_derive::ForyObject;
 use std::collections::{HashMap, HashSet};
-use std::{fs, mem, vec};
+use std::{fs, vec};
 
 // RUSTFLAGS="-Awarnings" cargo expand -p tests --test test_cross_language
 fn get_data_file() -> String {
@@ -61,20 +61,6 @@ struct SimpleStruct {
     f7: i32,
     f8: i32,
     last: i32,
-}
-
-pub fn serialize_with_context<'a, T: Serializer>(
-    fory: &Fory,
-    record: &T,
-    context: &mut WriteContext<'a>,
-) -> Result<Vec<u8>, Error> {
-    let mut buf = vec![];
-    let outlive_buffer = unsafe { mem::transmute::<&mut Vec<u8>, &mut Vec<u8>>(&mut buf) };
-    let mut writer = Writer::from_buffer(outlive_buffer);
-    context.attach_writer(&mut writer);
-    fory.serialize_with_context(record, context)?;
-    context.detach_writer();
-    Ok(buf)
 }
 
 #[test]
@@ -331,33 +317,33 @@ fn test_cross_language_serializer() {
     assert_de!(fory, context, HashMap::<String, String>, str_map);
     assert_de!(fory, context, Color, color);
 
-    let mut context = WriteContext::new_from_fory(&fory);
-    serialize_with_context(&fory, &true, &mut context).unwrap();
-    serialize_with_context(&fory, &false, &mut context).unwrap();
-    serialize_with_context(&fory, &-1, &mut context).unwrap();
-    serialize_with_context(&fory, &i8::MAX, &mut context).unwrap();
-    serialize_with_context(&fory, &i8::MIN, &mut context).unwrap();
-    serialize_with_context(&fory, &i16::MAX, &mut context).unwrap();
-    serialize_with_context(&fory, &i16::MIN, &mut context).unwrap();
-    serialize_with_context(&fory, &i32::MAX, &mut context).unwrap();
-    serialize_with_context(&fory, &i32::MIN, &mut context).unwrap();
-    serialize_with_context(&fory, &i64::MAX, &mut context).unwrap();
-    serialize_with_context(&fory, &i64::MIN, &mut context).unwrap();
-    serialize_with_context(&fory, &-1f32, &mut context).unwrap();
-    serialize_with_context(&fory, &-1f64, &mut context).unwrap();
-    serialize_with_context(&fory, &"str".to_string(), &mut context).unwrap();
-    serialize_with_context(&fory, &day, &mut context).unwrap();
-    serialize_with_context(&fory, &instant, &mut context).unwrap();
-    serialize_with_context(&fory, &vec![true, false], &mut context).unwrap();
-    serialize_with_context(&fory, &vec![1, i16::MAX], &mut context).unwrap();
-    serialize_with_context(&fory, &vec![1, i32::MAX], &mut context).unwrap();
-    serialize_with_context(&fory, &vec![1, i64::MAX], &mut context).unwrap();
-    serialize_with_context(&fory, &vec![1f32, 2f32], &mut context).unwrap();
-    serialize_with_context(&fory, &vec![1f64, 2f64], &mut context).unwrap();
-    serialize_with_context(&fory, &str_list, &mut context).unwrap();
-    serialize_with_context(&fory, &str_set, &mut context).unwrap();
-    serialize_with_context(&fory, &str_map, &mut context).unwrap();
-    serialize_with_context(&fory, &color, &mut context).unwrap();
+    let context = WriteContext::new_from_fory(&fory);
+    fory.serialize(&true).unwrap();
+    fory.serialize(&false).unwrap();
+    fory.serialize(&-1).unwrap();
+    fory.serialize(&i8::MAX).unwrap();
+    fory.serialize(&i8::MIN).unwrap();
+    fory.serialize(&i16::MAX).unwrap();
+    fory.serialize(&i16::MIN).unwrap();
+    fory.serialize(&i32::MAX).unwrap();
+    fory.serialize(&i32::MIN).unwrap();
+    fory.serialize(&i64::MAX).unwrap();
+    fory.serialize(&i64::MIN).unwrap();
+    fory.serialize(&-1f32).unwrap();
+    fory.serialize(&-1f64).unwrap();
+    fory.serialize(&"str".to_string()).unwrap();
+    fory.serialize(&day).unwrap();
+    fory.serialize(&instant).unwrap();
+    fory.serialize(&vec![true, false]).unwrap();
+    fory.serialize(&vec![1, i16::MAX]).unwrap();
+    fory.serialize(&vec![1, i32::MAX]).unwrap();
+    fory.serialize(&vec![1, i64::MAX]).unwrap();
+    fory.serialize(&vec![1f32, 2f32]).unwrap();
+    fory.serialize(&vec![1f64, 2f64]).unwrap();
+    fory.serialize(&str_list).unwrap();
+    fory.serialize(&str_set).unwrap();
+    fory.serialize(&str_map).unwrap();
+    fory.serialize(&color).unwrap();
     fs::write(&data_file_path, context.writer.dump()).unwrap();
 }
 
@@ -460,11 +446,11 @@ fn test_list() {
     let remote_item_list2: Vec<Option<Item>> = fory.deserialize_with_context(&mut context).unwrap();
     assert_eq!(remote_item_list2, item_list2);
 
-    let mut context = WriteContext::new_from_fory(&fory);
-    serialize_with_context(&fory, &remote_str_list, &mut context).unwrap();
-    serialize_with_context(&fory, &remote_str_list2, &mut context).unwrap();
-    serialize_with_context(&fory, &remote_item_list, &mut context).unwrap();
-    serialize_with_context(&fory, &remote_item_list2, &mut context).unwrap();
+    let context = WriteContext::new_from_fory(&fory);
+    fory.serialize(&remote_str_list).unwrap();
+    fory.serialize(&remote_str_list2).unwrap();
+    fory.serialize(&remote_item_list).unwrap();
+    fory.serialize(&remote_item_list2).unwrap();
 
     fs::write(&data_file_path, context.writer.dump()).unwrap();
 }
@@ -578,14 +564,14 @@ fn test_integer() {
     let remote_f6: Option<i32> = fory.deserialize_with_context(&mut context).unwrap();
     assert_eq!(remote_f6, f6);
 
-    let mut context = WriteContext::new_from_fory(&fory);
-    serialize_with_context(&fory, &remote_item2, &mut context).unwrap();
-    serialize_with_context(&fory, &remote_f1, &mut context).unwrap();
-    serialize_with_context(&fory, &remote_f2, &mut context).unwrap();
-    serialize_with_context(&fory, &remote_f3, &mut context).unwrap();
-    serialize_with_context(&fory, &remote_f4, &mut context).unwrap();
-    serialize_with_context(&fory, &remote_f5, &mut context).unwrap();
-    serialize_with_context(&fory, &remote_f6, &mut context).unwrap();
+    let context = WriteContext::new_from_fory(&fory);
+    fory.serialize(&remote_item2).unwrap();
+    fory.serialize(&remote_f1).unwrap();
+    fory.serialize(&remote_f2).unwrap();
+    fory.serialize(&remote_f3).unwrap();
+    fory.serialize(&remote_f4).unwrap();
+    fory.serialize(&remote_f5).unwrap();
+    fory.serialize(&remote_f6).unwrap();
     fs::write(&data_file_path, context.writer.dump()).unwrap();
 }
 
@@ -714,15 +700,15 @@ fn test_consistent_named() {
     }
     // assert_eq!(fory.deserialize_with_context::<MyStruct>(&mut context).unwrap(), my_struct);
 
-    let mut context = WriteContext::new_from_fory(&fory);
+    let context = WriteContext::new_from_fory(&fory);
     for _ in 0..3 {
-        serialize_with_context(&fory, &color, &mut context).unwrap();
+        fory.serialize(&color).unwrap();
     }
     for _ in 0..3 {
-        serialize_with_context(&fory, &my_ext, &mut context).unwrap();
+        fory.serialize(&my_ext).unwrap();
     }
     // // todo: checkVersion
-    // // serialize_with_context(&fory, &my_struct, &mut context);
+    // // fory.serialize(&my_struct, &mut context);
     fs::write(&data_file_path, context.writer.dump()).unwrap();
 }
 

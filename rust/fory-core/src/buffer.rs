@@ -29,6 +29,7 @@ pub struct Writer<'a> {
     reserved: usize,
 }
 impl<'a> Writer<'a> {
+    #[inline(always)]
     pub fn from_buffer(bf: &'a mut Vec<u8>) -> Writer<'a> {
         Writer { bf, reserved: 0 }
     }
@@ -36,6 +37,11 @@ impl<'a> Writer<'a> {
     #[inline(always)]
     pub fn dump(&self) -> Vec<u8> {
         self.bf.clone()
+    }
+
+    #[inline(always)]
+    pub fn reset(&mut self) {
+        self.bf.clear();
     }
 
     #[inline(always)]
