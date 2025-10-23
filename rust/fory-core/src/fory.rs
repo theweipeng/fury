@@ -83,8 +83,8 @@ pub struct Fory {
     max_dyn_depth: u32,
     check_struct_version: bool,
     // Lazy-initialized pools (thread-safe, one-time initialization)
-    write_context_pool: OnceLock<Pool<Box<WriteContext<'static>>>>,
-    read_context_pool: OnceLock<Pool<Box<ReadContext>>>,
+    write_context_pool: OnceLock<Result<Pool<Box<WriteContext<'static>>>, Error>>,
+    read_context_pool: OnceLock<Result<Pool<Box<ReadContext>>, Error>>,
 }
 
 impl Default for Fory {
@@ -368,7 +368,7 @@ impl Fory {
     /// let bytes = fory.serialize(&point);
     /// ```
     pub fn serialize<T: Serializer>(&self, record: &T) -> Result<Vec<u8>, Error> {
-        let pool = self.get_pool();
+        let pool = self.get_writer_pool()?;
         let mut context = pool.get();
         match self.serialize_with_context(record, &mut context) {
             Ok(_) => {
@@ -386,7 +386,7 @@ impl Fory {
     }
 
     pub fn serialize_to<T: Serializer>(&self, record: &T, buf: &mut Vec<u8>) -> Result<(), Error> {
-        let pool = self.get_pool();
+        let pool = self.get_writer_pool()?;
         let mut context = pool.get();
         // Context go from pool would be 'static. but context hold the buffer through `writer` field, so we should make buffer live longer.
         // After serializing, `detach_writer` will be called, the writer in context will be set to dangling pointer.
@@ -399,9 +399,10 @@ impl Fory {
         result
     }
 
-    fn get_pool(&self) -> &Pool<Box<WriteContext<'static>>> {
-        self.write_context_pool.get_or_init(|| {
-            let type_resolver = self.type_resolver.clone();
+    #[inline(always)]
+    fn get_writer_pool(&self) -> Result<&Pool<Box<WriteContext<'static>>>, Error> {
+        let pool_result = self.write_context_pool.get_or_init(|| {
+            let type_resolver = self.type_resolver.build_final_type_resolver()?;
             let compatible = self.compatible;
             let share_meta = self.share_meta;
             let compress_string = self.compress_string;
@@ -418,10 +419,15 @@ impl Fory {
                     check_struct_version,
                 ))
             };
-            Pool::new(factory)
-        })
+            Ok(Pool::new(factory))
+        });
+        pool_result
+            .as_ref()
+            .map_err(|e| Error::type_error(format!("Failed to build type resolver: {}", e)))
     }
 
+    /// Serializes a value of type `T` into a byte vector.
+    #[inline(always)]
     fn serialize_with_context<T: Serializer>(
         &self,
         record: &T,
@@ -637,6 +643,8 @@ impl Fory {
         self.type_resolver.register_generic_trait::<T>()
     }
 
+    /// Writes the serialization header to the writer.
+    #[inline(always)]
     pub fn write_head<T: Serializer>(&self, is_none: bool, writer: &mut Writer) {
         const HEAD_SIZE: usize = 10;
         writer.reserve(T::fory_reserved_space() + SIZE_OF_REF_AND_TYPE + HEAD_SIZE);
@@ -697,8 +705,8 @@ impl Fory {
     /// let deserialized: Point = fory.deserialize(&bytes).unwrap();
     /// ```
     pub fn deserialize<T: Serializer + ForyDefault>(&self, bf: &[u8]) -> Result<T, Error> {
-        let pool = self.read_context_pool.get_or_init(|| {
-            let type_resolver = self.type_resolver.clone();
+        let pool_result = self.read_context_pool.get_or_init(|| {
+            let type_resolver = self.type_resolver.build_final_type_resolver()?;
             let compatible = self.compatible;
             let share_meta = self.share_meta;
             let xlang = self.xlang;
@@ -717,8 +725,11 @@ impl Fory {
                     check_struct_version,
                 ))
             };
-            Pool::new(factory)
+            Ok(Pool::new(factory))
         });
+        let pool = pool_result
+            .as_ref()
+            .map_err(|e| Error::type_error(format!("Failed to build type resolver: {}", e)))?;
         let mut context = pool.get();
         context.init(bf, self.max_dyn_depth);
         let result = self.deserialize_with_context(&mut context);

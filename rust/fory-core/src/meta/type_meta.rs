@@ -580,7 +580,7 @@ impl TypeMeta {
         }
     }
 
-    pub fn from_fields(
+    pub(crate) fn from_fields(
         type_id: u32,
         namespace: MetaString,
         type_name: MetaString,
@@ -593,7 +593,7 @@ impl TypeMeta {
         }
     }
 
-    pub fn from_bytes(
+    pub(crate) fn from_bytes(
         reader: &mut Reader,
         type_resolver: &TypeResolver,
     ) -> Result<TypeMeta, Error> {
@@ -617,7 +617,7 @@ impl TypeMeta {
         })
     }
 
-    pub fn from_bytes_with_header(
+    pub(crate) fn from_bytes_with_header(
         reader: &mut Reader,
         type_resolver: &TypeResolver,
         header: i64,
@@ -666,7 +666,7 @@ impl TypeMeta {
         Ok(())
     }
 
-    pub fn to_bytes(&self) -> Result<Vec<u8>, Error> {
+    pub(crate) fn to_bytes(&self) -> Result<Vec<u8>, Error> {
         // | global_binary_header | layers_bytes |
         let mut buffer = vec![];
         let mut result = Writer::from_buffer(&mut buffer);

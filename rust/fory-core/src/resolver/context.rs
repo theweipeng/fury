@@ -72,25 +72,33 @@ impl<'a> WriteContext<'a> {
         }
     }
 
+    #[inline(always)]
     fn get_leak_buffer() -> &'static mut Vec<u8> {
         Box::leak(Box::new(vec![]))
     }
 
+    #[inline(always)]
     pub fn attach_writer(&mut self, writer: Writer<'a>) {
         let old = mem::replace(&mut self.writer, writer);
         self.default_writer = Some(old);
     }
 
+    #[inline(always)]
     pub fn detach_writer(&mut self) {
         let default = mem::take(&mut self.default_writer);
         self.writer = default.unwrap();
     }
 
-    pub fn new_from_fory(fory: &Fory) -> WriteContext<'_> {
+    /// Test method to create WriteContext from Fory instance
+    /// Will be removed in future releases, do not use it in production code
+    pub fn new_from_fory(fory: &Fory) -> WriteContext<'a> {
         WriteContext {
             default_writer: None,
             writer: Writer::from_buffer(Self::get_leak_buffer()),
-            type_resolver: fory.get_type_resolver().clone(),
+            type_resolver: fory
+                .get_type_resolver()
+                .build_final_type_resolver()
+                .unwrap(),
             compatible: fory.is_compatible(),
             share_meta: fory.is_share_meta(),
             compress_string: fory.is_compress_string(),
@@ -285,9 +293,14 @@ impl ReadContext {
         }
     }
 
+    /// Test method to create ReadContext from Fory instance
+    /// Will be removed in future releases, do not use it in production code
     pub fn new_from_fory(reader: Reader, fory: &Fory) -> ReadContext {
         ReadContext {
-            type_resolver: fory.get_type_resolver().clone(),
+            type_resolver: fory
+                .get_type_resolver()
+                .build_final_type_resolver()
+                .unwrap(),
             compatible: fory.is_compatible(),
             share_meta: fory.is_share_meta(),
             xlang: fory.is_xlang(),
