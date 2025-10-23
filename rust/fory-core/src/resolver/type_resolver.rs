@@ -115,9 +115,9 @@ impl TypeInfo {
         register_by_name: bool,
         harness: Harness,
     ) -> Result<TypeInfo, Error> {
-        let namespace_metastring =
+        let namespace_meta_string =
             NAMESPACE_ENCODER.encode_with_encodings(namespace, NAMESPACE_ENCODINGS)?;
-        let type_name_metastring =
+        let type_name_meta_string =
             TYPE_NAME_ENCODER.encode_with_encodings(type_name, TYPE_NAME_ENCODINGS)?;
         let mut fields_info = T::fory_fields_info(type_resolver)?;
         let sorted_field_names = T::fory_get_sorted_field_names();
@@ -142,8 +142,8 @@ impl TypeInfo {
         }
         let type_meta = Rc::new(TypeMeta::from_fields(
             type_id,
-            namespace_metastring.clone(),
-            type_name_metastring.clone(),
+            namespace_meta_string.clone(),
+            type_name_meta_string.clone(),
             register_by_name,
             sorted_field_infos,
         ));
@@ -152,8 +152,8 @@ impl TypeInfo {
             type_def: Rc::from(type_def_bytes),
             type_meta,
             type_id,
-            namespace: Rc::from(namespace_metastring),
-            type_name: Rc::from(type_name_metastring),
+            namespace: Rc::from(namespace_meta_string),
+            type_name: Rc::from(type_name_meta_string),
             register_by_name,
             harness,
         })
@@ -167,14 +167,14 @@ impl TypeInfo {
         register_by_name: bool,
         harness: Harness,
     ) -> Result<TypeInfo, Error> {
-        let namespace_metastring =
+        let namespace_meta_string =
             NAMESPACE_ENCODER.encode_with_encodings(namespace, NAMESPACE_ENCODINGS)?;
-        let type_name_metastring =
+        let type_name_meta_string =
             TYPE_NAME_ENCODER.encode_with_encodings(type_name, TYPE_NAME_ENCODINGS)?;
         let meta = TypeMeta::from_fields(
             type_id,
-            namespace_metastring.clone(),
-            type_name_metastring.clone(),
+            namespace_meta_string.clone(),
+            type_name_meta_string.clone(),
             register_by_name,
             vec![],
         );
@@ -184,8 +184,8 @@ impl TypeInfo {
             type_def: Rc::from(type_def),
             type_meta: Rc::new(meta),
             type_id,
-            namespace: Rc::from(namespace_metastring),
-            type_name: Rc::from(type_name_metastring),
+            namespace: Rc::from(namespace_meta_string),
+            type_name: Rc::from(type_name_meta_string),
             register_by_name,
             harness,
         })
@@ -306,7 +306,7 @@ pub struct TypeResolver {
     type_info_map_by_id: HashMap<u32, Rc<TypeInfo>>,
     type_info_map: HashMap<std::any::TypeId, Rc<TypeInfo>>,
     type_info_map_by_name: HashMap<(String, String), Rc<TypeInfo>>,
-    type_info_map_by_ms_name: HashMap<(Rc<MetaString>, Rc<MetaString>), Rc<TypeInfo>>,
+    type_info_map_by_meta_string_name: HashMap<(Rc<MetaString>, Rc<MetaString>), Rc<TypeInfo>>,
     // Fast lookup by numeric ID for common types
     type_id_index: Vec<u32>,
     compatible: bool,
@@ -326,7 +326,7 @@ impl Default for TypeResolver {
             type_info_map_by_id: HashMap::new(),
             type_info_map: HashMap::new(),
             type_info_map_by_name: HashMap::new(),
-            type_info_map_by_ms_name: HashMap::new(),
+            type_info_map_by_meta_string_name: HashMap::new(),
             type_id_index: Vec::new(),
             compatible: false,
         };
@@ -360,12 +360,12 @@ impl TypeResolver {
     }
 
     #[inline(always)]
-    pub fn get_type_info_by_msname(
+    pub(crate) fn get_type_info_by_meta_string_name(
         &self,
         namespace: Rc<MetaString>,
         type_name: Rc<MetaString>,
     ) -> Option<Rc<TypeInfo>> {
-        self.type_info_map_by_ms_name
+        self.type_info_map_by_meta_string_name
             .get(&(namespace, type_name))
             .cloned()
     }
@@ -400,7 +400,7 @@ impl TypeResolver {
         type_name: Rc<MetaString>,
     ) -> Option<Rc<Harness>> {
         let key = (namespace, type_name);
-        self.type_info_map_by_ms_name
+        self.type_info_map_by_meta_string_name
             .get(&key)
             .map(|info| Rc::new(info.get_harness().clone()))
     }
@@ -420,7 +420,7 @@ impl TypeResolver {
         type_name: Rc<MetaString>,
     ) -> Result<Rc<Harness>, Error> {
         let key = (namespace, type_name);
-        self.type_info_map_by_ms_name
+        self.type_info_map_by_meta_string_name
             .get(&key)
             .map(|info| Rc::new(info.get_harness().clone()))
             .ok_or_else(|| Error::type_error("named_ext type must be registered in both peers"))
@@ -608,13 +608,13 @@ impl TypeResolver {
             let namespace = &type_info.namespace;
             let type_name = &type_info.type_name;
             let ms_key = (namespace.clone(), type_name.clone());
-            if self.type_info_map_by_ms_name.contains_key(&ms_key) {
+            if self.type_info_map_by_meta_string_name.contains_key(&ms_key) {
                 return Err(Error::invalid_data(format!(
                     "Namespace:{:?} Name:{:?} already registered_by_name",
                     namespace, type_name
                 )));
             }
-            self.type_info_map_by_ms_name
+            self.type_info_map_by_meta_string_name
                 .insert(ms_key, Rc::new(type_info.clone()));
             let string_key = (namespace.original.clone(), type_name.original.clone());
             self.type_info_map_by_name
@@ -777,13 +777,13 @@ impl TypeResolver {
             let namespace = &type_info.namespace;
             let type_name = &type_info.type_name;
             let ms_key = (namespace.clone(), type_name.clone());
-            if self.type_info_map_by_ms_name.contains_key(&ms_key) {
+            if self.type_info_map_by_meta_string_name.contains_key(&ms_key) {
                 return Err(Error::invalid_data(format!(
                     "Namespace:{:?} Name:{:?} already registered_by_name",
                     namespace, type_name
                 )));
             }
-            self.type_info_map_by_ms_name
+            self.type_info_map_by_meta_string_name
                 .insert(ms_key, Rc::new(type_info.clone()));
             let string_key = (namespace.original.clone(), type_name.original.clone());
             self.type_info_map_by_name
