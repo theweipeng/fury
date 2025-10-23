@@ -561,8 +561,6 @@ pub mod buffer_rw_string {
     #[inline]
     pub fn write_utf8_standard(writer: &mut Writer, s: &str) {
         let bytes = s.as_bytes();
-        let len = bytes.len();
-        writer.reserve(len);
         writer.bf.extend_from_slice(bytes);
     }
 

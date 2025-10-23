@@ -18,6 +18,7 @@
 use crate::error::Error;
 use crate::meta::buffer_rw_string::read_latin1_simd;
 use byteorder::{ByteOrder, LittleEndian, WriteBytesExt};
+use std::cmp::max;
 
 /// Threshold for using SIMD optimizations in string operations.
 /// For buffers smaller than this, direct copy is faster than SIMD setup overhead.
@@ -25,18 +26,11 @@ const SIMD_THRESHOLD: usize = 128;
 
 pub struct Writer<'a> {
     pub(crate) bf: &'a mut Vec<u8>,
-    reserved: usize,
-    start: usize,
 }
 impl<'a> Writer<'a> {
     #[inline(always)]
     pub fn from_buffer(bf: &'a mut Vec<u8>) -> Writer<'a> {
-        let start = bf.len();
-        Writer {
-            bf,
-            reserved: 0,
-            start,
-        }
+        Writer { bf }
     }
 
     #[inline(always)]
@@ -61,9 +55,8 @@ impl<'a> Writer<'a> {
 
     #[inline(always)]
     pub fn reserve(&mut self, additional: usize) {
-        self.reserved += additional;
-        if self.bf.capacity() - self.start < self.reserved {
-            self.bf.reserve(self.reserved);
+        if self.bf.capacity() - self.len() < additional {
+            self.bf.reserve(max(additional * 2, self.bf.capacity()));
         }
     }
 
@@ -82,7 +75,6 @@ impl<'a> Writer<'a> {
 
     #[inline(always)]
     pub fn write_bytes(&mut self, v: &[u8]) -> usize {
-        self.reserve(v.len());
         self.bf.extend_from_slice(v);
         v.len()
     }
@@ -298,11 +290,6 @@ impl<'a> Writer<'a> {
     }
 
     #[inline(always)]
-    pub fn wrote_size(&self) -> usize {
-        self.bf.len() - self.start
-    }
-
-    #[inline(always)]
     pub fn write_varuint36_small(&mut self, value: u64) {
         assert!(value < (1u64 << 36), "value too large for 36-bit varint");
         if value < 0x80 {
@@ -353,7 +340,7 @@ pub struct Reader<'a> {
 
 impl<'a> Reader<'a> {
     #[inline(always)]
-    pub fn new(bf: &[u8]) -> Reader<'_> {
+    pub fn new(bf: &[u8]) -> Reader {
         Reader { bf, cursor: 0 }
     }
 

@@ -98,9 +98,9 @@ fn simple_write_continuous() {
     fory.serialize_to(&animal, &mut buffer).unwrap();
 
     let reader = &mut Reader::new(buffer.as_slice());
-    let animal1: Animal1 = fory.deserialize_from(reader).unwrap().0;
-    let animal2: Animal1 = fory.deserialize_from(reader).unwrap().0;
-    let animal3: Animal1 = fory.deserialize_from(reader).unwrap().0;
+    let animal1: Animal1 = fory.deserialize_from(reader).unwrap();
+    let animal2: Animal1 = fory.deserialize_from(reader).unwrap();
+    let animal3: Animal1 = fory.deserialize_from(reader).unwrap();
     let result = vec![animal1, animal2, animal3];
     result.iter().for_each(|x| {
         assert_eq!(animal.f1, x.f1);

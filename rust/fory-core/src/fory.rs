@@ -391,6 +391,7 @@ impl Fory {
         buf: &mut Vec<u8>,
     ) -> Result<usize, Error> {
         let pool = self.get_writer_pool()?;
+        let start = buf.len();
         let mut context = pool.get();
         // Context go from pool would be 'static. but context hold the buffer through `writer` field, so we should make buffer live longer.
         // After serializing, `detach_writer` will be called, the writer in context will be set to dangling pointer.
@@ -398,11 +399,11 @@ impl Fory {
         let outlive_buffer = unsafe { mem::transmute::<&mut Vec<u8>, &mut Vec<u8>>(buf) };
         context.attach_writer(Writer::from_buffer(outlive_buffer));
         let result = self.serialize_with_context(record, &mut context);
-        let wrote_size = context.writer.wrote_size();
+        let written_size = context.writer.len() - start;
         context.detach_writer();
         pool.put(context);
         match result {
-            Ok(_) => Ok(wrote_size),
+            Ok(_) => Ok(written_size),
             Err(err) => Err(err),
         }
     }
@@ -753,9 +754,8 @@ impl Fory {
     pub fn deserialize_from<T: Serializer + ForyDefault>(
         &self,
         reader: &mut Reader,
-    ) -> Result<(T, usize), Error> {
+    ) -> Result<T, Error> {
         let pool = self.get_read_pool()?;
-        let start = reader.get_cursor();
         let mut context = pool.get();
         context.init(self.max_dyn_depth);
         let outlive_buffer = unsafe { mem::transmute::<&[u8], &[u8]>(reader.bf) };
@@ -766,10 +766,7 @@ impl Fory {
         let end = context.detach_reader().get_cursor();
         reader.set_cursor(end);
         pool.put(context);
-        match result {
-            Ok(v) => Ok((v, end - start)),
-            Err(err) => Err(err),
-        }
+        result
     }
 
     fn deserialize_with_context<T: Serializer + ForyDefault>(
