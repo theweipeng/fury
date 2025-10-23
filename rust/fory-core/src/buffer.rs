@@ -26,11 +26,17 @@ const SIMD_THRESHOLD: usize = 128;
 pub struct Writer<'a> {
     pub(crate) bf: &'a mut Vec<u8>,
     reserved: usize,
+    start: usize,
 }
 impl<'a> Writer<'a> {
     #[inline(always)]
     pub fn from_buffer(bf: &'a mut Vec<u8>) -> Writer<'a> {
-        Writer { bf, reserved: 0 }
+        let start = bf.len();
+        Writer {
+            bf,
+            reserved: 0,
+            start,
+        }
     }
 
     #[inline(always)]
@@ -56,7 +62,7 @@ impl<'a> Writer<'a> {
     #[inline(always)]
     pub fn reserve(&mut self, additional: usize) {
         self.reserved += additional;
-        if self.bf.capacity() < self.reserved {
+        if self.bf.capacity() - self.start < self.reserved {
             self.bf.reserve(self.reserved);
         }
     }
@@ -289,6 +295,11 @@ impl<'a> Writer<'a> {
             );
             self.write_u8(u9);
         }
+    }
+
+    #[inline(always)]
+    pub fn wrote_size(&self) -> usize {
+        self.bf.len() - self.start
     }
 
     #[inline(always)]

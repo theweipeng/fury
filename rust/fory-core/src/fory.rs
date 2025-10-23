@@ -385,7 +385,11 @@ impl Fory {
         }
     }
 
-    pub fn serialize_to<T: Serializer>(&self, record: &T, buf: &mut Vec<u8>) -> Result<(), Error> {
+    pub fn serialize_to<T: Serializer>(
+        &self,
+        record: &T,
+        buf: &mut Vec<u8>,
+    ) -> Result<usize, Error> {
         let pool = self.get_writer_pool()?;
         let mut context = pool.get();
         // Context go from pool would be 'static. but context hold the buffer through `writer` field, so we should make buffer live longer.
@@ -394,9 +398,13 @@ impl Fory {
         let outlive_buffer = unsafe { mem::transmute::<&mut Vec<u8>, &mut Vec<u8>>(buf) };
         context.attach_writer(Writer::from_buffer(outlive_buffer));
         let result = self.serialize_with_context(record, &mut context);
+        let wrote_size = context.writer.wrote_size();
         context.detach_writer();
         pool.put(context);
-        result
+        match result {
+            Ok(_) => Ok(wrote_size),
+            Err(err) => Err(err),
+        }
     }
 
     #[inline(always)]
