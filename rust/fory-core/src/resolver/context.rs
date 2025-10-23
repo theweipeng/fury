@@ -361,7 +361,7 @@ impl<'a> ReadContext<'a> {
     }
 
     #[inline(always)]
-    pub fn detach_reader(&mut self) -> Reader {
+    pub fn detach_reader(&mut self) -> Reader<'_> {
         mem::take(&mut self.reader)
     }
 
