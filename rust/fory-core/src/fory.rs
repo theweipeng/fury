@@ -82,8 +82,8 @@ pub struct Fory {
     max_dyn_depth: u32,
     check_struct_version: bool,
     // Lazy-initialized pools (thread-safe, one-time initialization)
-    write_context_pool: OnceLock<Pool<WriteContext>>,
-    read_context_pool: OnceLock<Pool<ReadContext>>,
+    write_context_pool: OnceLock<Pool<Box<WriteContext>>>,
+    read_context_pool: OnceLock<Pool<Box<ReadContext>>>,
 }
 
 impl Default for Fory {
@@ -446,7 +446,7 @@ impl Fory {
 
             let factory = move || {
                 let reader = Reader::new(&[]);
-                ReadContext::new(
+                Box::new(ReadContext::new(
                     reader,
                     type_resolver.clone(),
                     compatible,
@@ -454,7 +454,7 @@ impl Fory {
                     xlang,
                     max_dyn_depth,
                     check_struct_version,
-                )
+                ))
             };
             Pool::new(factory)
         });
@@ -531,7 +531,7 @@ impl Fory {
 
             let factory = move || {
                 let writer = Writer::default();
-                WriteContext::new(
+                Box::new(WriteContext::new(
                     writer,
                     type_resolver.clone(),
                     compatible,
@@ -539,13 +539,12 @@ impl Fory {
                     compress_string,
                     xlang,
                     check_struct_version,
-                )
+                ))
             };
             Pool::new(factory)
         });
         let mut context = pool.get();
         let result = self.serialize_with_context(record, &mut context)?;
-        context.writer.reset();
         pool.put(context);
         Ok(result)
     }
@@ -555,6 +554,7 @@ impl Fory {
         record: &T,
         context: &mut WriteContext,
     ) -> Result<Vec<u8>, Error> {
+        context.writer.attach_buffer(vec![]);
         let is_none = record.fory_is_none();
         self.write_head::<T>(is_none, &mut context.writer);
         let meta_start_offset = context.writer.len();
@@ -568,7 +568,7 @@ impl Fory {
             }
         }
         context.reset();
-        Ok(context.writer.dump())
+        Ok(context.writer.detach_buffer())
     }
 
     /// Registers a struct type with a numeric type ID for serialization.
