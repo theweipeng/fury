@@ -50,22 +50,6 @@ pub struct WriteContext<'a> {
     pub ref_writer: RefWriter,
 }
 
-pub struct WriterDeref<'a>(NonNull<Writer<'a>>);
-
-impl<'a> Deref for WriterDeref<'a> {
-    type Target = Writer<'a>;
-
-    fn deref(&self) -> &Self::Target {
-        unsafe { self.0.as_ref() }
-    }
-}
-
-impl<'a> DerefMut for WriterDeref<'a> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { self.0.as_mut() }
-    }
-}
-
 impl<'a> WriteContext<'a> {
     pub fn new(
         type_resolver: TypeResolver,
