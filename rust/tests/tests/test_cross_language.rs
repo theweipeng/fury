@@ -81,7 +81,8 @@ fn test_buffer() {
     let binary = b"ab";
     assert_eq!(reader.read_bytes(bytes_size).unwrap(), binary);
 
-    let mut writer = Writer::default();
+    let mut buffer = vec![];
+    let mut writer = Writer::from_buffer(&mut buffer);
     writer.write_u8(1);
     writer.write_i8(i8::MAX);
     writer.write_i16(i16::MAX);
@@ -192,7 +193,8 @@ fn test_buffer_var() {
         assert_eq!(expected, value, "varint64 value mismatch");
     }
 
-    let mut writer = Writer::default();
+    let mut buffer = vec![];
+    let mut writer = Writer::from_buffer(&mut buffer);
     for &value in &varint32_values {
         writer.write_varint32(value);
     }
@@ -253,9 +255,8 @@ fn test_string_serializer() {
         assert_eq!(*s, String::fory_read_data(&mut context).unwrap());
         assert_eq!(*s, String::fory_read_data(&mut context_compress).unwrap());
     }
-    let writer = Writer::default();
     let fory = Fory::default().compatible(true).xlang(true);
-    let mut context = WriteContext::new_from_fory(writer, &fory);
+    let mut context = WriteContext::new_from_fory(&fory);
     for s in &test_strings {
         s.fory_write_data(&mut context).unwrap();
     }
@@ -316,8 +317,7 @@ fn test_cross_language_serializer() {
     assert_de!(fory, context, HashMap::<String, String>, str_map);
     assert_de!(fory, context, Color, color);
 
-    let writer = Writer::default();
-    let mut context = WriteContext::new_from_fory(writer, &fory);
+    let mut context = WriteContext::new_from_fory(&fory);
     fory.serialize_with_context(&true, &mut context).unwrap();
     fory.serialize_with_context(&false, &mut context).unwrap();
     fory.serialize_with_context(&-1, &mut context).unwrap();
@@ -460,8 +460,7 @@ fn test_list() {
     let remote_item_list2: Vec<Option<Item>> = fory.deserialize_with_context(&mut context).unwrap();
     assert_eq!(remote_item_list2, item_list2);
 
-    let writer = Writer::default();
-    let mut context = WriteContext::new_from_fory(writer, &fory);
+    let mut context = WriteContext::new_from_fory(&fory);
     fory.serialize_with_context(&remote_str_list, &mut context)
         .unwrap();
     fory.serialize_with_context(&remote_str_list2, &mut context)
@@ -583,8 +582,7 @@ fn test_integer() {
     let remote_f6: Option<i32> = fory.deserialize_with_context(&mut context).unwrap();
     assert_eq!(remote_f6, f6);
 
-    let writer = Writer::default();
-    let mut context = WriteContext::new_from_fory(writer, &fory);
+    let mut context = WriteContext::new_from_fory(&fory);
     fory.serialize_with_context(&remote_item2, &mut context)
         .unwrap();
     fory.serialize_with_context(&remote_f1, &mut context)
@@ -727,8 +725,7 @@ fn test_consistent_named() {
     }
     // assert_eq!(fory.deserialize_with_context::<MyStruct>(&mut context).unwrap(), my_struct);
 
-    let writer = Writer::default();
-    let mut context = WriteContext::new_from_fory(writer, &fory);
+    let mut context = WriteContext::new_from_fory(&fory);
     for _ in 0..3 {
         fory.serialize_with_context(&color, &mut context).unwrap();
     }

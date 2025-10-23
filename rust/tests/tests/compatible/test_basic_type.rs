@@ -16,7 +16,7 @@
 // under the License.
 
 use chrono::{NaiveDate, NaiveDateTime};
-use fory_core::buffer::{Reader, Writer};
+use fory_core::buffer::Reader;
 use fory_core::fory::Fory;
 use fory_core::resolver::context::{ReadContext, WriteContext};
 
@@ -712,8 +712,7 @@ fn deserialize_nullable(fory: &Fory, mut bins: Vec<Vec<u8>>, auto_conv: bool) {
 fn basic() {
     let fory = Fory::default().compatible(true);
     // serialize
-    let writer = Writer::default();
-    let mut write_context = WriteContext::new_from_fory(writer, &fory);
+    let mut write_context = WriteContext::new_from_fory(&fory);
     let bins = serialize_non_null(&fory, &mut write_context);
     // deserialize
     deserialize_non_null(&fory, bins, false);
@@ -724,8 +723,7 @@ fn basic() {
 fn basic_nullable() {
     let fory = Fory::default().compatible(true);
     // serialize
-    let writer = Writer::default();
-    let mut write_context = WriteContext::new_from_fory(writer, &fory);
+    let mut write_context = WriteContext::new_from_fory(&fory);
     let bins = serialize_nullable(&fory, &mut write_context);
     // deserialize
     deserialize_nullable(&fory, bins, false);
@@ -736,13 +734,11 @@ fn basic_nullable() {
 fn auto_conv() {
     let fory = Fory::default().compatible(true);
     // serialize_non-null
-    let writer = Writer::default();
-    let mut write_context = WriteContext::new_from_fory(writer, &fory);
+    let mut write_context = WriteContext::new_from_fory(&fory);
     let bins = serialize_non_null(&fory, &mut write_context);
     deserialize_nullable(&fory, bins, true);
     // serialize_nullable
-    let writer = Writer::default();
-    let mut write_context = WriteContext::new_from_fory(writer, &fory);
+    let mut write_context = WriteContext::new_from_fory(&fory);
     let bins = serialize_nullable(&fory, &mut write_context);
     // deserialize_non-null
     deserialize_non_null(&fory, bins, true);

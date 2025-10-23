@@ -17,7 +17,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use fory_core::buffer::{Reader, Writer};
+use fory_core::buffer::Reader;
 use fory_core::fory::Fory;
 use fory_core::resolver::context::{ReadContext, WriteContext};
 use fory_derive::ForyObject;
@@ -223,8 +223,7 @@ fn complex_container2() -> Vec<HashMap<Vec<Item>, Vec<Item>>> {
 fn container_outer_auto_conv() {
     let fory = Fory::default().compatible(true);
     // serialize_outer_non-null
-    let writer = Writer::default();
-    let mut write_context = WriteContext::new_from_fory(writer, &fory);
+    let mut write_context = WriteContext::new_from_fory(&fory);
     let bytes = fory
         .serialize_with_context(&basic_list(), &mut write_context)
         .unwrap();
@@ -258,8 +257,7 @@ fn container_outer_auto_conv() {
     );
     assert_eq!(read_context.reader.slice_after_cursor().len(), 0);
     // serialize_outer_nullable
-    let writer = Writer::default();
-    let mut write_context = WriteContext::new_from_fory(writer, &fory);
+    let mut write_context = WriteContext::new_from_fory(&fory);
     let mut bins = vec![
         fory.serialize_with_context(&Some(basic_list()), &mut write_context)
             .unwrap(),
@@ -334,8 +332,7 @@ fn collection_inner() {
     fory2.register_by_name::<Item>("item").unwrap();
     for fory in [fory1, fory2] {
         // serialize
-        let writer = Writer::default();
-        let mut write_context = WriteContext::new_from_fory(writer, &fory);
+        let mut write_context = WriteContext::new_from_fory(&fory);
         let mut bins = vec![
             fory.serialize_with_context(&basic_list(), &mut write_context)
                 .unwrap(),
@@ -429,8 +426,7 @@ fn collection_inner_auto_conv() {
     fory2.register_by_name::<Item>("item").unwrap();
     for fory in [fory1, fory2] {
         // serialize_non_null
-        let writer = Writer::default();
-        let mut write_context = WriteContext::new_from_fory(writer, &fory);
+        let mut write_context = WriteContext::new_from_fory(&fory);
         let mut bins = vec![
             fory.serialize_with_context(&basic_list(), &mut write_context)
                 .unwrap(),
@@ -474,8 +470,7 @@ fn collection_inner_auto_conv() {
             .unwrap()
         );
         // serialize_nullable
-        let writer = Writer::default();
-        let mut write_context = WriteContext::new_from_fory(writer, &fory);
+        let mut write_context = WriteContext::new_from_fory(&fory);
         let mut bins = vec![
             fory.serialize_with_context(&nullable_basic_list(false), &mut write_context)
                 .unwrap(),
@@ -531,8 +526,7 @@ fn map_inner() {
     fory2.register_by_name::<Item>("item").unwrap();
     for fory in [fory1, fory2] {
         // serialize
-        let writer = Writer::default();
-        let mut write_context = WriteContext::new_from_fory(writer, &fory);
+        let mut write_context = WriteContext::new_from_fory(&fory);
         let bytes = fory
             .serialize_with_context(&basic_map(), &mut write_context)
             .unwrap();
@@ -587,8 +581,7 @@ fn map_inner_auto_conv() {
     fory2.register_by_name::<Item>("item").unwrap();
     for fory in [fory1, fory2] {
         // serialize_non_null
-        let writer = Writer::default();
-        let mut write_context = WriteContext::new_from_fory(writer, &fory);
+        let mut write_context = WriteContext::new_from_fory(&fory);
         let bytes = fory
             .serialize_with_context(&basic_map(), &mut write_context)
             .unwrap();
@@ -615,8 +608,7 @@ fn map_inner_auto_conv() {
         );
         assert_eq!(read_context.reader.slice_after_cursor().len(), 0);
         // serialize_nullable
-        let writer = Writer::default();
-        let mut write_context = WriteContext::new_from_fory(writer, &fory);
+        let mut write_context = WriteContext::new_from_fory(&fory);
         let bytes = fory
             .serialize_with_context(&nullable_basic_map(false), &mut write_context)
             .unwrap();
@@ -650,8 +642,7 @@ fn complex() {
     let mut fory2 = Fory::default().compatible(true);
     fory2.register_by_name::<Item>("item").unwrap();
     for fory in [fory1, fory2] {
-        let writer = Writer::default();
-        let mut write_context = WriteContext::new_from_fory(writer, &fory);
+        let mut write_context = WriteContext::new_from_fory(&fory);
         let mut bins = vec![
             fory.serialize_with_context(&nested_collection(), &mut write_context)
                 .unwrap(),

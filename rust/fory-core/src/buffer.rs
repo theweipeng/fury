@@ -24,22 +24,13 @@ use std::slice;
 /// For buffers smaller than this, direct copy is faster than SIMD setup overhead.
 const SIMD_THRESHOLD: usize = 128;
 
-#[derive(Default)]
-pub struct Writer {
-    pub(crate) bf: Vec<u8>,
+pub struct Writer<'a> {
+    pub(crate) bf: &'a mut Vec<u8>,
     reserved: usize,
 }
-
-impl Writer {
-    #[inline(always)]
-    pub fn attach_buffer(&mut self, bf: Vec<u8>) {
-        self.reserved = 0;
-        self.bf = bf;
-    }
-
-    #[inline(always)]
-    pub fn detach_buffer(&mut self) -> Vec<u8> {
-        std::mem::take(&mut self.bf)
+impl<'a> Writer<'a> {
+    pub fn from_buffer(bf: &'a mut Vec<u8>) -> Writer<'a> {
+        Writer { bf, reserved: 0 }
     }
 
     #[inline(always)]

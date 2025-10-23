@@ -16,6 +16,8 @@
 // under the License.
 
 use crate::buffer::{Reader, Writer};
+use std::ops::{Deref, DerefMut};
+use std::ptr::NonNull;
 
 use crate::error::Error;
 use crate::fory::Fory;
@@ -30,7 +32,7 @@ use std::rc::Rc;
 
 /// Serialization state container used on a single thread at a time.
 /// Sharing the same instance across threads simultaneously causes undefined behavior.
-pub struct WriteContext {
+pub struct WriteContext<'a> {
     // Replicated environment fields (direct access, no Arc indirection for flags)
     type_resolver: TypeResolver,
     compatible: bool,
@@ -40,22 +42,37 @@ pub struct WriteContext {
     check_struct_version: bool,
 
     // Context-specific fields
-    pub writer: Writer,
+    pub writer: WriterDeref<'a>,
     meta_resolver: MetaWriterResolver,
     meta_string_resolver: MetaStringWriterResolver,
     pub ref_writer: RefWriter,
 }
 
-impl WriteContext {
+pub struct WriterDeref<'a>(NonNull<Writer<'a>>);
+
+impl<'a> Deref for WriterDeref<'a> {
+    type Target = Writer<'a>;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { self.0.as_ref() }
+    }
+}
+
+impl<'a> DerefMut for WriterDeref<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { self.0.as_mut() }
+    }
+}
+
+impl<'a> WriteContext<'a> {
     pub fn new(
-        writer: Writer,
         type_resolver: TypeResolver,
         compatible: bool,
         share_meta: bool,
         compress_string: bool,
         xlang: bool,
         check_struct_version: bool,
-    ) -> WriteContext {
+    ) -> WriteContext<'a> {
         WriteContext {
             type_resolver,
             compatible,
@@ -63,22 +80,30 @@ impl WriteContext {
             compress_string,
             xlang,
             check_struct_version,
-            writer,
+            writer: WriterDeref(NonNull::dangling()),
             meta_resolver: MetaWriterResolver::default(),
             meta_string_resolver: MetaStringWriterResolver::default(),
             ref_writer: RefWriter::new(),
         }
     }
 
-    pub fn new_from_fory(writer: Writer, fory: &Fory) -> WriteContext {
+    pub fn attach_writer(&mut self, writer: &mut Writer<'a>) {
+        self.writer = WriterDeref(NonNull::new(writer).unwrap())
+    }
+
+    pub fn detach_writer(&mut self) {
+        self.writer = WriterDeref(NonNull::dangling());
+    }
+
+    pub fn new_from_fory(fory: &Fory) -> WriteContext {
         WriteContext {
+            writer: WriterDeref(NonNull::dangling()),
             type_resolver: fory.get_type_resolver().clone(),
             compatible: fory.is_compatible(),
             share_meta: fory.is_share_meta(),
             compress_string: fory.is_compress_string(),
             xlang: fory.is_xlang(),
             check_struct_version: fory.is_check_struct_version(),
-            writer,
             meta_resolver: MetaWriterResolver::default(),
             meta_string_resolver: MetaStringWriterResolver::default(),
             ref_writer: RefWriter::new(),
@@ -138,10 +163,9 @@ impl WriteContext {
 
     #[inline(always)]
     pub fn write_meta(&mut self, offset: usize) {
-        self.writer.set_bytes(
-            offset,
-            &((self.writer.len() - offset - 4) as u32).to_le_bytes(),
-        );
+        let len = self.writer.len();
+        self.writer
+            .set_bytes(offset, &((len - offset - 4) as u32).to_le_bytes());
         self.meta_resolver.to_bytes(&mut self.writer);
     }
 
@@ -207,8 +231,8 @@ impl WriteContext {
 // ensures single-threaded access while the context is in use. Users must never hold the same
 // instance on multiple threads simultaneously; that would violate the invariants and result in
 // undefined behavior. Under that assumption, marking it Send/Sync is sound.
-unsafe impl Send for WriteContext {}
-unsafe impl Sync for WriteContext {}
+unsafe impl<'a> Send for WriteContext<'a> {}
+unsafe impl<'a> Sync for WriteContext<'a> {}
 
 /// Deserialization state container used on a single thread at a time.
 /// Sharing the same instance across threads simultaneously causes undefined behavior.
