@@ -718,7 +718,7 @@ impl Fory {
 
     fn get_read_pool(&self) -> Result<&Pool<Box<ReadContext<'static>>>, Error> {
         let pool_result = self.read_context_pool.get_or_init(|| {
-            let type_resolver = self.type_resolver.clone();
+            let type_resolver = self.type_resolver.build_final_type_resolver()?;
             let compatible = self.compatible;
             let share_meta = self.share_meta;
             let xlang = self.xlang;

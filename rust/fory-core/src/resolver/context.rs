@@ -355,10 +355,12 @@ impl<'a> ReadContext<'a> {
         self.current_depth = 0;
     }
 
+    #[inline(always)]
     pub fn attach_reader(&mut self, reader: Reader<'a>) {
         self.reader = reader;
     }
 
+    #[inline(always)]
     pub fn detach_reader(&mut self) -> Reader {
         mem::take(&mut self.reader)
     }
