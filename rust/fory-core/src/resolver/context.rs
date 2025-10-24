@@ -466,13 +466,21 @@ impl<T> Pool<T> {
     }
 
     #[inline(always)]
-    pub fn get(&self) -> T {
+    pub fn borrow_mut<Result>(&self, handler: impl FnOnce(&mut T) -> Result) -> Result {
+        let mut obj = self.get();
+        let result = handler(&mut obj);
+        self.put(obj);
+        result
+    }
+
+    #[inline(always)]
+    fn get(&self) -> T {
         self.items.lock().pop().unwrap_or_else(|| (self.factory)())
     }
 
     // put back manually
     #[inline(always)]
-    pub fn put(&self, item: T) {
+    fn put(&self, item: T) {
         self.items.lock().push(item);
     }
 }
