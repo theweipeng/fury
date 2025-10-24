@@ -84,7 +84,7 @@ pub struct Fory {
     check_struct_version: bool,
     // Lazy-initialized pools (thread-safe, one-time initialization)
     write_context_pool: OnceLock<Result<Pool<Box<WriteContext<'static>>>, Error>>,
-    read_context_pool: OnceLock<Result<Pool<Box<ReadContext>>, Error>>,
+    read_context_pool: OnceLock<Result<Pool<Box<ReadContext<'static>>>, Error>>,
 }
 
 impl Default for Fory {
@@ -385,8 +385,13 @@ impl Fory {
         }
     }
 
-    pub fn serialize_to<T: Serializer>(&self, record: &T, buf: &mut Vec<u8>) -> Result<(), Error> {
+    pub fn serialize_to<T: Serializer>(
+        &self,
+        record: &T,
+        buf: &mut Vec<u8>,
+    ) -> Result<usize, Error> {
         let pool = self.get_writer_pool()?;
+        let start = buf.len();
         let mut context = pool.get();
         // Context go from pool would be 'static. but context hold the buffer through `writer` field, so we should make buffer live longer.
         // After serializing, `detach_writer` will be called, the writer in context will be set to dangling pointer.
@@ -394,9 +399,13 @@ impl Fory {
         let outlive_buffer = unsafe { mem::transmute::<&mut Vec<u8>, &mut Vec<u8>>(buf) };
         context.attach_writer(Writer::from_buffer(outlive_buffer));
         let result = self.serialize_with_context(record, &mut context);
+        let written_size = context.writer.len() - start;
         context.detach_writer();
         pool.put(context);
-        result
+        match result {
+            Ok(_) => Ok(written_size),
+            Err(err) => Err(err),
+        }
     }
 
     #[inline(always)]
@@ -705,6 +714,37 @@ impl Fory {
     /// let deserialized: Point = fory.deserialize(&bytes).unwrap();
     /// ```
     pub fn deserialize<T: Serializer + ForyDefault>(&self, bf: &[u8]) -> Result<T, Error> {
+        let pool = self.get_read_pool()?;
+        let mut context = pool.get();
+        context.init(self.max_dyn_depth);
+        let outlive_buffer = unsafe { mem::transmute::<&[u8], &[u8]>(bf) };
+        context.attach_reader(Reader::new(outlive_buffer));
+        let result = self.deserialize_with_context(&mut context);
+        context.detach_reader();
+        pool.put(context);
+        result
+    }
+
+    pub fn deserialize_from<T: Serializer + ForyDefault>(
+        &self,
+        reader: &mut Reader,
+    ) -> Result<T, Error> {
+        let pool = self.get_read_pool()?;
+        let mut context = pool.get();
+        context.init(self.max_dyn_depth);
+        let outlive_buffer = unsafe { mem::transmute::<&[u8], &[u8]>(reader.bf) };
+        let mut new_reader = Reader::new(outlive_buffer);
+        new_reader.set_cursor(reader.cursor);
+        context.attach_reader(new_reader);
+        let result = self.deserialize_with_context(&mut context);
+        let end = context.detach_reader().get_cursor();
+        reader.set_cursor(end);
+        pool.put(context);
+        result
+    }
+
+    #[inline(always)]
+    fn get_read_pool(&self) -> Result<&Pool<Box<ReadContext<'static>>>, Error> {
         let pool_result = self.read_context_pool.get_or_init(|| {
             let type_resolver = self.type_resolver.build_final_type_resolver()?;
             let compatible = self.compatible;
@@ -714,9 +754,7 @@ impl Fory {
             let check_struct_version = self.check_struct_version;
 
             let factory = move || {
-                let reader = Reader::new(&[]);
                 Box::new(ReadContext::new(
-                    reader,
                     type_resolver.clone(),
                     compatible,
                     share_meta,
@@ -727,21 +765,13 @@ impl Fory {
             };
             Ok(Pool::new(factory))
         });
-        let pool = pool_result
+        pool_result
             .as_ref()
-            .map_err(|e| Error::type_error(format!("Failed to build type resolver: {}", e)))?;
-        let mut context = pool.get();
-        context.init(bf, self.max_dyn_depth);
-        let result = self.deserialize_with_context(&mut context);
-        if result.is_ok() {
-            assert_eq!(context.reader.slice_after_cursor().len(), 0);
-        }
-        context.reader.reset();
-        pool.put(context);
-        result
+            .map_err(|e| Error::type_error(format!("Failed to build type resolver: {}", e)))
     }
 
-    pub fn deserialize_with_context<T: Serializer + ForyDefault>(
+    #[inline(always)]
+    fn deserialize_with_context<T: Serializer + ForyDefault>(
         &self,
         context: &mut ReadContext,
     ) -> Result<T, Error> {
