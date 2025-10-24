@@ -226,20 +226,16 @@ fn test_murmurhash3() {
 fn test_string_serializer() {
     let data_file_path = get_data_file();
     let bytes = fs::read(&data_file_path).unwrap();
-    let reader = Reader::new(bytes.as_slice());
+    let mut reader = Reader::new(bytes.as_slice());
     let fory = Fory::default()
         .compatible(true)
         .xlang(true)
         .compress_string(false);
-    let mut context = ReadContext::new_from_fory(&fory);
-    context.attach_reader(reader);
-    let reader_compress = Reader::new(bytes.as_slice());
+    let mut reader_compress = Reader::new(bytes.as_slice());
     let fory_compress = Fory::default()
         .compatible(true)
         .xlang(true)
         .compress_string(true);
-    let mut context_compress = ReadContext::new_from_fory(&fory_compress);
-    context_compress.attach_reader(reader_compress);
     let test_strings: Vec<String> = vec![
         // Latin1
         "ab".to_string(),
@@ -253,21 +249,25 @@ fn test_string_serializer() {
         "Hello, 世界".to_string(),
     ];
     for s in &test_strings {
-        // make is_field=true to skip read/write type_id
-        assert_eq!(*s, String::fory_read_data(&mut context).unwrap());
-        assert_eq!(*s, String::fory_read_data(&mut context_compress).unwrap());
+        assert_eq!(*s, fory.deserialize_from::<String>(&mut reader).unwrap());
+        assert_eq!(
+            *s,
+            fory_compress
+                .deserialize_from::<String>(&mut reader_compress)
+                .unwrap()
+        );
     }
     let fory = Fory::default().compatible(true).xlang(true);
-    let mut context = WriteContext::new_from_fory(&fory);
+    let mut buf = Vec::new();
     for s in &test_strings {
-        s.fory_write_data(&mut context).unwrap();
+        fory.serialize_to(s, &mut buf).unwrap();
     }
-    fs::write(&data_file_path, context.writer.dump()).unwrap();
+    fs::write(&data_file_path, buf).unwrap();
 }
 
 macro_rules! assert_de {
     ($fory:expr, $reader:expr, $ty:ty, $expected:expr) => {{
-        let v: $ty = ($fory.deserialize_from(&mut $reader).unwrap());
+        let v: $ty = $fory.deserialize_from(&mut $reader).unwrap();
         assert_eq!(v, $expected);
     }};
 }
@@ -318,34 +318,34 @@ fn test_cross_language_serializer() {
     assert_de!(fory, reader, HashMap::<String, String>, str_map);
     assert_de!(fory, reader, Color, color);
 
-    let context = WriteContext::new_from_fory(&fory);
-    fory.serialize(&true).unwrap();
-    fory.serialize(&false).unwrap();
-    fory.serialize(&-1).unwrap();
-    fory.serialize(&i8::MAX).unwrap();
-    fory.serialize(&i8::MIN).unwrap();
-    fory.serialize(&i16::MAX).unwrap();
-    fory.serialize(&i16::MIN).unwrap();
-    fory.serialize(&i32::MAX).unwrap();
-    fory.serialize(&i32::MIN).unwrap();
-    fory.serialize(&i64::MAX).unwrap();
-    fory.serialize(&i64::MIN).unwrap();
-    fory.serialize(&-1f32).unwrap();
-    fory.serialize(&-1f64).unwrap();
-    fory.serialize(&"str".to_string()).unwrap();
-    fory.serialize(&day).unwrap();
-    fory.serialize(&instant).unwrap();
-    fory.serialize(&vec![true, false]).unwrap();
-    fory.serialize(&vec![1, i16::MAX]).unwrap();
-    fory.serialize(&vec![1, i32::MAX]).unwrap();
-    fory.serialize(&vec![1, i64::MAX]).unwrap();
-    fory.serialize(&vec![1f32, 2f32]).unwrap();
-    fory.serialize(&vec![1f64, 2f64]).unwrap();
-    fory.serialize(&str_list).unwrap();
-    fory.serialize(&str_set).unwrap();
-    fory.serialize(&str_map).unwrap();
-    fory.serialize(&color).unwrap();
-    fs::write(&data_file_path, context.writer.dump()).unwrap();
+    let mut buf = Vec::new();
+    fory.serialize_to(&true, &mut buf).unwrap();
+    fory.serialize_to(&false, &mut buf).unwrap();
+    fory.serialize_to(&-1, &mut buf).unwrap();
+    fory.serialize_to(&i8::MAX, &mut buf).unwrap();
+    fory.serialize_to(&i8::MIN, &mut buf).unwrap();
+    fory.serialize_to(&i16::MAX, &mut buf).unwrap();
+    fory.serialize_to(&i16::MIN, &mut buf).unwrap();
+    fory.serialize_to(&i32::MAX, &mut buf).unwrap();
+    fory.serialize_to(&i32::MIN, &mut buf).unwrap();
+    fory.serialize_to(&i64::MAX, &mut buf).unwrap();
+    fory.serialize_to(&i64::MIN, &mut buf).unwrap();
+    fory.serialize_to(&-1f32, &mut buf).unwrap();
+    fory.serialize_to(&-1f64, &mut buf).unwrap();
+    fory.serialize_to(&"str".to_string(), &mut buf).unwrap();
+    fory.serialize_to(&day, &mut buf).unwrap();
+    fory.serialize_to(&instant, &mut buf).unwrap();
+    fory.serialize_to(&vec![true, false], &mut buf).unwrap();
+    fory.serialize_to(&vec![1, i16::MAX], &mut buf).unwrap();
+    fory.serialize_to(&vec![1, i32::MAX], &mut buf).unwrap();
+    fory.serialize_to(&vec![1, i64::MAX], &mut buf).unwrap();
+    fory.serialize_to(&vec![1f32, 2f32], &mut buf).unwrap();
+    fory.serialize_to(&vec![1f64, 2f64], &mut buf).unwrap();
+    fory.serialize_to(&str_list, &mut buf).unwrap();
+    fory.serialize_to(&str_set, &mut buf).unwrap();
+    fory.serialize_to(&str_map, &mut buf).unwrap();
+    fory.serialize_to(&color, &mut buf).unwrap();
+    fs::write(&data_file_path, buf).unwrap();
 }
 
 #[test]
@@ -418,9 +418,10 @@ fn test_list() {
     let data_file_path = get_data_file();
     let bytes = fs::read(&data_file_path).unwrap();
 
-    let mut fory = Fory::default().compatible(true);
+    let mut fory = Fory::default().compatible(true).xlang(true);
     fory.register::<Item>(102).unwrap();
     let mut reader = Reader::new(bytes.as_slice());
+
     let str_list = vec![Some("a".to_string()), Some("b".to_string())];
     let str_list2 = vec![None, Some("b".to_string())];
     let item = Item {
@@ -444,13 +445,13 @@ fn test_list() {
     let remote_item_list2: Vec<Option<Item>> = fory.deserialize_from(&mut reader).unwrap();
     assert_eq!(remote_item_list2, item_list2);
 
-    let context = WriteContext::new_from_fory(&fory);
-    fory.serialize(&remote_str_list).unwrap();
-    fory.serialize(&remote_str_list2).unwrap();
-    fory.serialize(&remote_item_list).unwrap();
-    fory.serialize(&remote_item_list2).unwrap();
+    let mut buf = Vec::new();
+    fory.serialize_to(&remote_str_list, &mut buf).unwrap();
+    fory.serialize_to(&remote_str_list2, &mut buf).unwrap();
+    fory.serialize_to(&remote_item_list, &mut buf).unwrap();
+    fory.serialize_to(&remote_item_list2, &mut buf).unwrap();
 
-    fs::write(&data_file_path, context.writer.dump()).unwrap();
+    fs::write(&data_file_path, buf).unwrap();
 }
 
 #[test]
@@ -459,7 +460,7 @@ fn test_map() {
     let data_file_path = get_data_file();
     let bytes = fs::read(&data_file_path).unwrap();
 
-    let mut fory = Fory::default().compatible(true);
+    let mut fory = Fory::default().compatible(true).xlang(true);
     fory.register::<Item>(102).unwrap();
     let mut reader = Reader::new(bytes.as_slice());
 
@@ -527,7 +528,7 @@ fn test_integer() {
     let data_file_path = get_data_file();
     let bytes = fs::read(&data_file_path).unwrap();
 
-    let mut fory = Fory::default().compatible(true);
+    let mut fory = Fory::default().compatible(true).xlang(true);
     fory.register::<Item2>(101).unwrap();
     let mut reader = Reader::new(bytes.as_slice());
     let f1 = 1;
@@ -560,15 +561,15 @@ fn test_integer() {
     let remote_f6: Option<i32> = fory.deserialize_from(&mut reader).unwrap();
     assert_eq!(remote_f6, f6);
 
-    let context = WriteContext::new_from_fory(&fory);
-    fory.serialize(&remote_item2).unwrap();
-    fory.serialize(&remote_f1).unwrap();
-    fory.serialize(&remote_f2).unwrap();
-    fory.serialize(&remote_f3).unwrap();
-    fory.serialize(&remote_f4).unwrap();
-    fory.serialize(&remote_f5).unwrap();
-    fory.serialize(&remote_f6).unwrap();
-    fs::write(&data_file_path, context.writer.dump()).unwrap();
+    let mut buf = Vec::new();
+    fory.serialize_to(&remote_item2, &mut buf).unwrap();
+    fory.serialize_to(&remote_f1, &mut buf).unwrap();
+    fory.serialize_to(&remote_f2, &mut buf).unwrap();
+    fory.serialize_to(&remote_f3, &mut buf).unwrap();
+    fory.serialize_to(&remote_f4, &mut buf).unwrap();
+    fory.serialize_to(&remote_f5, &mut buf).unwrap();
+    fory.serialize_to(&remote_f6, &mut buf).unwrap();
+    fs::write(&data_file_path, buf).unwrap();
 }
 
 #[derive(ForyObject, Debug, PartialEq)]
@@ -581,13 +582,11 @@ struct MyExt {
 }
 impl Serializer for MyExt {
     fn fory_write_data(&self, context: &mut WriteContext) -> Result<(), fory_core::error::Error> {
-        // set is_field=false to write type_id like in java
         write_data(&self.id, context)
     }
 
     fn fory_read_data(context: &mut ReadContext) -> Result<Self, Error> {
         Ok(Self {
-            // set is_field=false to write type_id like in java
             id: read_data(context)?,
         })
     }
@@ -634,10 +633,10 @@ fn _test_skip_custom(fory1: &Fory, fory2: &Fory) {
 #[test]
 #[ignore]
 fn test_skip_id_custom() {
-    let mut fory1 = Fory::default().compatible(true);
+    let mut fory1 = Fory::default().compatible(true).xlang(true);
     fory1.register_serializer::<MyExt>(103).unwrap();
     fory1.register::<Empty>(104).unwrap();
-    let mut fory2 = Fory::default().compatible(true);
+    let mut fory2 = Fory::default().compatible(true).xlang(true);
     fory2.register::<Color>(101).unwrap();
     fory2.register::<MyStruct>(102).unwrap();
     fory2.register_serializer::<MyExt>(103).unwrap();
@@ -648,12 +647,12 @@ fn test_skip_id_custom() {
 #[test]
 #[ignore]
 fn test_skip_name_custom() {
-    let mut fory1 = Fory::default().compatible(true);
+    let mut fory1 = Fory::default().compatible(true).xlang(true);
     fory1
         .register_serializer_by_name::<MyExt>("my_ext")
         .unwrap();
     fory1.register_by_name::<Empty>("my_wrapper").unwrap();
-    let mut fory2 = Fory::default().compatible(true);
+    let mut fory2 = Fory::default().compatible(true).xlang(true);
     fory2.register_by_name::<Color>("color").unwrap();
     fory2.register_by_name::<MyStruct>("my_struct").unwrap();
     fory2
@@ -666,13 +665,13 @@ fn test_skip_name_custom() {
 #[test]
 #[ignore]
 fn test_consistent_named() {
-    let mut fory = Fory::default().compatible(false);
+    let mut fory = Fory::default().compatible(false).xlang(true);
     fory.register_by_name::<Color>("color").unwrap();
     fory.register_by_name::<MyStruct>("my_struct").unwrap();
     fory.register_serializer_by_name::<MyExt>("my_ext").unwrap();
 
     let color = Color::White;
-    let _my_struct = MyStruct { id: 42 };
+    let my_struct = MyStruct { id: 42 };
     let my_ext = MyExt { id: 43 };
 
     let data_file_path = get_data_file();
@@ -683,20 +682,25 @@ fn test_consistent_named() {
         assert_eq!(fory.deserialize_from::<Color>(&mut reader).unwrap(), color);
     }
     for _ in 0..3 {
+        assert_eq!(
+            fory.deserialize_from::<MyStruct>(&mut reader).unwrap(),
+            my_struct
+        );
+    }
+    for _ in 0..3 {
         assert_eq!(fory.deserialize_from::<MyExt>(&mut reader).unwrap(), my_ext);
     }
-    // assert_eq!(fory.deserialize::<MyStruct>(&mut context).unwrap(), my_struct);
-
-    let context = WriteContext::new_from_fory(&fory);
+    let mut buf = Vec::new();
     for _ in 0..3 {
-        fory.serialize(&color).unwrap();
+        fory.serialize_to(&color, &mut buf).unwrap();
     }
     for _ in 0..3 {
-        fory.serialize(&my_ext).unwrap();
+        fory.serialize_to(&my_struct, &mut buf).unwrap();
     }
-    // // todo: checkVersion
-    // // fory.serialize(&my_struct, &mut context);
-    fs::write(&data_file_path, context.writer.dump()).unwrap();
+    for _ in 0..3 {
+        fory.serialize_to(&my_ext, &mut buf).unwrap();
+    }
+    fs::write(&data_file_path, buf).unwrap();
 }
 
 #[derive(ForyObject, Debug, PartialEq)]

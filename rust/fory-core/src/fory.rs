@@ -335,11 +335,6 @@ impl Fory {
         self.check_struct_version
     }
 
-    /// Returns a type resolver for type lookups.
-    pub(crate) fn get_type_resolver(&self) -> &TypeResolver {
-        &self.type_resolver
-    }
-
     /// Serializes a value of type `T` into a byte vector.
     ///
     /// # Type Parameters
