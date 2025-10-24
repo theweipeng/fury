@@ -371,9 +371,15 @@ impl Fory {
         let pool = self.get_writer_pool()?;
         pool.borrow_mut(
             |context| match self.serialize_with_context(record, context) {
-                let result = context.writer.dump();
-                context.writer.reset();
-                result
+                Ok(_) => {
+                    let result = context.writer.dump();
+                    context.writer.reset();
+                    Ok(result)
+                }
+                Err(err) => {
+                    context.writer.reset();
+                    Err(err)
+                }
             },
         )
     }
