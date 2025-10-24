@@ -244,7 +244,7 @@ unsafe impl<'a> Sync for WriteContext<'a> {}
 
 /// Deserialization state container used on a single thread at a time.
 /// Sharing the same instance across threads simultaneously causes undefined behavior.
-pub struct ReadContext {
+pub struct ReadContext<'a> {
     // Replicated environment fields (direct access, no Arc indirection for flags)
     type_resolver: TypeResolver,
     compatible: bool,
@@ -254,7 +254,7 @@ pub struct ReadContext {
     check_struct_version: bool,
 
     // Context-specific fields
-    pub reader: Reader,
+    pub reader: Reader<'a>,
     pub meta_resolver: MetaReaderResolver,
     meta_string_resolver: MetaStringReaderResolver,
     pub ref_reader: RefReader,
@@ -265,19 +265,18 @@ pub struct ReadContext {
 // single-threaded use. Concurrent access to the same instance across threads is forbidden and
 // would result in undefined behavior. With exclusive use guaranteed, the Send/Sync markers are safe
 // even though Rc is used internally.
-unsafe impl Send for ReadContext {}
-unsafe impl Sync for ReadContext {}
+unsafe impl<'a> Send for ReadContext<'a> {}
+unsafe impl<'a> Sync for ReadContext<'a> {}
 
-impl ReadContext {
+impl<'a> ReadContext<'a> {
     pub fn new(
-        reader: Reader,
         type_resolver: TypeResolver,
         compatible: bool,
         share_meta: bool,
         xlang: bool,
         max_dyn_depth: u32,
         check_struct_version: bool,
-    ) -> ReadContext {
+    ) -> ReadContext<'a> {
         ReadContext {
             type_resolver,
             compatible,
@@ -285,7 +284,7 @@ impl ReadContext {
             xlang,
             max_dyn_depth,
             check_struct_version,
-            reader,
+            reader: Reader::default(),
             meta_resolver: MetaReaderResolver::default(),
             meta_string_resolver: MetaStringReaderResolver::default(),
             ref_reader: RefReader::new(),
@@ -295,7 +294,7 @@ impl ReadContext {
 
     /// Test method to create ReadContext from Fory instance
     /// Will be removed in future releases, do not use it in production code
-    pub fn new_from_fory(reader: Reader, fory: &Fory) -> ReadContext {
+    pub fn new_from_fory(fory: &Fory) -> ReadContext<'a> {
         ReadContext {
             type_resolver: fory
                 .get_type_resolver()
@@ -306,7 +305,7 @@ impl ReadContext {
             xlang: fory.is_xlang(),
             max_dyn_depth: fory.get_max_dyn_depth(),
             check_struct_version: fory.is_check_struct_version(),
-            reader,
+            reader: Reader::default(),
             meta_resolver: MetaReaderResolver::default(),
             meta_string_resolver: MetaStringReaderResolver::default(),
             ref_reader: RefReader::new(),
@@ -351,10 +350,19 @@ impl ReadContext {
     }
 
     #[inline(always)]
-    pub fn init(&mut self, bytes: &[u8], max_dyn_depth: u32) {
-        self.reader.init(bytes);
+    pub fn init(&mut self, max_dyn_depth: u32) {
         self.max_dyn_depth = max_dyn_depth;
         self.current_depth = 0;
+    }
+
+    #[inline(always)]
+    pub fn attach_reader(&mut self, reader: Reader<'a>) {
+        self.reader = reader;
+    }
+
+    #[inline(always)]
+    pub fn detach_reader(&mut self) -> Reader<'_> {
+        mem::take(&mut self.reader)
     }
 
     #[inline(always)]
