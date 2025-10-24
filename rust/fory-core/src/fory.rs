@@ -384,7 +384,7 @@ impl Fory {
         )
     }
 
-        /// Serializes a value of type `T` into the provided byte buffer.
+    /// Serializes a value of type `T` into the provided byte buffer.
     ///
     /// The serialized data is appended to the end of the buffer by default.
     /// To write from a specific position, resize the buffer before calling this method.
