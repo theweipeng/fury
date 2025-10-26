@@ -26,43 +26,43 @@ python benchmark_report.py --log-file cargo_bench.log --output-dir=report_output
 **company**
 
 <p align="center">
-<img src="../../docs/benchmarks/rust/company.png" width="90%">
+<img src="company.png" width="90%">
 </p>
 
 **ecommerce_data**
 
 <p align="center">
-<img src="../../docs/benchmarks/rust/ecommerce_data.png" width="90%">
+<img src="ecommerce_data.png" width="90%">
 </p>
 
 **person**
 
 <p align="center">
-<img src="../../docs/benchmarks/rust/person.png" width="90%">
+<img src="person.png" width="90%">
 </p>
 
 **simple_list**
 
 <p align="center">
-<img src="../../docs/benchmarks/rust/simple_list.png" width="90%">
+<img src="simple_list.png" width="90%">
 </p>
 
 **simple_map**
 
 <p align="center">
-<img src="../../docs/benchmarks/rust/simple_map.png" width="90%">
+<img src="simple_map.png" width="90%">
 </p>
 
 **simple_struct**
 
 <p align="center">
-<img src="../../docs/benchmarks/rust/simple_struct.png" width="90%">
+<img src="simple_struct.png" width="90%">
 </p>
 
 **system_data**
 
 <p align="center">
-<img src="../../docs/benchmarks/rust/system_data.png" width="90%">
+<img src="system_data.png" width="90%">
 </p>
 
 ### Serialize Results (sorted by fastest TPS)
@@ -116,37 +116,3 @@ python benchmark_report.py --log-file cargo_bench.log --output-dir=report_output
 | system_data    | large  | deserialize | 961        | 634        | 706          | fory    |
 | company        | large  | deserialize | 836        | 623        | 623          | fory    |
 | ecommerce_data | large  | deserialize | 298        | 204        | 217          | fory    |
-
-## How to generate flamegraph
-
-```bash
-cargo flamegraph --bin fory_profiler -- --operation deserialize --serializer fory -t e-commerce-data
-```
-
-detailed command:
-
-```bash
-cd benches
-rm -rf cargo-flamegraph.trace
-export CARGO_PROFILE_RELEASE_DEBUG=true &&
-cargo flamegraph \
-  --inverted \
-  --deterministic \
-  --palette rust \
-  --min-width 0.05 \
-  --bin fory_profiler -- \
-  --operation deserialize \
-  --serializer fory
-```
-
-## How to run benchmarks
-
-```bash
-cargo bench
-```
-
-To run only a specific benchmark group, you can use a command like
-
-```bash
-cargo bench --bench serialization_bench -- simple_struct
-```
