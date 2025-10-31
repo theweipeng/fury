@@ -81,7 +81,17 @@ pub enum TypeId {
     FLOAT64_ARRAY = 37,
     ARROW_RECORD_BATCH = 38,
     ARROW_TABLE = 39,
-    UNKNOWN = 63,
+    U8 = 64,
+    U16 = 65,
+    U32 = 66,
+    U64 = 67,
+    VAR_U32 = 68,
+    VAR_U64 = 69,
+    SLI_U64 = 70,
+    U16_ARRAY = 71,
+    U32_ARRAY = 72,
+    U64_ARRAY = 73,
+    UNKNOWN = 74,
 }
 
 pub const BOOL: u32 = TypeId::BOOL as u32;
@@ -123,6 +133,16 @@ pub const FLOAT32_ARRAY: u32 = TypeId::FLOAT32_ARRAY as u32;
 pub const FLOAT64_ARRAY: u32 = TypeId::FLOAT64_ARRAY as u32;
 pub const ARROW_RECORD_BATCH: u32 = TypeId::ARROW_RECORD_BATCH as u32;
 pub const ARROW_TABLE: u32 = TypeId::ARROW_TABLE as u32;
+pub const U8: u32 = TypeId::U8 as u32;
+pub const U16: u32 = TypeId::U16 as u32;
+pub const U32: u32 = TypeId::U32 as u32;
+pub const U64: u32 = TypeId::U64 as u32;
+pub const VAR_U32: u32 = TypeId::VAR_U32 as u32;
+pub const VAR_U64: u32 = TypeId::VAR_U64 as u32;
+pub const SLI_U64: u32 = TypeId::SLI_U64 as u32;
+pub const U16_ARRAY: u32 = TypeId::U16_ARRAY as u32;
+pub const U32_ARRAY: u32 = TypeId::U32_ARRAY as u32;
+pub const U64_ARRAY: u32 = TypeId::U64_ARRAY as u32;
 pub const UNKNOWN: u32 = TypeId::UNKNOWN as u32;
 
 const MAX_UNT32: u64 = (1 << 31) - 1;
@@ -140,7 +160,7 @@ pub fn compute_string_hash(s: &str) -> u32 {
     hash as u32
 }
 
-pub static BASIC_TYPES: [TypeId; 18] = [
+pub static BASIC_TYPES: [TypeId; 25] = [
     TypeId::BOOL,
     TypeId::INT8,
     TypeId::INT16,
@@ -159,9 +179,16 @@ pub static BASIC_TYPES: [TypeId; 18] = [
     TypeId::INT64_ARRAY,
     TypeId::FLOAT32_ARRAY,
     TypeId::FLOAT64_ARRAY,
+    TypeId::U8,
+    TypeId::U16,
+    TypeId::U32,
+    TypeId::U64,
+    TypeId::U16_ARRAY,
+    TypeId::U32_ARRAY,
+    TypeId::U64_ARRAY,
 ];
 
-pub static PRIMITIVE_TYPES: [u32; 7] = [
+pub static PRIMITIVE_TYPES: [u32; 11] = [
     TypeId::BOOL as u32,
     TypeId::INT8 as u32,
     TypeId::INT16 as u32,
@@ -169,9 +196,13 @@ pub static PRIMITIVE_TYPES: [u32; 7] = [
     TypeId::INT64 as u32,
     TypeId::FLOAT32 as u32,
     TypeId::FLOAT64 as u32,
+    TypeId::U8 as u32,
+    TypeId::U16 as u32,
+    TypeId::U32 as u32,
+    TypeId::U64 as u32,
 ];
 
-pub static PRIMITIVE_ARRAY_TYPES: [u32; 8] = [
+pub static PRIMITIVE_ARRAY_TYPES: [u32; 11] = [
     TypeId::BOOL_ARRAY as u32,
     TypeId::BINARY as u32,
     TypeId::INT8_ARRAY as u32,
@@ -180,9 +211,12 @@ pub static PRIMITIVE_ARRAY_TYPES: [u32; 8] = [
     TypeId::INT64_ARRAY as u32,
     TypeId::FLOAT32_ARRAY as u32,
     TypeId::FLOAT64_ARRAY as u32,
+    TypeId::U16_ARRAY as u32,
+    TypeId::U32_ARRAY as u32,
+    TypeId::U64_ARRAY as u32,
 ];
 
-pub static BASIC_TYPE_NAMES: [&str; 10] = [
+pub static BASIC_TYPE_NAMES: [&str; 14] = [
     "bool",
     "i8",
     "i16",
@@ -193,6 +227,10 @@ pub static BASIC_TYPE_NAMES: [&str; 10] = [
     "String",
     "NaiveDate",
     "NaiveDateTime",
+    "u8",
+    "u16",
+    "u32",
+    "u64",
 ];
 
 pub static CONTAINER_TYPES: [TypeId; 3] = [TypeId::LIST, TypeId::SET, TypeId::MAP];
@@ -200,7 +238,7 @@ pub static CONTAINER_TYPES: [TypeId; 3] = [TypeId::LIST, TypeId::SET, TypeId::MA
 pub static CONTAINER_TYPE_NAMES: [&str; 3] = ["Vec", "HashSet", "HashMap"];
 
 pub static PRIMITIVE_ARRAY_TYPE_MAP: &[(&str, u32, &str)] = &[
-    // ("_binary", TypeId::BINARY as u32),
+    ("u8", TypeId::BINARY as u32, "Vec<u8>"),
     ("bool", TypeId::BOOL_ARRAY as u32, "Vec<bool>"),
     ("i8", TypeId::INT8_ARRAY as u32, "Vec<i8>"),
     ("i16", TypeId::INT16_ARRAY as u32, "Vec<i16>"),
@@ -208,10 +246,13 @@ pub static PRIMITIVE_ARRAY_TYPE_MAP: &[(&str, u32, &str)] = &[
     ("i64", TypeId::INT64_ARRAY as u32, "Vec<i64>"),
     ("f32", TypeId::FLOAT32_ARRAY as u32, "Vec<f32>"),
     ("f64", TypeId::FLOAT64_ARRAY as u32, "Vec<f64>"),
+    ("u16", TypeId::U16_ARRAY as u32, "Vec<u16>"),
+    ("u32", TypeId::U32_ARRAY as u32, "Vec<u32>"),
+    ("u64", TypeId::U64_ARRAY as u32, "Vec<u64>"),
 ];
 
 #[inline(always)]
-pub fn is_primitive_type(type_id: TypeId) -> bool {
+pub fn is_primitive_type_id(type_id: TypeId) -> bool {
     matches!(
         type_id,
         TypeId::BOOL
@@ -221,9 +262,10 @@ pub fn is_primitive_type(type_id: TypeId) -> bool {
             | TypeId::INT64
             | TypeId::FLOAT32
             | TypeId::FLOAT64
-            | TypeId::STRING
-            | TypeId::LOCAL_DATE
-            | TypeId::TIMESTAMP
+            | TypeId::U8
+            | TypeId::U16
+            | TypeId::U32
+            | TypeId::U64
     )
 }
 
