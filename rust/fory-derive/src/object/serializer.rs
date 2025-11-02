@@ -50,30 +50,45 @@ pub fn derive_serializer(ast: &syn::DeriveInput, debug_enabled: bool) -> TokenSt
     };
 
     // StructSerializer
-    let (actual_type_id_ts, get_sorted_field_names_ts, fields_info_ts, read_compatible_ts) =
-        match &ast.data {
-            syn::Data::Struct(s) => {
-                let fields = sorted_fields(&s.fields);
-                (
-                    misc::gen_actual_type_id(),
-                    misc::gen_get_sorted_field_names(&fields),
-                    misc::gen_field_fields_info(&fields),
-                    read::gen_read_compatible(&fields),
-                )
-            }
-            syn::Data::Enum(s) => (
+    let (
+        actual_type_id_ts,
+        get_sorted_field_names_ts,
+        fields_info_ts,
+        variants_fields_info_ts,
+        read_compatible_ts,
+        enum_variant_meta_types,
+    ) = match &ast.data {
+        syn::Data::Struct(s) => {
+            let fields = sorted_fields(&s.fields);
+            (
+                misc::gen_actual_type_id(),
+                misc::gen_get_sorted_field_names(&fields),
+                misc::gen_field_fields_info(&fields),
+                quote! { Ok(Vec::new()) }, // No variants for structs
+                read::gen_read_compatible(&fields),
+                vec![], // No variant meta types for structs
+            )
+        }
+        syn::Data::Enum(s) => {
+            // Generate variant meta types for named variants
+            let variant_meta_types =
+                derive_enum::gen_all_variant_meta_types_with_enum_name(name, s);
+            (
                 derive_enum::gen_actual_type_id(),
                 quote! { &[] },
                 derive_enum::gen_field_fields_info(s),
+                derive_enum::gen_variants_fields_info(name, s),
                 quote! {
                     Err(fory_core::Error::not_allowed("`fory_read_compatible` should only be invoked at struct type"
                 ))
                 },
-            ),
-            syn::Data::Union(_) => {
-                panic!("Union is not supported")
-            }
-        };
+                variant_meta_types,
+            )
+        }
+        syn::Data::Union(_) => {
+            panic!("Union is not supported")
+        }
+    };
     // Serializer
     let (
         write_ts,
@@ -122,6 +137,9 @@ pub fn derive_serializer(ast: &syn::DeriveInput, debug_enabled: bool) -> TokenSt
     let gen = quote! {
         use fory_core::ForyDefault as _;
 
+        // Generate variant meta types for enums (must be at module scope)
+        #(#enum_variant_meta_types)*
+
         #default_impl
 
         impl fory_core::StructSerializer for #name {
@@ -141,6 +159,10 @@ pub fn derive_serializer(ast: &syn::DeriveInput, debug_enabled: bool) -> TokenSt
 
             fn fory_fields_info(type_resolver: &fory_core::resolver::type_resolver::TypeResolver) -> Result<Vec<fory_core::meta::FieldInfo>, fory_core::error::Error> {
                 #fields_info_ts
+            }
+
+            fn fory_variants_fields_info(type_resolver: &fory_core::resolver::type_resolver::TypeResolver) -> Result<Vec<(String, std::any::TypeId, Vec<fory_core::meta::FieldInfo>)>, fory_core::error::Error> {
+                #variants_fields_info_ts
             }
 
             #[inline]

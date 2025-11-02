@@ -464,3 +464,57 @@ fn skip_value(
     }
     Ok(())
 }
+
+/// Skip enum variant data in compatible mode based on variant type.
+///
+/// # Arguments
+/// * `context` - The read context
+/// * `variant_type` - The variant type encoded in lower 2 bits:
+///   - 0b0 = Unit variant (no data to skip)
+///   - 0b1 = Unnamed variant (tuple data)
+///   - 0b10 = Named variant (struct-like data)
+/// * `type_info` - Optional type info for named variants (must be provided for 0b10)
+pub fn skip_enum_variant(
+    context: &mut ReadContext,
+    variant_type: u32,
+    type_info: &Option<Rc<crate::TypeInfo>>,
+) -> Result<(), Error> {
+    match variant_type {
+        0b0 => {
+            // Unit variant, no data to skip
+            Ok(())
+        }
+        0b1 => {
+            // Unnamed variant, skip tuple data (which is serialized as a collection)
+            // Tuple uses collection format but doesn't write type info, so skip directly
+            let field_type = FieldType {
+                type_id: types::LIST,
+                nullable: false,
+                generics: vec![UNKNOWN_FIELD_TYPE],
+            };
+            skip_collection(context, &field_type)
+        }
+        0b10 => {
+            // Named variant, skip struct-like data using skip_struct
+            // For named variants, we need the type_info which should have been read already
+            if type_info.is_some() {
+                let type_id = type_info.as_ref().unwrap().get_type_id();
+                skip_struct(context, type_id, type_info)
+            } else {
+                // If no type_info provided, read it from the stream
+                let meta_index = context.reader.read_varuint32()?;
+                let type_info_rc = context.get_type_info_by_index(meta_index as usize)?.clone();
+                let type_id = type_info_rc.get_type_id();
+                let type_info_opt = Some(type_info_rc);
+                skip_struct(context, type_id, &type_info_opt)
+            }
+        }
+        _ => {
+            // Invalid variant type
+            Err(Error::type_error(format!(
+                "Invalid enum variant type: {}",
+                variant_type
+            )))
+        }
+    }
+}
