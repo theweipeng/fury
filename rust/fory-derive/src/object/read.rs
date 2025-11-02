@@ -17,7 +17,7 @@
 
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
-use syn::{Field, Type};
+use syn::Field;
 
 use super::util::{
     classify_trait_object_field, compute_struct_version_hash, create_wrapper_types_arc,
@@ -288,12 +288,6 @@ fn gen_read_compatible_match_arm_body(field: &Field, var_name: &Ident) -> TokenS
     let base = if is_skip_flag {
         match field_kind {
             StructField::None => {
-                // Note: _base_ty is currently unused but kept for potential future use
-                let _base_ty = match &ty {
-                    Type::Path(type_path) => Some(&type_path.path.segments.first().unwrap().ident),
-                    Type::Tuple(_) => None, // Tuples don't have a simple ident
-                    _ => None,              // Other types also don't have a simple ident
-                };
                 let dec_by_option = need_declared_by_option(field);
                 if dec_by_option {
                     quote! {
@@ -391,12 +385,6 @@ fn gen_read_compatible_match_arm_body(field: &Field, var_name: &Ident) -> TokenS
                 }
             }
             StructField::None => {
-                // Note: _base_ty is currently unused but kept for potential future use
-                let _base_ty = match &ty {
-                    Type::Path(type_path) => Some(&type_path.path.segments.first().unwrap().ident),
-                    Type::Tuple(_) => None, // Tuples don't have a simple ident
-                    _ => None,              // Other types also don't have a simple ident
-                };
                 let skip_type_info = should_skip_type_info_for_field(ty);
                 let dec_by_option = need_declared_by_option(field);
                 if skip_type_info {
