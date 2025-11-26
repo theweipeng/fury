@@ -298,7 +298,7 @@ impl Fory {
     ///
     /// # Returns
     ///
-    /// `ture` if the serialization mode is compatible, `false` otherwise`.
+    /// `true` if the serialization mode is compatible, `false` otherwise`.
     pub fn is_compatible(&self) -> bool {
         self.compatible
     }
@@ -335,11 +335,6 @@ impl Fory {
         self.check_struct_version
     }
 
-    /// Returns a type resolver for type lookups.
-    pub(crate) fn get_type_resolver(&self) -> &TypeResolver {
-        &self.type_resolver
-    }
-
     /// Serializes a value of type `T` into a byte vector.
     ///
     /// # Type Parameters
@@ -369,20 +364,19 @@ impl Fory {
     /// ```
     pub fn serialize<T: Serializer>(&self, record: &T) -> Result<Vec<u8>, Error> {
         let pool = self.get_writer_pool()?;
-        let mut context = pool.get();
-        match self.serialize_with_context(record, &mut context) {
-            Ok(_) => {
-                let result = context.writer.dump();
-                context.writer.reset();
-                pool.put(context);
-                Ok(result)
-            }
-            Err(err) => {
-                context.writer.reset();
-                pool.put(context);
-                Err(err)
-            }
-        }
+        pool.borrow_mut(
+            |context| match self.serialize_with_context(record, context) {
+                Ok(_) => {
+                    let result = context.writer.dump();
+                    context.writer.reset();
+                    Ok(result)
+                }
+                Err(err) => {
+                    context.writer.reset();
+                    Err(err)
+                }
+            },
+        )
     }
 
     /// Serializes a value of type `T` into the provided byte buffer.
@@ -507,20 +501,20 @@ impl Fory {
     ) -> Result<usize, Error> {
         let pool = self.get_writer_pool()?;
         let start = buf.len();
-        let mut context = pool.get();
-        // Context go from pool would be 'static. but context hold the buffer through `writer` field, so we should make buffer live longer.
-        // After serializing, `detach_writer` will be called, the writer in context will be set to dangling pointer.
-        // So it's safe to make buf live to the end of this method.
-        let outlive_buffer = unsafe { mem::transmute::<&mut Vec<u8>, &mut Vec<u8>>(buf) };
-        context.attach_writer(Writer::from_buffer(outlive_buffer));
-        let result = self.serialize_with_context(record, &mut context);
-        let written_size = context.writer.len() - start;
-        context.detach_writer();
-        pool.put(context);
-        match result {
-            Ok(_) => Ok(written_size),
-            Err(err) => Err(err),
-        }
+        pool.borrow_mut(|context| {
+            // Context go from pool would be 'static. but context hold the buffer through `writer` field, so we should make buffer live longer.
+            // After serializing, `detach_writer` will be called, the writer in context will be set to dangling pointer.
+            // So it's safe to make buf live to the end of this method.
+            let outlive_buffer = unsafe { mem::transmute::<&mut Vec<u8>, &mut Vec<u8>>(buf) };
+            context.attach_writer(Writer::from_buffer(outlive_buffer));
+            let result = self.serialize_with_context(record, context);
+            let written_size = context.writer.len() - start;
+            context.detach_writer();
+            match result {
+                Ok(_) => Ok(written_size),
+                Err(err) => Err(err),
+            }
+        })
     }
 
     #[inline(always)]
@@ -830,32 +824,79 @@ impl Fory {
     /// ```
     pub fn deserialize<T: Serializer + ForyDefault>(&self, bf: &[u8]) -> Result<T, Error> {
         let pool = self.get_read_pool()?;
-        let mut context = pool.get();
-        context.init(self.max_dyn_depth);
-        let outlive_buffer = unsafe { mem::transmute::<&[u8], &[u8]>(bf) };
-        context.attach_reader(Reader::new(outlive_buffer));
-        let result = self.deserialize_with_context(&mut context);
-        context.detach_reader();
-        pool.put(context);
-        result
+        pool.borrow_mut(|context| {
+            context.init(self.max_dyn_depth);
+            let outlive_buffer = unsafe { mem::transmute::<&[u8], &[u8]>(bf) };
+            context.attach_reader(Reader::new(outlive_buffer));
+            let result = self.deserialize_with_context(context);
+            context.detach_reader();
+            result
+        })
     }
 
+    /// Deserializes data from a `Reader` into a value of type `T`.
+    ///
+    /// This method is the paired read operation for [`serialize_to`](Self::serialize_to).
+    /// It reads serialized data from the current position of the reader and automatically
+    /// advances the cursor to the end of the read data, making it suitable for reading
+    /// multiple objects sequentially from the same buffer.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `T` - The target type to deserialize into. Must implement `Serializer` and `ForyDefault`.
+    ///
+    /// # Arguments
+    ///
+    /// * `reader` - A mutable reference to the `Reader` containing the serialized data.
+    ///   The reader's cursor will be advanced to the end of the deserialized data.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(T)` - The deserialized value on success.
+    /// * `Err(Error)` - An error if deserialization fails (e.g., invalid format, type mismatch).
+    ///
+    /// # Notes
+    ///
+    /// - The reader's cursor is automatically updated after each successful read.
+    /// - This method is ideal for reading multiple objects from the same buffer sequentially.
+    /// - See [`serialize_to`](Self::serialize_to) for complete usage examples.
+    ///
+    /// # Examples
+    ///
+    /// Basic usage:
+    ///
+    /// ```rust, ignore
+    /// use fory_core::{Fory, Reader};
+    /// use fory_derive::ForyObject;
+    ///
+    /// #[derive(ForyObject)]
+    /// struct Point { x: i32, y: i32 }
+    ///
+    /// let fory = Fory::default();
+    /// let point = Point { x: 10, y: 20 };
+    ///
+    /// let mut buf = Vec::new();
+    /// fory.serialize_to(&point, &mut buf).unwrap();
+    ///
+    /// let mut reader = Reader::new(&buf);
+    /// let deserialized: Point = fory.deserialize_from(&mut reader).unwrap();
+    /// ```
     pub fn deserialize_from<T: Serializer + ForyDefault>(
         &self,
         reader: &mut Reader,
     ) -> Result<T, Error> {
         let pool = self.get_read_pool()?;
-        let mut context = pool.get();
-        context.init(self.max_dyn_depth);
-        let outlive_buffer = unsafe { mem::transmute::<&[u8], &[u8]>(reader.bf) };
-        let mut new_reader = Reader::new(outlive_buffer);
-        new_reader.set_cursor(reader.cursor);
-        context.attach_reader(new_reader);
-        let result = self.deserialize_with_context(&mut context);
-        let end = context.detach_reader().get_cursor();
-        reader.set_cursor(end);
-        pool.put(context);
-        result
+        pool.borrow_mut(|context| {
+            context.init(self.max_dyn_depth);
+            let outlive_buffer = unsafe { mem::transmute::<&[u8], &[u8]>(reader.bf) };
+            let mut new_reader = Reader::new(outlive_buffer);
+            new_reader.set_cursor(reader.cursor);
+            context.attach_reader(new_reader);
+            let result = self.deserialize_with_context(context);
+            let end = context.detach_reader().get_cursor();
+            reader.set_cursor(end);
+            result
+        })
     }
 
     #[inline(always)]
