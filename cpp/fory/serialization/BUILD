@@ -4,6 +4,7 @@ cc_library(
     name = "fory_serialization",
     srcs = [
         "context.cc",
+        "meta_string.cc",
         "type_resolver.cc",
         "skip.cc",
     ],
@@ -15,6 +16,7 @@ cc_library(
         "context.h",
         "enum_serializer.h",
         "fory.h",
+        "meta_string.h",
         "map_serializer.h",
         "ref_resolver.h",
         "serializer.h",
@@ -23,11 +25,13 @@ cc_library(
         "smart_ptr_serializers.h",
         "struct_serializer.h",
         "temporal_serializers.h",
+        "type_info.h",
         "type_resolver.h",
     ],
     strip_include_prefix = "/cpp",
     deps = [
         "//cpp/fory/meta:fory_meta",
+        "//cpp/fory/thirdparty:libmmh3",
         "//cpp/fory/type:fory_type",
         "//cpp/fory/util:fory_util",
     ],
@@ -84,11 +88,22 @@ cc_test(
     ],
 )
 
+cc_test(
+    name = "meta_string_test",
+    srcs = ["meta_string_test.cc"],
+    deps = [
+        ":fory_serialization",
+        "@com_google_googletest//:gtest",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
 cc_binary(
     name = "xlang_test_main",
     srcs = ["xlang_test_main.cc"],
     deps = [
         ":fory_serialization",
+        "//cpp/fory/thirdparty:libmmh3",
     ],
     visibility = ["//visibility:public"],
 )

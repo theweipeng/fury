@@ -217,9 +217,11 @@ public:
   /// Uses PVL (Progressive Variable-length Long) encoding per xlang spec.
   inline uint32_t PutVarUint64(uint32_t offset, uint64_t value) {
     uint32_t position = offset;
-    while (value >= 0x80) {
+    int count = 0;
+    while (value >= 0x80 && count < 8) {
       data_[position++] = static_cast<uint8_t>((value & 0x7F) | 0x80);
       value >>= 7;
+      ++count;
     }
     data_[position++] = static_cast<uint8_t>(value);
     return position - offset;
@@ -232,13 +234,78 @@ public:
     uint32_t position = offset;
     uint64_t result = 0;
     int shift = 0;
-    while (true) {
+    for (int i = 0; i < 8; ++i) {
       uint8_t b = data_[position++];
       result |= static_cast<uint64_t>(b & 0x7F) << shift;
       if ((b & 0x80) == 0) {
-        break;
+        *readBytesLength = position - offset;
+        return result;
       }
       shift += 7;
+    }
+    uint8_t last = data_[position++];
+    result |= static_cast<uint64_t>(last) << 56;
+    *readBytesLength = position - offset;
+    return result;
+  }
+
+  /// Put unsigned varuint36small at offset. Returns number of bytes written
+  /// (1-5). This is the special variable-length encoding used for string
+  /// headers in xlang protocol. It's optimized for small values (< 0x80).
+  inline uint32_t PutVarUint36Small(uint32_t offset, uint64_t value) {
+    if ((value >> 7) == 0) {
+      data_[offset] = static_cast<uint8_t>(value);
+      return 1;
+    }
+    if ((value >> 14) == 0) {
+      data_[offset] = static_cast<uint8_t>((value & 0x7F) | 0x80);
+      data_[offset + 1] = static_cast<uint8_t>(value >> 7);
+      return 2;
+    }
+    if ((value >> 21) == 0) {
+      data_[offset] = static_cast<uint8_t>((value & 0x7F) | 0x80);
+      data_[offset + 1] = static_cast<uint8_t>((value >> 7) | 0x80);
+      data_[offset + 2] = static_cast<uint8_t>(value >> 14);
+      return 3;
+    }
+    if ((value >> 28) == 0) {
+      data_[offset] = static_cast<uint8_t>((value & 0x7F) | 0x80);
+      data_[offset + 1] = static_cast<uint8_t>((value >> 7) | 0x80);
+      data_[offset + 2] = static_cast<uint8_t>((value >> 14) | 0x80);
+      data_[offset + 3] = static_cast<uint8_t>(value >> 21);
+      return 4;
+    }
+    data_[offset] = static_cast<uint8_t>((value & 0x7F) | 0x80);
+    data_[offset + 1] = static_cast<uint8_t>((value >> 7) | 0x80);
+    data_[offset + 2] = static_cast<uint8_t>((value >> 14) | 0x80);
+    data_[offset + 3] = static_cast<uint8_t>((value >> 21) | 0x80);
+    data_[offset + 4] = static_cast<uint8_t>(value >> 28);
+    return 5;
+  }
+
+  /// Get unsigned varuint36small from offset. Writes number of bytes read to
+  /// readBytesLength. This is the special variable-length encoding used for
+  /// string headers in xlang protocol.
+  inline uint64_t GetVarUint36Small(uint32_t offset,
+                                    uint32_t *readBytesLength) {
+    uint32_t position = offset;
+    uint8_t b = data_[position++];
+    uint64_t result = b & 0x7F;
+    if ((b & 0x80) != 0) {
+      b = data_[position++];
+      result |= static_cast<uint64_t>(b & 0x7F) << 7;
+      if ((b & 0x80) != 0) {
+        b = data_[position++];
+        result |= static_cast<uint64_t>(b & 0x7F) << 14;
+        if ((b & 0x80) != 0) {
+          b = data_[position++];
+          result |= static_cast<uint64_t>(b & 0x7F) << 21;
+          if ((b & 0x80) != 0) {
+            b = data_[position++];
+            result |= static_cast<uint64_t>(b & 0x7F) << 28;
+          }
+        }
+      }
     }
     *readBytesLength = position - offset;
     return result;
@@ -268,12 +335,44 @@ public:
     IncreaseWriterIndex(2);
   }
 
+  /// Write int16_t value as fixed 2 bytes to buffer at current writer index.
+  /// Automatically grows buffer and advances writer index.
+  inline void WriteInt16(int16_t value) {
+    Grow(2);
+    UnsafePut<int16_t>(writer_index_, value);
+    IncreaseWriterIndex(2);
+  }
+
   /// Write int32_t value as fixed 4 bytes to buffer at current writer index.
   /// Automatically grows buffer and advances writer index.
   inline void WriteInt32(int32_t value) {
     Grow(4);
     UnsafePut<int32_t>(writer_index_, value);
     IncreaseWriterIndex(4);
+  }
+
+  /// Write int64_t value as fixed 8 bytes to buffer at current writer index.
+  /// Automatically grows buffer and advances writer index.
+  inline void WriteInt64(int64_t value) {
+    Grow(8);
+    UnsafePut<int64_t>(writer_index_, value);
+    IncreaseWriterIndex(8);
+  }
+
+  /// Write float value as fixed 4 bytes to buffer at current writer index.
+  /// Automatically grows buffer and advances writer index.
+  inline void WriteFloat(float value) {
+    Grow(4);
+    UnsafePut<float>(writer_index_, value);
+    IncreaseWriterIndex(4);
+  }
+
+  /// Write double value as fixed 8 bytes to buffer at current writer index.
+  /// Automatically grows buffer and advances writer index.
+  inline void WriteDouble(double value) {
+    Grow(8);
+    UnsafePut<double>(writer_index_, value);
+    IncreaseWriterIndex(8);
   }
 
   /// Write uint32_t value as varint to buffer at current writer index.
@@ -284,12 +383,12 @@ public:
     IncreaseWriterIndex(len);
   }
 
-  /// Write int32_t value as varint to buffer at current writer index.
-  /// Automatically grows buffer and advances writer index.
+  /// Write int32_t value as varint (zigzag encoded) to buffer at current
+  /// writer index. Automatically grows buffer and advances writer index.
   inline void WriteVarInt32(int32_t value) {
-    Grow(5); // Max 5 bytes for varint32
-    uint32_t len = PutVarUint32(writer_index_, value);
-    IncreaseWriterIndex(len);
+    uint32_t zigzag = (static_cast<uint32_t>(value) << 1) ^
+                      static_cast<uint32_t>(value >> 31);
+    WriteVarUint32(zigzag);
   }
 
   /// Write uint64_t value as varint to buffer at current writer index.
@@ -297,6 +396,23 @@ public:
   inline void WriteVarUint64(uint64_t value) {
     Grow(9); // Max 9 bytes for varint64
     uint32_t len = PutVarUint64(writer_index_, value);
+    IncreaseWriterIndex(len);
+  }
+
+  /// Write int64_t value as varint (zigzag encoded) to buffer at current
+  /// writer index. Automatically grows buffer and advances writer index.
+  inline void WriteVarInt64(int64_t value) {
+    uint64_t zigzag = (static_cast<uint64_t>(value) << 1) ^
+                      static_cast<uint64_t>(value >> 63);
+    WriteVarUint64(zigzag);
+  }
+
+  /// Write uint64_t value as varuint36small to buffer at current writer index.
+  /// This is the special variable-length encoding used for string headers.
+  /// Automatically grows buffer and advances writer index.
+  inline void WriteVarUint36Small(uint64_t value) {
+    Grow(5); // Max 5 bytes for varuint36small
+    uint32_t len = PutVarUint36Small(writer_index_, value);
     IncreaseWriterIndex(len);
   }
 
@@ -330,6 +446,17 @@ public:
     return value;
   }
 
+  /// Read int16_t value as fixed 2 bytes from buffer at current reader index.
+  /// Advances reader index and checks bounds.
+  inline Result<int16_t, Error> ReadInt16() {
+    if (reader_index_ + 2 > size_) {
+      return Unexpected(Error::buffer_out_of_bound(reader_index_, 2, size_));
+    }
+    int16_t value = Get<int16_t>(reader_index_);
+    IncreaseReaderIndex(2);
+    return value;
+  }
+
   /// Read int32_t value as fixed 4 bytes from buffer at current reader index.
   /// Advances reader index and checks bounds.
   inline Result<int32_t, Error> ReadInt32() {
@@ -338,6 +465,39 @@ public:
     }
     int32_t value = Get<int32_t>(reader_index_);
     IncreaseReaderIndex(4);
+    return value;
+  }
+
+  /// Read int64_t value as fixed 8 bytes from buffer at current reader index.
+  /// Advances reader index and checks bounds.
+  inline Result<int64_t, Error> ReadInt64() {
+    if (reader_index_ + 8 > size_) {
+      return Unexpected(Error::buffer_out_of_bound(reader_index_, 8, size_));
+    }
+    int64_t value = Get<int64_t>(reader_index_);
+    IncreaseReaderIndex(8);
+    return value;
+  }
+
+  /// Read float value as fixed 4 bytes from buffer at current reader index.
+  /// Advances reader index and checks bounds.
+  inline Result<float, Error> ReadFloat() {
+    if (reader_index_ + 4 > size_) {
+      return Unexpected(Error::buffer_out_of_bound(reader_index_, 4, size_));
+    }
+    float value = Get<float>(reader_index_);
+    IncreaseReaderIndex(4);
+    return value;
+  }
+
+  /// Read double value as fixed 8 bytes from buffer at current reader index.
+  /// Advances reader index and checks bounds.
+  inline Result<double, Error> ReadDouble() {
+    if (reader_index_ + 8 > size_) {
+      return Unexpected(Error::buffer_out_of_bound(reader_index_, 8, size_));
+    }
+    double value = Get<double>(reader_index_);
+    IncreaseReaderIndex(8);
     return value;
   }
 
@@ -353,15 +513,16 @@ public:
     return value;
   }
 
-  /// Read int32_t value as varint from buffer at current reader index.
-  /// Advances reader index and checks bounds.
+  /// Read int32_t value as varint (zigzag encoded) from buffer at current
+  /// reader index. Advances reader index and checks bounds.
   inline Result<int32_t, Error> ReadVarInt32() {
     if (reader_index_ + 1 > size_) {
       return Unexpected(Error::buffer_out_of_bound(reader_index_, 1, size_));
     }
     uint32_t read_bytes = 0;
-    int32_t value = GetVarUint32(reader_index_, &read_bytes);
+    uint32_t raw = GetVarUint32(reader_index_, &read_bytes);
     IncreaseReaderIndex(read_bytes);
+    int32_t value = static_cast<int32_t>((raw >> 1) ^ (~(raw & 1) + 1));
     return value;
   }
 
@@ -373,6 +534,31 @@ public:
     }
     uint32_t read_bytes = 0;
     uint64_t value = GetVarUint64(reader_index_, &read_bytes);
+    IncreaseReaderIndex(read_bytes);
+    return value;
+  }
+
+  /// Read int64_t value as varint (zigzag encoded) from buffer at current
+  /// reader index. Advances reader index and checks bounds.
+  inline Result<int64_t, Error> ReadVarInt64() {
+    auto result = ReadVarUint64();
+    if (!result.ok()) {
+      return Unexpected(result.error());
+    }
+    uint64_t raw = result.value();
+    int64_t value = static_cast<int64_t>((raw >> 1) ^ (~(raw & 1) + 1));
+    return value;
+  }
+
+  /// Read uint64_t value as varuint36small from buffer at current reader index.
+  /// This is the special variable-length encoding used for string headers.
+  /// Advances reader index and checks bounds.
+  inline Result<uint64_t, Error> ReadVarUint36Small() {
+    if (reader_index_ + 1 > size_) {
+      return Unexpected(Error::buffer_out_of_bound(reader_index_, 1, size_));
+    }
+    uint32_t read_bytes = 0;
+    uint64_t value = GetVarUint36Small(reader_index_, &read_bytes);
     IncreaseReaderIndex(read_bytes);
     return value;
   }

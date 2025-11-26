@@ -140,6 +140,12 @@ public:
   /// Create a builder for configuring Fory instance.
   static ForyBuilder builder() { return ForyBuilder(); }
 
+  // Disable copy and move to prevent issues with pool lambdas capturing 'this'
+  Fory(const Fory &) = delete;
+  Fory(Fory &&) = delete;
+  Fory &operator=(const Fory &) = delete;
+  Fory &operator=(Fory &&) = delete;
+
   // ============================================================================
   // Serialization Methods
   // ============================================================================
@@ -251,7 +257,7 @@ public:
           Error::unsupported("Cross-endian deserialization not yet supported"));
     }
 
-    return deserialize_from<T>(buffer);
+    return deserialize_payload_with_header<T>(header, buffer);
   }
 
   /// Core deserialization method that takes an explicit ReadContext.
@@ -262,19 +268,27 @@ public:
   template <typename T>
   Result<T, Error> deserialize_from(ReadContext &ctx, Buffer &buffer) {
     // Load TypeMetas at the beginning in compatible mode
+    size_t bytes_to_skip = 0;
     if (ctx.is_compatible()) {
       auto meta_offset_result = buffer.ReadInt32();
       FORY_RETURN_IF_ERROR(meta_offset_result);
       int32_t meta_offset = meta_offset_result.value();
       if (meta_offset != -1) {
-        FORY_RETURN_NOT_OK(ctx.load_type_meta(meta_offset));
+        FORY_TRY(meta_size, ctx.load_type_meta(meta_offset));
+        bytes_to_skip = meta_size;
       }
     }
 
+    // Top-level deserialization: YES ref flags, yes type info
+    // Java writes ref flags via xwriteRef for top-level objects
     auto result = Serializer<T>::read(ctx, true, true);
 
     if (result.ok()) {
       ctx.ref_reader().resolve_callbacks();
+      // Skip the meta section at the end of the serialized object
+      if (bytes_to_skip > 0) {
+        buffer.IncreaseReaderIndex(static_cast<uint32_t>(bytes_to_skip));
+      }
     }
     return result;
   }
@@ -284,18 +298,17 @@ public:
   /// @param buffer Input buffer to read from.
   /// @return Deserialized object on success, error on failure.
   template <typename T> Result<T, Error> deserialize_from(Buffer &buffer) {
-    auto ctx_handle = read_ctx_pool_.acquire();
-    ReadContext &ctx = *ctx_handle;
-    ctx.attach(buffer);
-    struct ReadContextCleanup {
-      ReadContext &ctx;
-      ~ReadContextCleanup() {
-        ctx.reset();
-        ctx.detach();
-      }
-    } cleanup{ctx};
+    // Read and validate header from the shared buffer.
+    FORY_TRY(header, read_header(buffer));
+    if (header.is_null) {
+      return Unexpected(Error::invalid_data("Cannot deserialize null object"));
+    }
+    if (header.is_little_endian != is_little_endian_system()) {
+      return Unexpected(
+          Error::unsupported("Cross-endian deserialization not yet supported"));
+    }
 
-    return deserialize_from<T>(ctx, buffer);
+    return deserialize_payload_with_header<T>(header, buffer);
   }
 
   /// Deserialize an object from a byte vector.
@@ -356,6 +369,23 @@ public:
   }
 
 private:
+  template <typename T>
+  Result<T, Error> deserialize_payload_with_header(const HeaderInfo &header,
+                                                   Buffer &buffer) {
+    auto ctx_handle = read_ctx_pool_.acquire();
+    ReadContext &ctx = *ctx_handle;
+    ctx.attach(buffer);
+    struct ReadContextCleanup {
+      ReadContext &ctx;
+      ~ReadContextCleanup() {
+        ctx.reset();
+        ctx.detach();
+      }
+    } cleanup{ctx};
+
+    return deserialize_from<T>(ctx, buffer);
+  }
+
   /// Core serialization implementation that takes WriteContext and Buffer.
   /// All other serialization methods forward to this one.
   ///
@@ -379,6 +409,8 @@ private:
       buffer.WriteInt32(-1); // Placeholder for meta offset (fixed 4 bytes)
     }
 
+    // Top-level serialization: YES ref flags, yes type info
+    // Java writes ref flags via xwriteRef for top-level objects
     FORY_RETURN_NOT_OK(Serializer<T>::write(obj, ctx, true, true));
 
     // Write collected TypeMetas at the end in compatible mode

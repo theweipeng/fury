@@ -41,6 +41,7 @@
 #include "fory/serialization/config.h"
 #include "fory/serialization/serializer.h"
 #include "fory/serialization/serializer_traits.h"
+#include "fory/serialization/type_info.h"
 #include "fory/type/type.h"
 #include "fory/util/buffer.h"
 #include "fory/util/error.h"
@@ -51,6 +52,7 @@ namespace fory {
 namespace serialization {
 
 // Forward declarations
+class Fory;
 class TypeResolver;
 class WriteContext;
 class ReadContext;
@@ -154,6 +156,12 @@ public:
   static Result<std::shared_ptr<TypeMeta>, Error>
   from_bytes(Buffer &buffer, const TypeMeta *local_type_info);
 
+  /// Read type meta from buffer with pre-read header
+  /// @param buffer Source buffer (positioned after header)
+  /// @param header Pre-read 8-byte header
+  static Result<std::shared_ptr<TypeMeta>, Error>
+  from_bytes_with_header(Buffer &buffer, int64_t header);
+
   /// Skip type meta in buffer without parsing
   static Result<void, Error> skip_bytes(Buffer &buffer, int64_t header);
 
@@ -175,6 +183,25 @@ public:
   uint32_t get_type_id() const { return type_id; }
   const std::string &get_type_name() const { return type_name; }
   const std::string &get_namespace() const { return namespace_str; }
+
+  /// Compute struct version hash from field metadata.
+  ///
+  /// This mirrors Rust's
+  /// `compute_struct_version_hash` in
+  /// rust/fory-derive/src/object/util.rs:
+  ///
+  ///   - Build a fingerprint string using
+  ///     `snake_case(field_name),effective_type_id,nullable;`
+  ///     for each field in the sorted order defined by the
+  ///     xlang spec (primitive, nullable primitive, internal,
+  ///     list, set, map, other).
+  ///   - Hash the fingerprint with MurmurHash3_x64_128 using
+  ///     seed 47, then take the low 32 bits as signed i32.
+  ///
+  /// Java's ObjectSerializer.computeStructHash uses the same
+  /// algorithm, so this function provides the cross-language
+  /// struct version ID used by class version checking.
+  static int32_t compute_struct_version(const TypeMeta &meta);
 
 private:
   /// Compute hash from type meta bytes
@@ -201,67 +228,127 @@ struct is_unique_ptr<std::unique_ptr<T, D>> : std::true_type {};
 template <typename T>
 inline constexpr bool is_unique_ptr_v = is_unique_ptr<T>::value;
 
-template <typename T> struct FieldTypeBuilder;
+template <typename T, typename Enable = void> struct FieldTypeBuilder;
+
+template <typename T>
+using decay_t = std::remove_cv_t<std::remove_reference_t<T>>;
+
+template <typename T> struct is_string_view : std::false_type {};
+template <typename CharT, typename Traits>
+struct is_string_view<std::basic_string_view<CharT, Traits>> : std::true_type {
+};
+template <typename T>
+inline constexpr bool is_string_view_v = is_string_view<T>::value;
+
+template <typename T, typename = void>
+struct has_serializer_type_id : std::false_type {};
+
+template <typename T>
+struct has_serializer_type_id<
+    T, std::void_t<decltype(Serializer<decay_t<T>>::type_id)>>
+    : std::true_type {};
+
+template <typename T>
+inline constexpr bool has_serializer_type_id_v =
+    has_serializer_type_id<T>::value;
 
 template <typename T> FieldType build_field_type(bool nullable = false) {
   return FieldTypeBuilder<T>::build(nullable);
 }
 
-template <typename T> struct FieldTypeBuilder {
+template <typename T>
+struct FieldTypeBuilder<T, std::enable_if_t<is_optional_v<decay_t<T>>>> {
+  using Inner = typename decay_t<T>::value_type;
   static FieldType build(bool nullable) {
-    if constexpr (std::is_same_v<T, bool>) {
-      return FieldType(to_type_id(TypeId::BOOL), nullable);
-    } else if constexpr (std::is_same_v<T, int8_t>) {
-      return FieldType(to_type_id(TypeId::INT8), nullable);
-    } else if constexpr (std::is_same_v<T, int16_t>) {
-      return FieldType(to_type_id(TypeId::INT16), nullable);
-    } else if constexpr (std::is_same_v<T, int32_t>) {
-      return FieldType(to_type_id(TypeId::INT32), nullable);
-    } else if constexpr (std::is_same_v<T, int64_t>) {
-      return FieldType(to_type_id(TypeId::INT64), nullable);
-    } else if constexpr (std::is_same_v<T, float>) {
-      return FieldType(to_type_id(TypeId::FLOAT32), nullable);
-    } else if constexpr (std::is_same_v<T, double>) {
-      return FieldType(to_type_id(TypeId::FLOAT64), nullable);
-    } else if constexpr (std::is_same_v<T, std::string>) {
-      return FieldType(to_type_id(TypeId::STRING), nullable);
-    } else if constexpr (std::is_same_v<T, std::string_view>) {
-      return FieldType(to_type_id(TypeId::STRING), nullable);
-    } else if constexpr (is_optional_v<T>) {
-      using Inner = typename T::value_type;
-      FieldType inner = FieldTypeBuilder<Inner>::build(true);
-      inner.nullable = true;
-      return inner;
-    } else if constexpr (is_shared_ptr_v<T>) {
-      using Inner = typename T::element_type;
-      FieldType inner = FieldTypeBuilder<Inner>::build(true);
-      inner.nullable = true;
-      return inner;
-    } else if constexpr (is_unique_ptr_v<T>) {
-      using Inner = typename T::element_type;
-      FieldType inner = FieldTypeBuilder<Inner>::build(true);
-      inner.nullable = true;
-      return inner;
-    } else if constexpr (is_vector_v<T>) {
-      FieldType elem = FieldTypeBuilder<element_type_t<T>>::build(false);
-      FieldType ft(to_type_id(TypeId::LIST), nullable);
+    FieldType inner = FieldTypeBuilder<Inner>::build(true);
+    inner.nullable = true;
+    return inner;
+  }
+};
+
+template <typename T>
+struct FieldTypeBuilder<T, std::enable_if_t<is_shared_ptr_v<decay_t<T>>>> {
+  using Inner = typename decay_t<T>::element_type;
+  static FieldType build(bool nullable) {
+    FieldType inner = FieldTypeBuilder<Inner>::build(true);
+    inner.nullable = true;
+    return inner;
+  }
+};
+
+template <typename T>
+struct FieldTypeBuilder<T, std::enable_if_t<is_unique_ptr_v<decay_t<T>>>> {
+  using Inner = typename decay_t<T>::element_type;
+  static FieldType build(bool nullable) {
+    FieldType inner = FieldTypeBuilder<Inner>::build(true);
+    inner.nullable = true;
+    return inner;
+  }
+};
+
+template <typename T>
+struct FieldTypeBuilder<T, std::enable_if_t<is_vector_v<decay_t<T>>>> {
+  using Vec = decay_t<T>;
+  using Element = element_type_t<Vec>;
+  static FieldType build(bool nullable) {
+    constexpr TypeId vec_type_id = Serializer<Vec>::type_id;
+    if constexpr (vec_type_id == TypeId::LIST) {
+      FieldType elem = FieldTypeBuilder<Element>::build(false);
+      FieldType ft(to_type_id(vec_type_id), nullable);
       ft.generics.push_back(std::move(elem));
-      return ft;
-    } else if constexpr (is_set_like_v<T>) {
-      FieldType elem = FieldTypeBuilder<element_type_t<T>>::build(false);
-      FieldType ft(to_type_id(TypeId::SET), nullable);
-      ft.generics.push_back(std::move(elem));
-      return ft;
-    } else if constexpr (is_map_like_v<T>) {
-      FieldType key = FieldTypeBuilder<key_type_t<T>>::build(false);
-      FieldType value = FieldTypeBuilder<mapped_type_t<T>>::build(false);
-      FieldType ft(to_type_id(TypeId::MAP), nullable);
-      ft.generics.push_back(std::move(key));
-      ft.generics.push_back(std::move(value));
       return ft;
     } else {
-      return FieldType(to_type_id(TypeId::STRUCT), nullable);
+      return FieldType(to_type_id(vec_type_id), nullable);
     }
+  }
+};
+
+template <typename T>
+struct FieldTypeBuilder<T, std::enable_if_t<is_set_like_v<decay_t<T>>>> {
+  using Set = decay_t<T>;
+  using Element = element_type_t<Set>;
+  static FieldType build(bool nullable) {
+    FieldType elem = FieldTypeBuilder<Element>::build(false);
+    FieldType ft(to_type_id(Serializer<Set>::type_id), nullable);
+    ft.generics.push_back(std::move(elem));
+    return ft;
+  }
+};
+
+template <typename T>
+struct FieldTypeBuilder<T, std::enable_if_t<is_map_like_v<decay_t<T>>>> {
+  using Map = decay_t<T>;
+  using Key = key_type_t<Map>;
+  using Value = mapped_type_t<Map>;
+  static FieldType build(bool nullable) {
+    FieldType key_ft = FieldTypeBuilder<Key>::build(false);
+    FieldType value_ft = FieldTypeBuilder<Value>::build(false);
+    FieldType ft(to_type_id(Serializer<Map>::type_id), nullable);
+    ft.generics.push_back(std::move(key_ft));
+    ft.generics.push_back(std::move(value_ft));
+    return ft;
+  }
+};
+
+template <typename CharT, typename Traits>
+struct FieldTypeBuilder<std::basic_string_view<CharT, Traits>, void> {
+  static FieldType build(bool nullable) {
+    using StringT = std::basic_string<CharT, Traits>;
+    return FieldTypeBuilder<StringT>::build(nullable);
+  }
+};
+
+template <typename T>
+struct FieldTypeBuilder<
+    T, std::enable_if_t<
+           !is_optional_v<decay_t<T>> && !is_shared_ptr_v<decay_t<T>> &&
+           !is_unique_ptr_v<decay_t<T>> && !is_vector_v<decay_t<T>> &&
+           !is_set_like_v<decay_t<T>> && !is_map_like_v<decay_t<T>> &&
+           !is_string_view_v<decay_t<T>> &&
+           has_serializer_type_id_v<decay_t<T>>>> {
+  using Decayed = decay_t<T>;
+  static FieldType build(bool nullable) {
+    return FieldType(to_type_id(Serializer<Decayed>::type_id), nullable);
   }
 };
 
@@ -294,68 +381,19 @@ std::vector<FieldInfo> build_field_infos(std::index_sequence<Indices...>) {
 } // namespace detail
 
 // ============================================================================
-// Forward declarations for TypeResolver
+// Helper function to encode meta strings at registration time
 // ============================================================================
 
-class TypeResolver;
-
-// ============================================================================
-// Harness - Function pointers for serialization/deserialization
-// ============================================================================
-
-struct Harness {
-  using WriteFn = Result<void, Error> (*)(const void *value, WriteContext &ctx,
-                                          bool write_ref_info,
-                                          bool write_type_info,
-                                          bool has_generics);
-  using ReadFn = Result<void *, Error> (*)(ReadContext &ctx, bool read_ref_info,
-                                           bool read_type_info);
-  using WriteDataFn = Result<void, Error> (*)(const void *value,
-                                              WriteContext &ctx,
-                                              bool has_generics);
-  using ReadDataFn = Result<void *, Error> (*)(ReadContext &ctx);
-  using SortedFieldInfosFn =
-      Result<std::vector<FieldInfo>, Error> (*)(TypeResolver &);
-
-  Harness() = default;
-  Harness(WriteFn write, ReadFn read, WriteDataFn write_data,
-          ReadDataFn read_data, SortedFieldInfosFn sorted_fields)
-      : write_fn(write), read_fn(read), write_data_fn(write_data),
-        read_data_fn(read_data), sorted_field_infos_fn(sorted_fields) {}
-
-  bool valid() const {
-    return write_fn != nullptr && read_fn != nullptr &&
-           write_data_fn != nullptr && read_data_fn != nullptr &&
-           sorted_field_infos_fn != nullptr;
-  }
-
-  WriteFn write_fn = nullptr;
-  ReadFn read_fn = nullptr;
-  WriteDataFn write_data_fn = nullptr;
-  ReadDataFn read_data_fn = nullptr;
-  SortedFieldInfosFn sorted_field_infos_fn = nullptr;
-};
-
-// ============================================================================
-// TypeInfo - Type metadata and serialization information
-// ============================================================================
-
-struct TypeInfo {
-  uint32_t type_id = 0;
-  std::string namespace_name;
-  std::string type_name;
-  bool register_by_name = false;
-  bool is_external = false;
-  std::shared_ptr<TypeMeta> type_meta;
-  std::vector<size_t> sorted_indices;
-  std::unordered_map<std::string, size_t> name_to_index;
-  std::vector<uint8_t> type_def;
-  Harness harness;
-};
+/// Encode a meta string for namespace or type_name using the appropriate
+/// encoder. This is called during registration to pre-compute the encoded form.
+Result<std::shared_ptr<CachedMetaString>, Error>
+encode_meta_string(const std::string &value, bool is_namespace);
 
 // ============================================================================
 // TypeResolver - central registry for type metadata and configuration
 // ============================================================================
+// Note: Harness and TypeInfo are defined in type_info.h (included via
+// context.h)
 
 class TypeResolver {
 public:
@@ -373,24 +411,12 @@ public:
   template <typename T>
   const std::unordered_map<std::string, size_t> &field_name_to_index();
 
-  template <typename T> std::shared_ptr<TypeInfo> get_struct_type_info();
-
-  uint32_t struct_type_tag(const TypeInfo &info) const;
-
-  template <typename T> uint32_t struct_type_tag();
-
-  template <typename T> Result<void, Error> register_by_id(uint32_t type_id);
-
   template <typename T>
-  Result<void, Error> register_by_name(const std::string &ns,
-                                       const std::string &type_name);
+  Result<std::shared_ptr<TypeInfo>, Error> get_struct_type_info();
 
-  template <typename T>
-  Result<void, Error> register_ext_type_by_id(uint32_t type_id);
+  uint32_t get_type_id(const TypeInfo &info) const;
 
-  template <typename T>
-  Result<void, Error> register_ext_type_by_name(const std::string &ns,
-                                                const std::string &type_name);
+  template <typename T> Result<uint32_t, Error> get_type_id();
 
   /// Get type info by type ID (for non-namespaced types)
   std::shared_ptr<TypeInfo> get_type_info_by_id(uint32_t type_id) const;
@@ -447,10 +473,30 @@ public:
   std::shared_ptr<TypeResolver> clone() const;
 
 private:
+  friend class Fory;
+
+  template <typename T> Result<void, Error> register_by_id(uint32_t type_id);
+
+  template <typename T>
+  Result<void, Error> register_by_name(const std::string &ns,
+                                       const std::string &type_name);
+
+  template <typename T>
+  Result<void, Error> register_ext_type_by_id(uint32_t type_id);
+
+  template <typename T>
+  Result<void, Error> register_ext_type_by_name(const std::string &ns,
+                                                const std::string &type_name);
+
   template <typename T>
   static Result<std::shared_ptr<TypeInfo>, Error>
   build_struct_type_info(uint32_t type_id, std::string ns,
                          std::string type_name, bool register_by_name);
+
+  template <typename T>
+  static Result<std::shared_ptr<TypeInfo>, Error>
+  build_enum_type_info(uint32_t type_id, std::string ns, std::string type_name,
+                       bool register_by_name);
 
   template <typename T>
   static Result<std::shared_ptr<TypeInfo>, Error>
@@ -496,6 +542,8 @@ private:
 
   void check_registration_thread();
 
+  void register_builtin_types();
+
   bool compatible_;
   bool xlang_;
   bool check_struct_version_;
@@ -522,7 +570,9 @@ private:
 inline TypeResolver::TypeResolver()
     : compatible_(false), xlang_(false), check_struct_version_(true),
       track_ref_(true), registration_thread_id_(std::this_thread::get_id()),
-      finalized_(false) {}
+      finalized_(false) {
+  register_builtin_types();
+}
 
 inline void TypeResolver::apply_config(const Config &config) {
   compatible_ = config.compatible;
@@ -579,7 +629,7 @@ TypeResolver::field_name_to_index() {
 }
 
 template <typename T>
-std::shared_ptr<TypeInfo> TypeResolver::get_struct_type_info() {
+Result<std::shared_ptr<TypeInfo>, Error> TypeResolver::get_struct_type_info() {
   static_assert(is_fory_serializable_v<T>,
                 "get_struct_type_info requires FORY_STRUCT types");
   const std::type_index key(typeid(T));
@@ -587,99 +637,85 @@ std::shared_ptr<TypeInfo> TypeResolver::get_struct_type_info() {
   if (it != type_info_cache_.end()) {
     return it->second;
   }
-
-  // Auto-register the type if not found (for backward compatibility)
-  // This happens when types are used without explicit registration
-  uint32_t default_type_id =
-      compatible_ ? static_cast<uint32_t>(TypeId::COMPATIBLE_STRUCT)
-                  : static_cast<uint32_t>(TypeId::STRUCT);
-  auto info_result = build_struct_type_info<T>(default_type_id, "", "", true);
-  FORY_CHECK(info_result.ok())
-      << "Failed to auto-register type: " << info_result.error().message();
-  auto info = std::move(info_result).value();
-
-  // Build complete TypeMeta immediately for auto-registered types
-  auto fields_result = info->harness.sorted_field_infos_fn(*this);
-  FORY_CHECK(fields_result.ok())
-      << "Failed to get fields: " << fields_result.error().message();
-  auto sorted_fields = std::move(fields_result).value();
-
-  TypeMeta meta = TypeMeta::from_fields(info->type_id, info->namespace_name,
-                                        info->type_name, info->register_by_name,
-                                        std::move(sorted_fields));
-
-  auto type_def_result = meta.to_bytes();
-  FORY_CHECK(type_def_result.ok())
-      << "Failed to serialize TypeMeta: " << type_def_result.error().message();
-
-  info->type_def = std::move(type_def_result).value();
-
-  // Parse back to create shared_ptr<TypeMeta>
-  Buffer buffer(info->type_def.data(),
-                static_cast<uint32_t>(info->type_def.size()), false);
-  buffer.WriterIndex(static_cast<uint32_t>(info->type_def.size()));
-  auto parsed_meta_result = TypeMeta::from_bytes(buffer, nullptr);
-  FORY_CHECK(parsed_meta_result.ok())
-      << "Failed to parse TypeMeta: " << parsed_meta_result.error().message();
-  info->type_meta = std::move(parsed_meta_result).value();
-
-  // Register in all caches
-  type_info_cache_[key] = info;
-  if (info->type_id != 0) {
-    type_info_by_id_[info->type_id] = info;
-  }
-  if (info->register_by_name) {
-    auto name_key = make_name_key(info->namespace_name, info->type_name);
-    type_info_by_name_[name_key] = info;
-  }
-
-  return info;
+  return Unexpected(Error::type_error(
+      "Type not registered: " + std::string(typeid(T).name()) +
+      ". All struct/enum/ext types must be explicitly "
+      "registered before serialization."));
 }
 
-inline uint32_t TypeResolver::struct_type_tag(const TypeInfo &info) const {
-  if (info.register_by_name) {
-    return compatible_ ? static_cast<uint32_t>(TypeId::NAMED_COMPATIBLE_STRUCT)
-                       : static_cast<uint32_t>(TypeId::NAMED_STRUCT);
-  }
-  if (compatible_) {
-    return (info.type_id << 8) |
-           static_cast<uint32_t>(TypeId::COMPATIBLE_STRUCT);
-  }
-  return (info.type_id << 8) | static_cast<uint32_t>(TypeId::STRUCT);
+inline uint32_t TypeResolver::get_type_id(const TypeInfo &info) const {
+  // In the xlang spec the numeric type id used on the wire for
+  // structs is the "actual" type id computed by the resolver
+  // (see Rust's `struct_::actual_type_id`). That value is already
+  // stored in `info.type_id` for both id-based and name-based
+  // registrations. Unlike the previous implementation we must not
+  // apply another layer of shifting/tagging here, otherwise the
+  // local type id will no longer match the id written by Java/Rust
+  // and struct reads will fail with `TypeMismatch`.
+  //
+  // Rust equivalent:
+  //   let type_id = T::fory_get_type_id(type_resolver)?;
+  //   context.writer.write_varuint32(type_id);
+  // and on read:
+  //   ensure!(local_type_id == remote_type_id, Error::type_mismatch(...));
+  //
+  // So we simply return the stored actual type id.
+  (void)this; // suppress unused warning in some builds
+  return info.type_id;
 }
 
-template <typename T> uint32_t TypeResolver::struct_type_tag() {
-  auto info = get_struct_type_info<T>();
-  FORY_CHECK(info && info->type_meta)
-      << "Type metadata not initialized for requested struct";
-  return struct_type_tag(*info);
+template <typename T> Result<uint32_t, Error> TypeResolver::get_type_id() {
+  FORY_TRY(info, get_struct_type_info<T>());
+  if (!info->type_meta) {
+    return Unexpected(Error::type_error(
+        "Type metadata not initialized for requested struct"));
+  }
+  return get_type_id(*info);
 }
 
 template <typename T>
 Result<void, Error> TypeResolver::register_by_id(uint32_t type_id) {
   check_registration_thread();
-  static_assert(is_fory_serializable_v<T>,
-                "register_by_id requires a type declared with FORY_STRUCT");
   if (type_id == 0) {
     return Unexpected(
         Error::invalid("type_id must be non-zero for register_by_id"));
   }
 
-  // Encode type_id: shift left by 8 bits and add type category in low byte
-  uint32_t actual_type_id =
-      compatible_
-          ? (type_id << 8) + static_cast<uint32_t>(TypeId::COMPATIBLE_STRUCT)
-          : (type_id << 8) + static_cast<uint32_t>(TypeId::STRUCT);
+  if constexpr (is_fory_serializable_v<T>) {
+    // Encode type_id: shift left by 8 bits and add type category in low byte
+    uint32_t actual_type_id =
+        compatible_
+            ? (type_id << 8) + static_cast<uint32_t>(TypeId::COMPATIBLE_STRUCT)
+            : (type_id << 8) + static_cast<uint32_t>(TypeId::STRUCT);
 
-  FORY_TRY(info, build_struct_type_info<T>(actual_type_id, "", "", false));
-  if (!info->harness.valid()) {
-    return Unexpected(
-        Error::invalid("Harness for registered type is incomplete"));
+    FORY_TRY(info, build_struct_type_info<T>(actual_type_id, "", "", false));
+    if (!info->harness.valid()) {
+      return Unexpected(
+          Error::invalid("Harness for registered type is incomplete"));
+    }
+
+    const std::type_index key(typeid(T));
+    partial_type_infos_[key] = info;
+    return register_type_internal(std::type_index(typeid(T)), std::move(info));
+  } else if constexpr (std::is_enum_v<T>) {
+    uint32_t actual_type_id =
+        (type_id << 8) + static_cast<uint32_t>(TypeId::ENUM);
+
+    FORY_TRY(info, build_enum_type_info<T>(actual_type_id, "", "", false));
+    if (!info->harness.valid()) {
+      return Unexpected(
+          Error::invalid("Harness for registered enum type is incomplete"));
+    }
+
+    const std::type_index key(typeid(T));
+    partial_type_infos_[key] = info;
+    return register_type_internal(std::type_index(typeid(T)), std::move(info));
+  } else {
+    static_assert(is_fory_serializable_v<T>,
+                  "register_by_id requires a type declared with FORY_STRUCT "
+                  "or an enum type");
+    return Result<void, Error>();
   }
-
-  const std::type_index key(typeid(T));
-  partial_type_infos_[key] = info;
-  return register_type_internal(std::type_index(typeid(T)), std::move(info));
 }
 
 template <typename T>
@@ -687,26 +723,43 @@ Result<void, Error>
 TypeResolver::register_by_name(const std::string &ns,
                                const std::string &type_name) {
   check_registration_thread();
-  static_assert(is_fory_serializable_v<T>,
-                "register_by_name requires a type declared with FORY_STRUCT");
   if (type_name.empty()) {
     return Unexpected(
         Error::invalid("type_name must be non-empty for register_by_name"));
   }
-  uint32_t actual_type_id =
-      compatible_ ? static_cast<uint32_t>(TypeId::NAMED_COMPATIBLE_STRUCT)
-                  : static_cast<uint32_t>(TypeId::NAMED_STRUCT);
+  if constexpr (is_fory_serializable_v<T>) {
+    uint32_t actual_type_id =
+        compatible_ ? static_cast<uint32_t>(TypeId::NAMED_COMPATIBLE_STRUCT)
+                    : static_cast<uint32_t>(TypeId::NAMED_STRUCT);
 
-  FORY_TRY(info,
-           build_struct_type_info<T>(actual_type_id, ns, type_name, true));
-  if (!info->harness.valid()) {
-    return Unexpected(
-        Error::invalid("Harness for registered type is incomplete"));
+    FORY_TRY(info,
+             build_struct_type_info<T>(actual_type_id, ns, type_name, true));
+    if (!info->harness.valid()) {
+      return Unexpected(
+          Error::invalid("Harness for registered type is incomplete"));
+    }
+
+    const std::type_index key(typeid(T));
+    partial_type_infos_[key] = info;
+    return register_type_internal(std::type_index(typeid(T)), std::move(info));
+  } else if constexpr (std::is_enum_v<T>) {
+    uint32_t actual_type_id = static_cast<uint32_t>(TypeId::NAMED_ENUM);
+    FORY_TRY(info,
+             build_enum_type_info<T>(actual_type_id, ns, type_name, true));
+    if (!info->harness.valid()) {
+      return Unexpected(
+          Error::invalid("Harness for registered enum type is incomplete"));
+    }
+
+    const std::type_index key(typeid(T));
+    partial_type_infos_[key] = info;
+    return register_type_internal(std::type_index(typeid(T)), std::move(info));
+  } else {
+    static_assert(is_fory_serializable_v<T>,
+                  "register_by_name requires a type declared with FORY_STRUCT "
+                  "or an enum type");
+    return Result<void, Error>();
   }
-
-  const std::type_index key(typeid(T));
-  partial_type_infos_[key] = info;
-  return register_type_internal(std::type_index(typeid(T)), std::move(info));
 }
 
 template <typename T>
@@ -809,6 +862,55 @@ TypeResolver::build_struct_type_info(uint32_t type_id, std::string ns,
   entry->type_meta = std::move(parsed_meta);
   entry->harness = make_struct_harness<T>();
 
+  // Pre-encode namespace and type_name for efficient writing
+  FORY_TRY(enc_ns, encode_meta_string(entry->namespace_name, true));
+  entry->encoded_namespace = std::move(enc_ns);
+  FORY_TRY(enc_tn, encode_meta_string(entry->type_name, false));
+  entry->encoded_type_name = std::move(enc_tn);
+
+  return entry;
+}
+
+template <typename T>
+Result<std::shared_ptr<TypeInfo>, Error>
+TypeResolver::build_enum_type_info(uint32_t type_id, std::string ns,
+                                   std::string type_name,
+                                   bool register_by_name) {
+  static_assert(std::is_enum_v<T>, "build_enum_type_info requires enum types");
+
+  if (register_by_name && type_name.empty()) {
+    return Unexpected(Error::invalid(
+        "type_name must be non-empty when register_by_name is true"));
+  }
+
+  auto entry = std::make_shared<TypeInfo>();
+  entry->type_id = type_id;
+  entry->namespace_name = std::move(ns);
+  entry->register_by_name = register_by_name;
+  entry->is_external = false;
+
+  // When a user explicitly provides a type_name via registration, Java stores
+  // and writes that exact name. The ENUM_PREFIX "2" is only added when Java
+  // auto-generates the type name from the class itself (via encodePkgAndClass).
+  // Since C++ users always explicitly provide the type name, we should NOT
+  // add the prefix.
+  if (!type_name.empty()) {
+    entry->type_name = std::move(type_name);
+  } else {
+    entry->type_name = std::string(typeid(T).name());
+  }
+
+  entry->harness = make_serializer_harness<T>();
+  if (!entry->harness.valid()) {
+    return Unexpected(Error::invalid("Harness for enum type is incomplete"));
+  }
+
+  // Pre-encode namespace and type_name for efficient writing
+  FORY_TRY(enc_ns, encode_meta_string(entry->namespace_name, true));
+  entry->encoded_namespace = std::move(enc_ns);
+  FORY_TRY(enc_tn, encode_meta_string(entry->type_name, false));
+  entry->encoded_type_name = std::move(enc_tn);
+
   return entry;
 }
 
@@ -829,6 +931,13 @@ TypeResolver::build_ext_type_info(uint32_t type_id, std::string ns,
     return Unexpected(
         Error::invalid("Harness for external type is incomplete"));
   }
+
+  // Pre-encode namespace and type_name for efficient writing
+  FORY_TRY(enc_ns, encode_meta_string(entry->namespace_name, true));
+  entry->encoded_namespace = std::move(enc_ns);
+  FORY_TRY(enc_tn, encode_meta_string(entry->type_name, false));
+  entry->encoded_type_name = std::move(enc_tn);
+
   return entry;
 }
 
@@ -922,7 +1031,7 @@ TypeResolver::register_type_internal(const std::type_index &type_index,
 
   type_info_cache_[type_index] = info;
 
-  if (info->type_id != 0) {
+  if (info->type_id != 0 && !info->register_by_name) {
     auto it = type_info_by_id_.find(info->type_id);
     if (it != type_info_by_id_.end() && it->second.get() != info.get()) {
       return Unexpected(Error::invalid("Type id already registered: " +

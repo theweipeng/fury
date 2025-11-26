@@ -81,9 +81,20 @@ namespace test {
 // Test Helpers
 // ============================================================================
 
+// Helper to register test struct types on a Fory instance
+inline void register_test_types(Fory &fory) {
+  uint32_t type_id = 1;
+
+  // Register all struct types used in tests
+  fory.register_struct<::SimpleStruct>(type_id++);
+  fory.register_struct<::ComplexStruct>(type_id++);
+  fory.register_struct<::NestedStruct>(type_id++);
+}
+
 template <typename T>
 void test_roundtrip(const T &original, bool should_equal = true) {
   auto fory = Fory::builder().xlang(true).track_ref(false).build();
+  register_test_types(fory);
 
   // Serialize
   auto serialize_result = fory.serialize(original);
@@ -188,14 +199,15 @@ TEST(SerializationTest, EnumSerializesOrdinalValue) {
       << "Serialization failed: " << bytes_result.error().to_string();
 
   std::vector<uint8_t> bytes = bytes_result.value();
-  ASSERT_GE(bytes.size(), 4 + 1 + 1 + sizeof(int32_t));
+  // Xlang spec: enums are serialized as varuint32, not fixed int32_t
+  // Expected: 4 (header) + 1 (ref flag) + 1 (type id) + 1 (ordinal as
+  // varuint32) = 7 bytes
+  ASSERT_GE(bytes.size(), 4 + 1 + 1 + 1);
   size_t offset = 4;
   EXPECT_EQ(bytes[offset], static_cast<uint8_t>(NOT_NULL_VALUE_FLAG));
   EXPECT_EQ(bytes[offset + 1], static_cast<uint8_t>(TypeId::ENUM));
-
-  int32_t serialized_value = 0;
-  std::memcpy(&serialized_value, bytes.data() + offset + 2, sizeof(int32_t));
-  EXPECT_EQ(serialized_value, 2);
+  // Ordinal 2 encoded as varuint32 is just 1 byte with value 2
+  EXPECT_EQ(bytes[offset + 2], 2);
 }
 
 TEST(SerializationTest, OldEnumSerializesOrdinalValue) {
@@ -206,14 +218,13 @@ TEST(SerializationTest, OldEnumSerializesOrdinalValue) {
       << "Serialization failed: " << bytes_result.error().to_string();
 
   std::vector<uint8_t> bytes = bytes_result.value();
-  ASSERT_GE(bytes.size(), 4 + 1 + 1 + sizeof(int32_t));
+  // Xlang spec: enums are serialized as varuint32, not fixed int32_t
+  ASSERT_GE(bytes.size(), 4 + 1 + 1 + 1);
   size_t offset = 4;
   EXPECT_EQ(bytes[offset], static_cast<uint8_t>(NOT_NULL_VALUE_FLAG));
   EXPECT_EQ(bytes[offset + 1], static_cast<uint8_t>(TypeId::ENUM));
-
-  int32_t serialized_value = 0;
-  std::memcpy(&serialized_value, bytes.data() + offset + 2, sizeof(int32_t));
-  EXPECT_EQ(serialized_value, 2);
+  // Ordinal 2 encoded as varuint32 is just 1 byte with value 2
+  EXPECT_EQ(bytes[offset + 2], 2);
 }
 
 TEST(SerializationTest, EnumOrdinalMappingHandlesNonZeroStart) {
@@ -224,13 +235,13 @@ TEST(SerializationTest, EnumOrdinalMappingHandlesNonZeroStart) {
       << "Serialization failed: " << bytes_result.error().to_string();
 
   std::vector<uint8_t> bytes = bytes_result.value();
-  ASSERT_GE(bytes.size(), 4 + 1 + 1 + sizeof(int32_t));
+  // Xlang spec: enums are serialized as varuint32, not fixed int32_t
+  ASSERT_GE(bytes.size(), 4 + 1 + 1 + 1);
   size_t offset = 4;
   EXPECT_EQ(bytes[offset], static_cast<uint8_t>(NOT_NULL_VALUE_FLAG));
   EXPECT_EQ(bytes[offset + 1], static_cast<uint8_t>(TypeId::ENUM));
-  int32_t serialized_value = 0;
-  std::memcpy(&serialized_value, bytes.data() + offset + 2, sizeof(int32_t));
-  EXPECT_EQ(serialized_value, 0);
+  // Ordinal 0 encoded as varuint32 is just 1 byte with value 0
+  EXPECT_EQ(bytes[offset + 2], 0);
 
   auto roundtrip = fory.deserialize<LegacyStatus>(bytes.data(), bytes.size());
   ASSERT_TRUE(roundtrip.ok())
@@ -247,8 +258,8 @@ TEST(SerializationTest, EnumOrdinalMappingRejectsInvalidOrdinal) {
 
   std::vector<uint8_t> bytes = bytes_result.value();
   size_t offset = 4;
-  int32_t invalid_ordinal = 99;
-  std::memcpy(bytes.data() + offset + 2, &invalid_ordinal, sizeof(int32_t));
+  // Replace the valid ordinal with an invalid one (99 as varuint32)
+  bytes[offset + 2] = 99;
 
   auto decode = fory.deserialize<LegacyStatus>(bytes.data(), bytes.size());
   EXPECT_FALSE(decode.ok());
@@ -262,13 +273,13 @@ TEST(SerializationTest, OldEnumOrdinalMappingHandlesNonZeroStart) {
       << "Serialization failed: " << bytes_result.error().to_string();
 
   std::vector<uint8_t> bytes = bytes_result.value();
-  ASSERT_GE(bytes.size(), 4 + 1 + 1 + sizeof(int32_t));
+  // Xlang spec: enums are serialized as varuint32, not fixed int32_t
+  ASSERT_GE(bytes.size(), 4 + 1 + 1 + 1);
   size_t offset = 4;
   EXPECT_EQ(bytes[offset], static_cast<uint8_t>(NOT_NULL_VALUE_FLAG));
   EXPECT_EQ(bytes[offset + 1], static_cast<uint8_t>(TypeId::ENUM));
-  int32_t serialized_value = 0;
-  std::memcpy(&serialized_value, bytes.data() + offset + 2, sizeof(int32_t));
-  EXPECT_EQ(serialized_value, 0);
+  // Ordinal 0 encoded as varuint32 is just 1 byte with value 0
+  EXPECT_EQ(bytes[offset + 2], 0);
 
   auto roundtrip = fory.deserialize<OldStatus>(bytes.data(), bytes.size());
   ASSERT_TRUE(roundtrip.ok())

@@ -20,7 +20,9 @@
 #pragma once
 
 #include "fory/serialization/config.h"
+#include "fory/serialization/meta_string.h"
 #include "fory/serialization/ref_resolver.h"
+#include "fory/serialization/type_info.h"
 #include "fory/util/buffer.h"
 #include "fory/util/error.h"
 #include "fory/util/result.h"
@@ -34,7 +36,6 @@ namespace serialization {
 // Forward declarations
 class TypeResolver;
 class ReadContext;
-struct TypeInfo;
 
 /// RAII helper to automatically decrease depth when leaving scope
 class DepthGuard {
@@ -148,9 +149,21 @@ public:
     buffer().WriteVarUint32(value);
   }
 
+  /// Write int32_t value as zigzag varint to buffer.
+  inline void write_varint32(int32_t value) { buffer().WriteVarInt32(value); }
+
   /// Write uint64_t value as varint to buffer.
   inline void write_varuint64(uint64_t value) {
     buffer().WriteVarUint64(value);
+  }
+
+  /// Write int64_t value as zigzag varint to buffer.
+  inline void write_varint64(int64_t value) { buffer().WriteVarInt64(value); }
+
+  /// Write uint64_t value as varuint36small to buffer.
+  /// This is the special variable-length encoding used for string headers.
+  inline void write_varuint36small(uint64_t value) {
+    buffer().WriteVarUint36Small(value);
   }
 
   /// Write raw bytes to buffer.
@@ -184,6 +197,10 @@ public:
   Result<const TypeInfo *, Error>
   write_any_typeinfo(uint32_t fory_type_id,
                      const std::type_index &concrete_type_id);
+
+  /// Write type info for a registered enum type.
+  /// Looks up the type info and delegates to write_any_typeinfo.
+  Result<void, Error> write_enum_typeinfo(const std::type_index &type);
 
   /// Reset context for reuse.
   void reset();
@@ -305,9 +322,25 @@ public:
     return buffer().ReadVarUint32();
   }
 
+  /// Read int32_t value as zigzag varint from buffer.
+  inline Result<int32_t, Error> read_varint32() {
+    return buffer().ReadVarInt32();
+  }
+
   /// Read uint64_t value as varint from buffer.
   inline Result<uint64_t, Error> read_varuint64() {
     return buffer().ReadVarUint64();
+  }
+
+  /// Read int64_t value as zigzag varint from buffer.
+  inline Result<int64_t, Error> read_varint64() {
+    return buffer().ReadVarInt64();
+  }
+
+  /// Read uint64_t value as varuint36small from buffer.
+  /// This is the special variable-length encoding used for string headers.
+  inline Result<uint64_t, Error> read_varuint36small() {
+    return buffer().ReadVarUint36Small();
   }
 
   /// Read raw bytes from buffer.
@@ -315,14 +348,16 @@ public:
     return buffer().ReadBytes(data, length);
   }
 
+  Result<std::shared_ptr<TypeInfo>, Error>
+  read_enum_type_info(const std::type_index &type, uint32_t base_type_id);
+
   /// Load all TypeMetas from buffer at the specified offset.
   /// After loading, the reader position is restored to where it was before.
-  Result<void, Error> load_type_meta(int32_t meta_offset);
+  /// @return Size of the meta section in bytes, or error
+  Result<size_t, Error> load_type_meta(int32_t meta_offset);
 
   /// Get TypeInfo by meta index.
-  /// Returns TypeResolver::TypeInfo as void* to avoid incomplete type issues.
-  /// Implementation casts it back to TypeResolver::TypeInfo*.
-  Result<std::shared_ptr<void>, Error>
+  Result<std::shared_ptr<TypeInfo>, Error>
   get_type_info_by_index(size_t index) const;
 
   /// Read type information dynamically from buffer based on type ID.
@@ -348,8 +383,11 @@ private:
   uint32_t current_depth_;
 
   // Meta sharing state (for compatible mode)
-  std::vector<std::shared_ptr<void>> reading_type_infos_;
-  std::unordered_map<int64_t, std::shared_ptr<void>> parsed_type_infos_;
+  std::vector<std::shared_ptr<TypeInfo>> reading_type_infos_;
+  std::unordered_map<int64_t, std::shared_ptr<TypeInfo>> parsed_type_infos_;
+
+  // Dynamic meta strings used for named type/class info.
+  MetaStringTable meta_string_table_;
 };
 
 /// Implementation of DepthGuard destructor
