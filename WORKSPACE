@@ -15,12 +15,6 @@
 # specific language governing permissions and limitations
 # under the License.
 
-workspace(name = "fory")
-
-load("//bazel:fory_deps_setup.bzl", "setup_deps")
-setup_deps()
-
-load("@bazel_skylib//:workspace.bzl", "bazel_skylib_workspace")
-load("//bazel/py:python_configure.bzl", "python_configure")
-bazel_skylib_workspace()
-python_configure(name="local_config_python")
+# This file is intentionally kept minimal.
+# Dependencies are managed via MODULE.bazel using bzlmod.
+# See MODULE.bazel for the list of dependencies.

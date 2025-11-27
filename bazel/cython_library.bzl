@@ -1,5 +1,5 @@
-# Adapted from tensorflow/tensorflow/core/platform/default/build_config.bzl
-# and grpc/bazel/cython_library.bzl
+# Adapted from cython/Tools/rules.bzl
+# Uses official Cython rules pattern from BCR
 """Custom rules for building Cython extensions"""
 
 def pyx_library(name, deps = [], cc_kwargs = {}, py_deps = [], srcs = [], **kwargs):
@@ -41,10 +41,7 @@ def pyx_library(name, deps = [], cc_kwargs = {}, py_deps = [], srcs = [], **kwar
             name = filename + "_cython_translation",
             srcs = [filename],
             outs = [filename.split(".")[0] + ".cpp"],
-            # Optionally use PYTHON_BIN_PATH on Linux platforms so that python 3
-            # works. Windows has issues with cython_binary so skip PYTHON_BIN_PATH.
-            cmd =
-                "PYTHONHASHSEED=0 $(location @cython//:cython_binary) --cplus $(SRCS) --output-file $(OUTS)",
+            cmd = "PYTHONHASHSEED=0 $(execpath @cython//:cython_binary) --cplus $(SRCS) --output-file $(OUTS)",
             tools = ["@cython//:cython_binary"] + pxd_srcs,
         )
 
@@ -52,11 +49,21 @@ def pyx_library(name, deps = [], cc_kwargs = {}, py_deps = [], srcs = [], **kwar
     for src in pyx_srcs:
         stem = src.split(".")[0]
         shared_object_name = stem + ".so"
+
+        # Get linkopts from cc_kwargs or use empty list
+        linkopts = cc_kwargs.pop("linkopts", [])
+
         native.cc_binary(
             name = cc_kwargs.pop("name", shared_object_name),
             srcs = [stem + ".cpp"] + cc_kwargs.pop("srcs", []),
-            deps = deps + ["@local_config_python//:python_headers"] + cc_kwargs.pop("deps", []),
+            deps = deps + ["@rules_python//python/cc:current_py_cc_headers"] + cc_kwargs.pop("deps", []),
             linkshared = cc_kwargs.pop("linkshared", 1),
+            # On macOS, use -undefined dynamic_lookup to allow Python symbols
+            # to be resolved at runtime when the extension is imported.
+            linkopts = linkopts + select({
+                "@platforms//os:macos": ["-undefined", "dynamic_lookup"],
+                "//conditions:default": [],
+            }),
             **cc_kwargs
         )
         shared_objects.append(shared_object_name)
@@ -69,7 +76,7 @@ def pyx_library(name, deps = [], cc_kwargs = {}, py_deps = [], srcs = [], **kwar
         name = name,
         srcs = py_srcs,
         deps = py_deps,
-        srcs_version = "PY2AND3",
+        srcs_version = "PY3",
         data = data,
         **kwargs
     )
