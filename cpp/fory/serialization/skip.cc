@@ -223,7 +223,7 @@ Result<void, Error> skip_ext(ReadContext &ctx, const FieldType &field_type) {
   uint32_t low = full_type_id & 0xffu;
   TypeId tid = static_cast<TypeId>(low);
 
-  std::shared_ptr<TypeInfo> type_info;
+  const TypeInfo *type_info = nullptr;
 
   if (tid == TypeId::NAMED_EXT) {
     // Named ext: read type_id and meta_index
@@ -236,7 +236,9 @@ Result<void, Error> skip_ext(ReadContext &ctx, const FieldType &field_type) {
   } else {
     // ID-based ext: look up by full type_id
     // The ext fields in TypeMeta store the user type_id (high bits | EXT)
-    type_info = ctx.type_resolver().get_type_info_by_id(full_type_id);
+    FORY_TRY(type_info_by_id,
+             ctx.type_resolver().get_type_info_by_id(full_type_id));
+    type_info = type_info_by_id;
   }
 
   if (!type_info) {
