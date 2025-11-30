@@ -137,6 +137,9 @@ struct SerializationMeta<
 /// myapp::Person person{"Alice", 30};
 /// auto bytes = fory.serialize(person);
 /// ```
+/// Main struct registration macro.
+/// TypeIndex uses the fallback (type_fallback_hash based on PRETTY_FUNCTION)
+/// which provides unique type identification without namespace issues.
 #define FORY_STRUCT(Type, ...)                                                 \
   FORY_FIELD_INFO(Type, __VA_ARGS__)                                           \
   inline constexpr std::true_type ForyStructMarker(const Type &) noexcept {    \
@@ -156,6 +159,51 @@ inline constexpr bool is_primitive_type_id(TypeId type_id) {
          type_id == TypeId::VAR_INT64 || type_id == TypeId::SLI_INT64 ||
          type_id == TypeId::FLOAT16 || type_id == TypeId::FLOAT32 ||
          type_id == TypeId::FLOAT64;
+}
+
+/// Write a primitive value to buffer at given offset WITHOUT updating
+/// writer_index. Returns the number of bytes written. Caller must ensure buffer
+/// has sufficient capacity.
+template <typename T>
+FORY_ALWAYS_INLINE uint32_t put_primitive_at(T value, Buffer &buffer,
+                                             uint32_t offset) {
+  if constexpr (std::is_same_v<T, int32_t>) {
+    // varint32 with zigzag encoding
+    uint32_t zigzag = (static_cast<uint32_t>(value) << 1) ^
+                      static_cast<uint32_t>(value >> 31);
+    return buffer.PutVarUint32(offset, zigzag);
+  } else if constexpr (std::is_same_v<T, uint32_t>) {
+    buffer.UnsafePut<uint32_t>(offset, value);
+    return 4;
+  } else if constexpr (std::is_same_v<T, int64_t>) {
+    // varint64 with zigzag encoding
+    uint64_t zigzag = (static_cast<uint64_t>(value) << 1) ^
+                      static_cast<uint64_t>(value >> 63);
+    return buffer.PutVarUint64(offset, zigzag);
+  } else if constexpr (std::is_same_v<T, uint64_t>) {
+    buffer.UnsafePut<uint64_t>(offset, value);
+    return 8;
+  } else if constexpr (std::is_same_v<T, bool>) {
+    buffer.UnsafePutByte(offset, static_cast<uint8_t>(value ? 1 : 0));
+    return 1;
+  } else if constexpr (std::is_same_v<T, int8_t> ||
+                       std::is_same_v<T, uint8_t>) {
+    buffer.UnsafePutByte(offset, static_cast<uint8_t>(value));
+    return 1;
+  } else if constexpr (std::is_same_v<T, int16_t> ||
+                       std::is_same_v<T, uint16_t>) {
+    buffer.UnsafePut<T>(offset, value);
+    return 2;
+  } else if constexpr (std::is_same_v<T, float>) {
+    buffer.UnsafePut<float>(offset, value);
+    return 4;
+  } else if constexpr (std::is_same_v<T, double>) {
+    buffer.UnsafePut<double>(offset, value);
+    return 8;
+  } else {
+    static_assert(sizeof(T) == 0, "Unsupported primitive type");
+    return 0;
+  }
 }
 
 template <size_t... Indices, typename Func>
@@ -442,7 +490,252 @@ template <typename T> struct CompileTimeFieldHelpers {
         }
         return arr;
       }();
+
+  /// Check if ALL fields are primitives and non-nullable (can use fast path)
+  static constexpr bool compute_all_primitives_non_nullable() {
+    if constexpr (FieldCount == 0) {
+      return true;
+    } else {
+      for (size_t i = 0; i < FieldCount; ++i) {
+        if (!is_primitive_type_id(type_ids[i]) || nullable_flags[i]) {
+          return false;
+        }
+      }
+      return true;
+    }
+  }
+
+  static inline constexpr bool all_primitives_non_nullable =
+      compute_all_primitives_non_nullable();
+
+  /// Compute max serialized size for all primitive fields (for buffer
+  /// pre-reservation)
+  static constexpr size_t compute_max_primitive_size() {
+    if constexpr (FieldCount == 0) {
+      return 0;
+    } else {
+      size_t total = 0;
+      for (size_t i = 0; i < FieldCount; ++i) {
+        // Varint max: 5 bytes for int32, 10 bytes for int64
+        // Fixed: 1/2/4/8 bytes
+        uint32_t tid = type_ids[i];
+        switch (static_cast<TypeId>(tid)) {
+        case TypeId::BOOL:
+        case TypeId::INT8:
+          total += 1;
+          break;
+        case TypeId::INT16:
+        case TypeId::FLOAT16:
+          total += 2;
+          break;
+        case TypeId::INT32:
+        case TypeId::VAR_INT32:
+          total += 8; // varint max, but bulk write may write up to 8 bytes
+          break;
+        case TypeId::FLOAT32:
+          total += 4;
+          break;
+        case TypeId::INT64:
+        case TypeId::VAR_INT64:
+        case TypeId::SLI_INT64:
+          total += 10; // varint max
+          break;
+        case TypeId::FLOAT64:
+          total += 8;
+          break;
+        default:
+          total += 10; // safe default
+          break;
+        }
+      }
+      return total;
+    }
+  }
+
+  static inline constexpr size_t max_primitive_serialized_size =
+      compute_max_primitive_size();
+
+  /// Count leading non-nullable primitive fields in sorted order.
+  /// Since fields are sorted with non-nullable primitives first (group 0),
+  /// we can fast-write these fields and slow-write the rest.
+  static constexpr size_t compute_primitive_field_count() {
+    if constexpr (FieldCount == 0) {
+      return 0;
+    } else {
+      size_t count = 0;
+      for (size_t i = 0; i < FieldCount; ++i) {
+        size_t original_idx = sorted_indices[i];
+        if (is_primitive_type_id(type_ids[original_idx]) &&
+            !nullable_flags[original_idx]) {
+          ++count;
+        } else {
+          break; // Non-nullable primitives are always first in sorted order
+        }
+      }
+      return count;
+    }
+  }
+
+  static inline constexpr size_t primitive_field_count =
+      compute_primitive_field_count();
+
+  /// Check if a type_id represents a fixed-size primitive (not varint)
+  static constexpr bool is_fixed_size_primitive(uint32_t tid) {
+    switch (static_cast<TypeId>(tid)) {
+    case TypeId::BOOL:
+    case TypeId::INT8:
+    case TypeId::INT16:
+    case TypeId::FLOAT16:
+    case TypeId::FLOAT32:
+    case TypeId::FLOAT64:
+      return true;
+    default:
+      return false;
+    }
+  }
+
+  /// Get the fixed size in bytes for a type_id (0 if not fixed-size)
+  static constexpr size_t fixed_size_bytes(uint32_t tid) {
+    switch (static_cast<TypeId>(tid)) {
+    case TypeId::BOOL:
+    case TypeId::INT8:
+      return 1;
+    case TypeId::INT16:
+    case TypeId::FLOAT16:
+      return 2;
+    case TypeId::FLOAT32:
+      return 4;
+    case TypeId::FLOAT64:
+      return 8;
+    default:
+      return 0;
+    }
+  }
+
+  /// Compute total bytes for leading fixed-size primitive fields only
+  /// (stops at first varint field)
+  static constexpr size_t compute_leading_fixed_size_bytes() {
+    if constexpr (FieldCount == 0) {
+      return 0;
+    } else {
+      size_t total = 0;
+      for (size_t i = 0; i < FieldCount; ++i) {
+        size_t original_idx = sorted_indices[i];
+        if (!is_primitive_type_id(type_ids[original_idx]) ||
+            nullable_flags[original_idx]) {
+          break; // Stop at non-primitive or nullable
+        }
+        size_t fs = fixed_size_bytes(type_ids[original_idx]);
+        if (fs == 0) {
+          break; // Stop at first varint
+        }
+        total += fs;
+      }
+      return total;
+    }
+  }
+
+  /// Count leading fixed-size primitive fields (stops at first varint)
+  static constexpr size_t compute_leading_fixed_count() {
+    if constexpr (FieldCount == 0) {
+      return 0;
+    } else {
+      size_t count = 0;
+      for (size_t i = 0; i < FieldCount; ++i) {
+        size_t original_idx = sorted_indices[i];
+        if (!is_primitive_type_id(type_ids[original_idx]) ||
+            nullable_flags[original_idx]) {
+          break;
+        }
+        if (fixed_size_bytes(type_ids[original_idx]) == 0) {
+          break; // Varint encountered
+        }
+        ++count;
+      }
+      return count;
+    }
+  }
+
+  static inline constexpr size_t leading_fixed_size_bytes =
+      compute_leading_fixed_size_bytes();
+  static inline constexpr size_t leading_fixed_count =
+      compute_leading_fixed_count();
+
+  /// Compute max serialized size for leading primitive fields only.
+  /// Used for hybrid fast/slow path buffer pre-reservation.
+  static constexpr size_t compute_max_leading_primitive_size() {
+    if constexpr (FieldCount == 0 || primitive_field_count == 0) {
+      return 0;
+    } else {
+      size_t total = 0;
+      for (size_t i = 0; i < primitive_field_count; ++i) {
+        size_t original_idx = sorted_indices[i];
+        uint32_t tid = type_ids[original_idx];
+        switch (static_cast<TypeId>(tid)) {
+        case TypeId::BOOL:
+        case TypeId::INT8:
+          total += 1;
+          break;
+        case TypeId::INT16:
+        case TypeId::FLOAT16:
+          total += 2;
+          break;
+        case TypeId::INT32:
+        case TypeId::VAR_INT32:
+          total += 5; // varint max
+          break;
+        case TypeId::FLOAT32:
+          total += 4;
+          break;
+        case TypeId::INT64:
+        case TypeId::VAR_INT64:
+        case TypeId::SLI_INT64:
+          total += 10; // varint max
+          break;
+        case TypeId::FLOAT64:
+          total += 8;
+          break;
+        default:
+          break;
+        }
+      }
+      return total;
+    }
+  }
+
+  static inline constexpr size_t max_leading_primitive_size =
+      compute_max_leading_primitive_size();
 };
+
+/// Fast path writer for primitive-only, non-nullable structs.
+/// Writes all fields directly without Result wrapping.
+/// Optimized: tracks offset locally and updates writer_index once at the end.
+template <typename T, size_t... Indices>
+FORY_ALWAYS_INLINE void
+write_primitive_fields_fast(const T &obj, Buffer &buffer,
+                            std::index_sequence<Indices...>) {
+  using Helpers = CompileTimeFieldHelpers<T>;
+  const auto field_info = ForyFieldInfo(obj);
+  const auto field_ptrs = decltype(field_info)::Ptrs;
+
+  // Track offset locally - single writer_index update at the end
+  uint32_t offset = buffer.writer_index();
+
+  // Write each field directly in sorted order using fold expression
+  (
+      [&]() {
+        constexpr size_t original_index = Helpers::sorted_indices[Indices];
+        const auto field_ptr = std::get<original_index>(field_ptrs);
+        using FieldType =
+            typename meta::RemoveMemberPointerCVRefT<decltype(field_ptr)>;
+        const auto &field_value = obj.*field_ptr;
+        offset += put_primitive_at<FieldType>(field_value, buffer, offset);
+      }(),
+      ...);
+
+  // Single writer_index update for all fields
+  buffer.WriterIndex(offset);
+}
 
 template <typename T, size_t Index, typename FieldPtrs>
 Result<void, Error> write_single_field(const T &obj, WriteContext &ctx,
@@ -505,29 +798,80 @@ Result<void, Error> write_single_field(const T &obj, WriteContext &ctx,
   return Serializer<FieldType>::write(field_value, ctx, write_ref, write_type);
 }
 
+/// Helper to write a single field at compile-time sorted position
+template <typename T, size_t SortedPosition>
+Result<void, Error> write_field_at_sorted_position(const T &obj,
+                                                   WriteContext &ctx,
+                                                   bool has_generics) {
+  using Helpers = CompileTimeFieldHelpers<T>;
+  constexpr size_t original_index = Helpers::sorted_indices[SortedPosition];
+  const auto field_info = ForyFieldInfo(obj);
+  const auto field_ptrs = decltype(field_info)::Ptrs;
+  return write_single_field<T, original_index>(obj, ctx, field_ptrs,
+                                               has_generics);
+}
+
+/// Helper to write remaining (non-primitive) fields starting from offset.
+/// Used in hybrid fast/slow path when some leading fields are primitives.
+template <typename T, size_t Offset, size_t... Is>
+FORY_ALWAYS_INLINE Result<void, Error>
+write_remaining_fields(const T &obj, WriteContext &ctx, bool has_generics,
+                       std::index_sequence<Is...>) {
+  constexpr size_t remaining = sizeof...(Is);
+  constexpr size_t max_bytes_per_field = 10;
+  ctx.buffer().Grow(static_cast<uint32_t>(remaining * max_bytes_per_field));
+
+  Result<void, Error> result;
+  ((result =
+        write_field_at_sorted_position<T, Offset + Is>(obj, ctx, has_generics),
+    result.ok()) &&
+   ...);
+  return result;
+}
+
 /// Write struct fields recursively using index sequence (sorted order)
+/// Optimized with hybrid fast/slow path: primitive fields use direct buffer
+/// writes, non-primitive fields use full serialization with error handling.
 template <typename T, size_t... Indices>
 Result<void, Error> write_struct_fields_impl(const T &obj, WriteContext &ctx,
                                              std::index_sequence<Indices...>,
                                              bool has_generics) {
-  // Get field info from FORY_FIELD_INFO via ADL
-  const auto field_info = ForyFieldInfo(obj);
-  const auto field_ptrs = decltype(field_info)::Ptrs;
-
   using Helpers = CompileTimeFieldHelpers<T>;
+  constexpr size_t prim_count = Helpers::primitive_field_count;
+  constexpr size_t total_count = sizeof...(Indices);
 
-  // Write each field in sorted order with early return on error
-  Result<void, Error> result;
-  ((result = dispatch_field_index<T>(Helpers::sorted_indices[Indices],
-                                     [&](auto index_constant) {
-                                       constexpr size_t index =
-                                           decltype(index_constant)::value;
-                                       return write_single_field<T, index>(
-                                           obj, ctx, field_ptrs, has_generics);
-                                     }),
-    result.ok()) &&
-   ...);
-  return result;
+  if constexpr (prim_count == total_count) {
+    // FAST PATH: ALL fields are non-nullable primitives
+    // Use direct buffer writes without Result wrapping or per-field Grow()
+    constexpr size_t max_size = Helpers::max_primitive_serialized_size;
+    ctx.buffer().Grow(static_cast<uint32_t>(max_size));
+    write_primitive_fields_fast<T>(obj, ctx.buffer(),
+                                   std::make_index_sequence<prim_count>{});
+    return Result<void, Error>();
+  } else if constexpr (prim_count > 0) {
+    // HYBRID PATH: Some leading primitives + remaining non-primitives
+    // Part 1: Fast-write primitive fields (sorted indices 0 to prim_count-1)
+    constexpr size_t max_prim_size = Helpers::max_leading_primitive_size;
+    ctx.buffer().Grow(static_cast<uint32_t>(max_prim_size));
+    write_primitive_fields_fast<T>(obj, ctx.buffer(),
+                                   std::make_index_sequence<prim_count>{});
+
+    // Part 2: Slow-write remaining fields with full error handling
+    return write_remaining_fields<T, prim_count>(
+        obj, ctx, has_generics,
+        std::make_index_sequence<total_count - prim_count>{});
+  } else {
+    // SLOW PATH: No leading primitives - all fields need full serialization
+    constexpr size_t max_bytes_per_field = 10;
+    ctx.buffer().Grow(static_cast<uint32_t>(total_count * max_bytes_per_field));
+
+    Result<void, Error> result;
+    ((result =
+          write_field_at_sorted_position<T, Indices>(obj, ctx, has_generics),
+      result.ok()) &&
+     ...);
+    return result;
+  }
 }
 
 /// Helper to read a single field by index
@@ -633,22 +977,125 @@ read_single_field_by_index_compatible(T &obj, ReadContext &ctx,
   return Result<void, Error>();
 }
 
+/// Helper to read a single field at compile-time sorted position
+template <typename T, size_t SortedPosition>
+Result<void, Error> read_field_at_sorted_position(T &obj, ReadContext &ctx) {
+  using Helpers = CompileTimeFieldHelpers<T>;
+  constexpr size_t original_index = Helpers::sorted_indices[SortedPosition];
+  return read_single_field_by_index<original_index>(obj, ctx);
+}
+
+/// Read a fixed-size primitive value directly using UnsafeGet.
+/// Caller must ensure buffer bounds are pre-checked.
+template <typename T>
+FORY_ALWAYS_INLINE T read_fixed_primitive(Buffer &buffer) {
+  uint32_t idx = buffer.reader_index();
+  T value;
+  if constexpr (std::is_same_v<T, bool>) {
+    value = buffer.UnsafeGet<uint8_t>(idx) != 0;
+    buffer.IncreaseReaderIndex(1);
+  } else if constexpr (std::is_same_v<T, int8_t>) {
+    value = static_cast<int8_t>(buffer.UnsafeGet<uint8_t>(idx));
+    buffer.IncreaseReaderIndex(1);
+  } else if constexpr (std::is_same_v<T, uint8_t>) {
+    value = buffer.UnsafeGet<uint8_t>(idx);
+    buffer.IncreaseReaderIndex(1);
+  } else if constexpr (std::is_same_v<T, int16_t>) {
+    value = buffer.UnsafeGet<int16_t>(idx);
+    buffer.IncreaseReaderIndex(2);
+  } else if constexpr (std::is_same_v<T, uint16_t>) {
+    value = buffer.UnsafeGet<uint16_t>(idx);
+    buffer.IncreaseReaderIndex(2);
+  } else if constexpr (std::is_same_v<T, float>) {
+    value = buffer.UnsafeGet<float>(idx);
+    buffer.IncreaseReaderIndex(4);
+  } else if constexpr (std::is_same_v<T, double>) {
+    value = buffer.UnsafeGet<double>(idx);
+    buffer.IncreaseReaderIndex(8);
+  } else {
+    static_assert(sizeof(T) == 0, "Unsupported fixed-size primitive type");
+  }
+  return value;
+}
+
+/// Fast read leading fixed-size primitive fields using UnsafeGet.
+/// Caller must ensure buffer bounds are pre-checked.
+template <typename T, size_t... Indices>
+FORY_ALWAYS_INLINE void
+read_fixed_primitive_fields(T &obj, Buffer &buffer,
+                            std::index_sequence<Indices...>) {
+  using Helpers = CompileTimeFieldHelpers<T>;
+  const auto field_info = ForyFieldInfo(obj);
+  const auto field_ptrs = decltype(field_info)::Ptrs;
+
+  (
+      [&]() {
+        constexpr size_t original_index = Helpers::sorted_indices[Indices];
+        const auto field_ptr = std::get<original_index>(field_ptrs);
+        using FieldType =
+            typename meta::RemoveMemberPointerCVRefT<decltype(field_ptr)>;
+        obj.*field_ptr = read_fixed_primitive<FieldType>(buffer);
+      }(),
+      ...);
+}
+
+/// Helper to read remaining fields starting from Offset
+template <typename T, size_t Offset, size_t Total, size_t... Is>
+Result<void, Error> read_remaining_fields_impl(T &obj, ReadContext &ctx,
+                                               std::index_sequence<Is...>) {
+  Result<void, Error> result;
+  ((result = read_field_at_sorted_position<T, Offset + Is>(obj, ctx),
+    result.ok()) &&
+   ...);
+  return result;
+}
+
+template <typename T, size_t Offset, size_t Total>
+Result<void, Error> read_remaining_fields(T &obj, ReadContext &ctx) {
+  return read_remaining_fields_impl<T, Offset, Total>(
+      obj, ctx, std::make_index_sequence<Total - Offset>{});
+}
+
 /// Read struct fields recursively using index sequence (sorted order - matches
 /// write order)
+/// Optimized: when compatible=false and there are leading fixed-size
+/// primitives, pre-check bounds once and use UnsafeGet for those fields. Note:
+/// varints (int32/int64) cannot be pre-checked since their length is unknown.
 template <typename T, size_t... Indices>
 Result<void, Error> read_struct_fields_impl(T &obj, ReadContext &ctx,
                                             std::index_sequence<Indices...>) {
   using Helpers = CompileTimeFieldHelpers<T>;
+  constexpr size_t fixed_count = Helpers::leading_fixed_count;
+  constexpr size_t fixed_bytes = Helpers::leading_fixed_size_bytes;
+  constexpr size_t total_count = sizeof...(Indices);
 
-  // Read each field in sorted order (same as write) with early return on error
+  // FAST PATH: When compatible=false and we have leading fixed-size primitives
+  // (bool, int8, int16, float, double - NOT varints like int32/int64)
+  if constexpr (fixed_count > 0 && fixed_bytes > 0) {
+    if (!ctx.is_compatible()) {
+      Buffer &buffer = ctx.buffer();
+      // Pre-check bounds for all fixed-size fields at once
+      if (FORY_PREDICT_FALSE(buffer.reader_index() + fixed_bytes >
+                             buffer.size())) {
+        return Unexpected(Error::buffer_out_of_bound(
+            buffer.reader_index(), fixed_bytes, buffer.size()));
+      }
+      // Fast read fixed-size primitives
+      read_fixed_primitive_fields<T>(obj, buffer,
+                                     std::make_index_sequence<fixed_count>{});
+
+      if constexpr (fixed_count < total_count) {
+        // Read remaining fields with normal path
+        return read_remaining_fields<T, fixed_count, total_count>(obj, ctx);
+      } else {
+        return Result<void, Error>();
+      }
+    }
+  }
+
+  // NORMAL PATH: compatible mode or structs with varints/complex types
   Result<void, Error> result;
-  ((result = dispatch_field_index<T>(Helpers::sorted_indices[Indices],
-                                     [&](auto index_constant) {
-                                       constexpr size_t index =
-                                           decltype(index_constant)::value;
-                                       return read_single_field_by_index<index>(
-                                           obj, ctx);
-                                     }),
+  ((result = read_field_at_sorted_position<T, Indices>(obj, ctx),
     result.ok()) &&
    ...);
   return result;
@@ -743,7 +1190,8 @@ struct Serializer<T, std::enable_if_t<is_fory_serializable_v<T>>> {
 
     // In compatible mode, always write meta index (matches Rust behavior)
     if (ctx.is_compatible() && type_info->type_meta) {
-      FORY_TRY(meta_index, ctx.push_meta(std::type_index(typeid(T))));
+      // Use TypeInfo* overload to avoid type_index creation
+      size_t meta_index = ctx.push_meta(type_info.get());
       ctx.write_varuint32(static_cast<uint32_t>(meta_index));
     }
     return Result<void, Error>();
@@ -766,11 +1214,23 @@ struct Serializer<T, std::enable_if_t<is_fory_serializable_v<T>>> {
     write_not_null_ref_flag(ctx, write_ref);
 
     if (write_type) {
-      FORY_TRY(type_id, ctx.type_resolver().template get_type_id<T>());
-      // Use write_any_typeinfo to handle both type_id AND namespace/type_name
-      // for NAMED_STRUCT, and meta_index for compatible mode
-      FORY_RETURN_NOT_OK(
-          ctx.write_any_typeinfo(type_id, std::type_index(typeid(T))));
+      // Direct lookup using compile-time type_index<T>() - O(1) hash lookup
+      auto info_result = ctx.type_resolver().template get_struct_type_info<T>();
+      if (FORY_PREDICT_FALSE(!info_result.ok())) {
+        return Unexpected(info_result.error());
+      }
+      const TypeInfo *type_info = info_result.value().get();
+      uint32_t tid = type_info->type_id;
+
+      // Fast path: check if this is a simple STRUCT type (no meta needed)
+      uint32_t type_id_low = tid & 0xff;
+      if (type_id_low == static_cast<uint32_t>(TypeId::STRUCT)) {
+        // Simple STRUCT - just write the type_id directly
+        ctx.write_struct_type_id_direct(tid);
+      } else {
+        // Complex type (NAMED_STRUCT, COMPATIBLE_STRUCT, etc.) - use TypeInfo*
+        FORY_RETURN_NOT_OK(ctx.write_struct_type_info(type_info));
+      }
     }
     return write_data_generic(obj, ctx, has_generics);
   }
@@ -831,9 +1291,10 @@ struct Serializer<T, std::enable_if_t<is_fory_serializable_v<T>>> {
       ref_flag = static_cast<int8_t>(RefFlag::NotNullValue);
     }
 
-    int8_t not_null_value_flag = static_cast<int8_t>(RefFlag::NotNullValue);
-    int8_t ref_value_flag = static_cast<int8_t>(RefFlag::RefValue);
-    int8_t null_flag = static_cast<int8_t>(RefFlag::Null);
+    constexpr int8_t not_null_value_flag =
+        static_cast<int8_t>(RefFlag::NotNullValue);
+    constexpr int8_t ref_value_flag = static_cast<int8_t>(RefFlag::RefValue);
+    constexpr int8_t null_flag = static_cast<int8_t>(RefFlag::Null);
 
     if (ref_flag == not_null_value_flag || ref_flag == ref_value_flag) {
       // In compatible mode: use meta sharing (matches Rust behavior)
@@ -885,21 +1346,37 @@ struct Serializer<T, std::enable_if_t<is_fory_serializable_v<T>>> {
         // payload, and also validates that the concrete type id matches
         // the expected static type.
         if (read_type) {
-          FORY_TRY(local_type_info,
-                   ctx.type_resolver().template get_struct_type_info<T>());
-          if (!local_type_info->type_meta) {
-            return Unexpected(Error::type_error(
-                "Type metadata not initialized for requested struct"));
+          // Direct lookup using compile-time type_index<T>() - O(1) hash lookup
+          auto type_id_result = ctx.type_resolver().template get_type_id<T>();
+          if (FORY_PREDICT_FALSE(!type_id_result.ok())) {
+            return Unexpected(std::move(type_id_result).error());
           }
-          uint32_t expected_type_id =
-              ctx.type_resolver().get_type_id(*local_type_info);
+          uint32_t expected_type_id = type_id_result.value();
 
-          // xlang: read full type info (id + any named metadata)
-          FORY_TRY(remote_info, ctx.read_any_typeinfo());
-          uint32_t remote_type_id = remote_info ? remote_info->type_id : 0u;
-          if (remote_type_id != expected_type_id) {
-            return Unexpected(
-                Error::type_mismatch(remote_type_id, expected_type_id));
+          // FAST PATH: For simple numeric type IDs (not named types), we can
+          // just read the varint and compare directly without hash lookup.
+          // Named types have type_id_low in ranges that require metadata
+          // parsing.
+          uint8_t expected_type_id_low = expected_type_id & 0xff;
+          if (expected_type_id_low !=
+                  static_cast<uint8_t>(TypeId::NAMED_ENUM) &&
+              expected_type_id_low != static_cast<uint8_t>(TypeId::NAMED_EXT) &&
+              expected_type_id_low !=
+                  static_cast<uint8_t>(TypeId::NAMED_STRUCT)) {
+            // Simple type ID - just read and compare varint directly
+            FORY_TRY(remote_type_id, ctx.read_varuint32());
+            if (remote_type_id != expected_type_id) {
+              return Unexpected(
+                  Error::type_mismatch(remote_type_id, expected_type_id));
+            }
+          } else {
+            // Named type - need to parse full type info
+            FORY_TRY(remote_info, ctx.read_any_typeinfo());
+            uint32_t remote_type_id = remote_info ? remote_info->type_id : 0u;
+            if (remote_type_id != expected_type_id) {
+              return Unexpected(
+                  Error::type_mismatch(remote_type_id, expected_type_id));
+            }
           }
         }
         return read_data(ctx);

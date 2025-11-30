@@ -114,6 +114,18 @@ Result<size_t, Error> WriteContext::push_meta(const std::type_index &type_id) {
   return index;
 }
 
+size_t WriteContext::push_meta(const TypeInfo *type_info) {
+  auto it = write_type_info_index_map_.find(type_info);
+  if (it != write_type_info_index_map_.end()) {
+    return it->second;
+  }
+
+  size_t index = write_type_defs_.size();
+  write_type_defs_.push_back(type_info->type_def);
+  write_type_info_index_map_[type_info] = index;
+  return index;
+}
+
 void WriteContext::write_meta(size_t offset) {
   size_t current_pos = buffer_.writer_index();
   // Update the meta offset field (written as -1 initially)
@@ -168,6 +180,40 @@ WriteContext::write_enum_typeinfo(const std::type_index &type) {
     if (config_->compatible) {
       // Write meta_index
       FORY_TRY(meta_index, push_meta(type));
+      buffer_.WriteVarUint32(static_cast<uint32_t>(meta_index));
+    } else {
+      // Write pre-encoded namespace and type_name
+      if (type_info->encoded_namespace && type_info->encoded_type_name) {
+        write_encoded_meta_string(buffer_, *type_info->encoded_namespace);
+        write_encoded_meta_string(buffer_, *type_info->encoded_type_name);
+      } else {
+        return Unexpected(
+            Error::invalid("Encoded meta strings not initialized for enum"));
+      }
+    }
+  }
+  // For plain ENUM, just writing type_id is sufficient
+
+  return Result<void, Error>();
+}
+
+Result<void, Error>
+WriteContext::write_enum_typeinfo(const TypeInfo *type_info) {
+  if (!type_info) {
+    // Enum not registered, write plain ENUM type id
+    buffer_.WriteVarUint32(static_cast<uint32_t>(TypeId::ENUM));
+    return Result<void, Error>();
+  }
+
+  uint32_t type_id = type_info->type_id;
+  uint32_t type_id_low = type_id & 0xff;
+
+  buffer_.WriteVarUint32(type_id);
+
+  if (type_id_low == static_cast<uint32_t>(TypeId::NAMED_ENUM)) {
+    if (config_->compatible) {
+      // Write meta_index using TypeInfo pointer (fast path)
+      size_t meta_index = push_meta(type_info);
       buffer_.WriteVarUint32(static_cast<uint32_t>(meta_index));
     } else {
       // Write pre-encoded namespace and type_name
@@ -243,14 +289,111 @@ WriteContext::write_any_typeinfo(uint32_t fory_type_id,
   return type_info;
 }
 
+Result<void, Error>
+WriteContext::write_struct_type_info(const std::type_index &type_id) {
+  // Get type info with single lookup
+  FORY_TRY(type_info, type_resolver_->get_type_info(type_id));
+  uint32_t fory_type_id = type_info->type_id;
+
+  // Write type_id
+  buffer_.WriteVarUint32(fory_type_id);
+
+  // Handle different struct type categories based on low byte
+  uint32_t type_id_low = fory_type_id & 0xff;
+  switch (type_id_low) {
+  case static_cast<uint32_t>(TypeId::NAMED_COMPATIBLE_STRUCT):
+  case static_cast<uint32_t>(TypeId::COMPATIBLE_STRUCT): {
+    // Write meta_index
+    FORY_TRY(meta_index, push_meta(type_id));
+    buffer_.WriteVarUint32(static_cast<uint32_t>(meta_index));
+    break;
+  }
+  case static_cast<uint32_t>(TypeId::NAMED_STRUCT): {
+    if (config_->compatible) {
+      // Write meta_index
+      FORY_TRY(meta_index, push_meta(type_id));
+      buffer_.WriteVarUint32(static_cast<uint32_t>(meta_index));
+    } else {
+      // Write pre-encoded namespace and type_name
+      if (type_info->encoded_namespace && type_info->encoded_type_name) {
+        write_encoded_meta_string(buffer_, *type_info->encoded_namespace);
+        write_encoded_meta_string(buffer_, *type_info->encoded_type_name);
+      } else {
+        return Unexpected(
+            Error::invalid("Encoded meta strings not initialized for struct"));
+      }
+    }
+    break;
+  }
+  default:
+    // STRUCT type - just writing type_id is sufficient
+    break;
+  }
+
+  return Result<void, Error>();
+}
+
+Result<void, Error>
+WriteContext::write_struct_type_info(const TypeInfo *type_info) {
+  uint32_t fory_type_id = type_info->type_id;
+
+  // Write type_id
+  buffer_.WriteVarUint32(fory_type_id);
+
+  // Handle different struct type categories based on low byte
+  uint32_t type_id_low = fory_type_id & 0xff;
+  switch (type_id_low) {
+  case static_cast<uint32_t>(TypeId::NAMED_COMPATIBLE_STRUCT):
+  case static_cast<uint32_t>(TypeId::COMPATIBLE_STRUCT): {
+    // Write meta_index using TypeInfo pointer (fast path)
+    size_t meta_index = push_meta(type_info);
+    buffer_.WriteVarUint32(static_cast<uint32_t>(meta_index));
+    break;
+  }
+  case static_cast<uint32_t>(TypeId::NAMED_STRUCT): {
+    if (config_->compatible) {
+      // Write meta_index using TypeInfo pointer (fast path)
+      size_t meta_index = push_meta(type_info);
+      buffer_.WriteVarUint32(static_cast<uint32_t>(meta_index));
+    } else {
+      // Write pre-encoded namespace and type_name
+      if (type_info->encoded_namespace && type_info->encoded_type_name) {
+        write_encoded_meta_string(buffer_, *type_info->encoded_namespace);
+        write_encoded_meta_string(buffer_, *type_info->encoded_type_name);
+      } else {
+        return Unexpected(
+            Error::invalid("Encoded meta strings not initialized for struct"));
+      }
+    }
+    break;
+  }
+  default:
+    // STRUCT type - just writing type_id is sufficient
+    break;
+  }
+
+  return Result<void, Error>();
+}
+
 void WriteContext::reset() {
   ref_writer_.reset();
+  // Clear meta vectors/maps - they're typically small or empty
+  // in non-compatible mode, so clear() is efficient
   write_type_defs_.clear();
   write_type_id_index_map_.clear();
+  write_type_info_index_map_.clear();
   current_dyn_depth_ = 0;
-  // Reset buffer for reuse
+  // Reset buffer indices for reuse - no memory operations needed
   buffer_.WriterIndex(0);
   buffer_.ReaderIndex(0);
+}
+
+uint32_t WriteContext::get_type_id_for_cache(const std::type_index &type_idx) {
+  auto result = type_resolver_->get_type_info(type_idx);
+  if (!result.ok()) {
+    return 0;
+  }
+  return result.value()->type_id;
 }
 
 // ============================================================================
@@ -272,6 +415,11 @@ Result<std::shared_ptr<TypeInfo>, Error>
 ReadContext::read_enum_type_info(const std::type_index &type,
                                  uint32_t base_type_id) {
   (void)type;
+  return read_enum_type_info(base_type_id);
+}
+
+Result<std::shared_ptr<TypeInfo>, Error>
+ReadContext::read_enum_type_info(uint32_t base_type_id) {
   FORY_TRY(type_info, read_any_typeinfo());
   uint32_t type_id_low = type_info->type_id & 0xff;
   // Accept both ENUM and NAMED_ENUM as compatible types
@@ -325,8 +473,11 @@ Result<size_t, Error> ReadContext::load_type_meta(int32_t meta_offset) {
     std::shared_ptr<TypeInfo> type_info;
     if (local_type_info) {
       // Have local type - assign field_ids by comparing schemas
-      TypeMeta::assign_field_ids(local_type_info->type_meta.get(),
-                                 parsed_meta->field_infos);
+      // Note: Extension types don't have type_meta (only structs do)
+      if (local_type_info->type_meta) {
+        TypeMeta::assign_field_ids(local_type_info->type_meta.get(),
+                                   parsed_meta->field_infos);
+      }
       type_info = std::make_shared<TypeInfo>();
       type_info->type_id = local_type_info->type_id;
       type_info->type_meta = parsed_meta;

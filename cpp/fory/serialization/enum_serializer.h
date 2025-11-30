@@ -27,7 +27,6 @@
 #include "fory/util/result.h"
 #include <cstdint>
 #include <type_traits>
-#include <typeindex>
 
 #ifdef FORY_DEBUG
 #include <iostream>
@@ -48,7 +47,8 @@ struct Serializer<E, std::enable_if_t<std::is_enum_v<E>>> {
   using OrdinalType = typename Metadata::OrdinalType;
 
   static inline Result<void, Error> write_type_info(WriteContext &ctx) {
-    return ctx.write_enum_typeinfo(std::type_index(typeid(E)));
+    // Use compile-time type lookup for faster enum type info writing
+    return ctx.write_enum_typeinfo<E>();
   }
 
   static inline Result<void, Error> read_type_info(ReadContext &ctx) {
@@ -115,8 +115,9 @@ struct Serializer<E, std::enable_if_t<std::is_enum_v<E>>> {
       return E{};
     }
     if (read_type) {
-      FORY_RETURN_NOT_OK(ctx.read_enum_type_info(
-          std::type_index(typeid(E)), static_cast<uint32_t>(type_id)));
+      // Use overload without type_index (fast path)
+      FORY_RETURN_NOT_OK(
+          ctx.read_enum_type_info(static_cast<uint32_t>(type_id)));
     }
     return read_data(ctx);
   }
