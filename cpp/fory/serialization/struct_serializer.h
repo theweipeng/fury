@@ -167,21 +167,26 @@ inline constexpr bool is_primitive_type_id(TypeId type_id) {
 template <typename T>
 FORY_ALWAYS_INLINE uint32_t put_primitive_at(T value, Buffer &buffer,
                                              uint32_t offset) {
-  if constexpr (std::is_same_v<T, int32_t>) {
+  if constexpr (std::is_same_v<T, int32_t> || std::is_same_v<T, int>) {
     // varint32 with zigzag encoding
-    uint32_t zigzag = (static_cast<uint32_t>(value) << 1) ^
-                      static_cast<uint32_t>(value >> 31);
+    int32_t val = static_cast<int32_t>(value);
+    uint32_t zigzag =
+        (static_cast<uint32_t>(val) << 1) ^ static_cast<uint32_t>(val >> 31);
     return buffer.PutVarUint32(offset, zigzag);
-  } else if constexpr (std::is_same_v<T, uint32_t>) {
-    buffer.UnsafePut<uint32_t>(offset, value);
+  } else if constexpr (std::is_same_v<T, uint32_t> ||
+                       std::is_same_v<T, unsigned int>) {
+    buffer.UnsafePut<uint32_t>(offset, static_cast<uint32_t>(value));
     return 4;
-  } else if constexpr (std::is_same_v<T, int64_t>) {
+  } else if constexpr (std::is_same_v<T, int64_t> ||
+                       std::is_same_v<T, long long>) {
     // varint64 with zigzag encoding
-    uint64_t zigzag = (static_cast<uint64_t>(value) << 1) ^
-                      static_cast<uint64_t>(value >> 63);
+    int64_t val = static_cast<int64_t>(value);
+    uint64_t zigzag =
+        (static_cast<uint64_t>(val) << 1) ^ static_cast<uint64_t>(val >> 63);
     return buffer.PutVarUint64(offset, zigzag);
-  } else if constexpr (std::is_same_v<T, uint64_t>) {
-    buffer.UnsafePut<uint64_t>(offset, value);
+  } else if constexpr (std::is_same_v<T, uint64_t> ||
+                       std::is_same_v<T, unsigned long long>) {
+    buffer.UnsafePut<uint64_t>(offset, static_cast<uint64_t>(value));
     return 8;
   } else if constexpr (std::is_same_v<T, bool>) {
     buffer.UnsafePutByte(offset, static_cast<uint8_t>(value ? 1 : 0));
@@ -202,6 +207,58 @@ FORY_ALWAYS_INLINE uint32_t put_primitive_at(T value, Buffer &buffer,
     return 8;
   } else {
     static_assert(sizeof(T) == 0, "Unsupported primitive type");
+    return 0;
+  }
+}
+
+/// Write a fixed-size primitive at absolute offset. Does NOT return bytes
+/// written (caller uses compile-time size). Caller ensures buffer capacity.
+template <typename T>
+FORY_ALWAYS_INLINE void put_fixed_primitive_at(T value, Buffer &buffer,
+                                               uint32_t offset) {
+  if constexpr (std::is_same_v<T, bool>) {
+    buffer.UnsafePutByte(offset, static_cast<uint8_t>(value ? 1 : 0));
+  } else if constexpr (std::is_same_v<T, int8_t> ||
+                       std::is_same_v<T, uint8_t>) {
+    buffer.UnsafePutByte(offset, static_cast<uint8_t>(value));
+  } else if constexpr (std::is_same_v<T, int16_t> ||
+                       std::is_same_v<T, uint16_t>) {
+    buffer.UnsafePut<T>(offset, value);
+  } else if constexpr (std::is_same_v<T, uint32_t> ||
+                       std::is_same_v<T, unsigned int>) {
+    buffer.UnsafePut<uint32_t>(offset, static_cast<uint32_t>(value));
+  } else if constexpr (std::is_same_v<T, uint64_t> ||
+                       std::is_same_v<T, unsigned long long>) {
+    buffer.UnsafePut<uint64_t>(offset, static_cast<uint64_t>(value));
+  } else if constexpr (std::is_same_v<T, float>) {
+    buffer.UnsafePut<float>(offset, value);
+  } else if constexpr (std::is_same_v<T, double>) {
+    buffer.UnsafePut<double>(offset, value);
+  } else {
+    static_assert(sizeof(T) == 0, "Unsupported fixed-size primitive type");
+  }
+}
+
+/// Write a varint primitive at offset. Returns bytes written.
+/// Caller ensures buffer capacity.
+template <typename T>
+FORY_ALWAYS_INLINE uint32_t put_varint_at(T value, Buffer &buffer,
+                                          uint32_t offset) {
+  if constexpr (std::is_same_v<T, int32_t> || std::is_same_v<T, int>) {
+    // varint32 with zigzag encoding
+    int32_t val = static_cast<int32_t>(value);
+    uint32_t zigzag =
+        (static_cast<uint32_t>(val) << 1) ^ static_cast<uint32_t>(val >> 31);
+    return buffer.PutVarUint32(offset, zigzag);
+  } else if constexpr (std::is_same_v<T, int64_t> ||
+                       std::is_same_v<T, long long>) {
+    // varint64 with zigzag encoding
+    int64_t val = static_cast<int64_t>(value);
+    uint64_t zigzag =
+        (static_cast<uint64_t>(val) << 1) ^ static_cast<uint64_t>(val >> 63);
+    return buffer.PutVarUint64(offset, zigzag);
+  } else {
+    static_assert(sizeof(T) == 0, "Unsupported varint type");
     return 0;
   }
 }
@@ -269,6 +326,144 @@ template <typename T> struct CompileTimeFieldHelpers {
       return requires_ref_metadata_v<FieldType>;
     }
   }
+
+  /// Check if field at Index uses fixed-size encoding based on C++ type
+  /// Fixed types: bool, int8, uint8, int16, uint16, uint32, uint64, float,
+  /// double Note: TypeId::INT32/INT64 can be either signed (varint) or unsigned
+  /// (fixed)
+  template <size_t Index> static constexpr bool field_is_fixed_primitive() {
+    if constexpr (FieldCount == 0) {
+      return false;
+    } else {
+      using PtrT = std::tuple_element_t<Index, FieldPtrs>;
+      using FieldType = meta::RemoveMemberPointerCVRefT<PtrT>;
+      return std::is_same_v<FieldType, bool> ||
+             std::is_same_v<FieldType, int8_t> ||
+             std::is_same_v<FieldType, uint8_t> ||
+             std::is_same_v<FieldType, int16_t> ||
+             std::is_same_v<FieldType, uint16_t> ||
+             std::is_same_v<FieldType, uint32_t> ||
+             std::is_same_v<FieldType, unsigned int> ||
+             std::is_same_v<FieldType, uint64_t> ||
+             std::is_same_v<FieldType, unsigned long long> ||
+             std::is_same_v<FieldType, float> ||
+             std::is_same_v<FieldType, double>;
+    }
+  }
+
+  /// Check if field at Index uses varint encoding based on C++ type
+  /// Varint types: int32, int, int64, long long (signed integers use zigzag)
+  template <size_t Index> static constexpr bool field_is_varint_primitive() {
+    if constexpr (FieldCount == 0) {
+      return false;
+    } else {
+      using PtrT = std::tuple_element_t<Index, FieldPtrs>;
+      using FieldType = meta::RemoveMemberPointerCVRefT<PtrT>;
+      return std::is_same_v<FieldType, int32_t> ||
+             std::is_same_v<FieldType, int> ||
+             std::is_same_v<FieldType, int64_t> ||
+             std::is_same_v<FieldType, long long>;
+    }
+  }
+
+  /// Get fixed size in bytes for a field based on its C++ type
+  template <size_t Index> static constexpr size_t field_fixed_size_bytes() {
+    if constexpr (FieldCount == 0) {
+      return 0;
+    } else {
+      using PtrT = std::tuple_element_t<Index, FieldPtrs>;
+      using FieldType = meta::RemoveMemberPointerCVRefT<PtrT>;
+      if constexpr (std::is_same_v<FieldType, bool> ||
+                    std::is_same_v<FieldType, int8_t> ||
+                    std::is_same_v<FieldType, uint8_t>) {
+        return 1;
+      } else if constexpr (std::is_same_v<FieldType, int16_t> ||
+                           std::is_same_v<FieldType, uint16_t>) {
+        return 2;
+      } else if constexpr (std::is_same_v<FieldType, uint32_t> ||
+                           std::is_same_v<FieldType, unsigned int> ||
+                           std::is_same_v<FieldType, float>) {
+        return 4;
+      } else if constexpr (std::is_same_v<FieldType, uint64_t> ||
+                           std::is_same_v<FieldType, unsigned long long> ||
+                           std::is_same_v<FieldType, double>) {
+        return 8;
+      } else {
+        return 0; // Not a fixed-size primitive
+      }
+    }
+  }
+
+  /// Get max varint size in bytes for a field based on its C++ type
+  template <size_t Index> static constexpr size_t field_max_varint_bytes() {
+    if constexpr (FieldCount == 0) {
+      return 0;
+    } else {
+      using PtrT = std::tuple_element_t<Index, FieldPtrs>;
+      using FieldType = meta::RemoveMemberPointerCVRefT<PtrT>;
+      if constexpr (std::is_same_v<FieldType, int32_t> ||
+                    std::is_same_v<FieldType, int>) {
+        return 5; // int32 varint max
+      } else if constexpr (std::is_same_v<FieldType, int64_t> ||
+                           std::is_same_v<FieldType, long long>) {
+        return 10; // int64 varint max
+      } else {
+        return 0; // Not a varint primitive
+      }
+    }
+  }
+
+  /// Create arrays of field encoding info at compile time
+  template <size_t... Indices>
+  static constexpr std::array<bool, FieldCount>
+  make_field_is_fixed_array(std::index_sequence<Indices...>) {
+    if constexpr (FieldCount == 0) {
+      return {};
+    } else {
+      return {field_is_fixed_primitive<Indices>()...};
+    }
+  }
+
+  template <size_t... Indices>
+  static constexpr std::array<bool, FieldCount>
+  make_field_is_varint_array(std::index_sequence<Indices...>) {
+    if constexpr (FieldCount == 0) {
+      return {};
+    } else {
+      return {field_is_varint_primitive<Indices>()...};
+    }
+  }
+
+  template <size_t... Indices>
+  static constexpr std::array<size_t, FieldCount>
+  make_field_fixed_size_array(std::index_sequence<Indices...>) {
+    if constexpr (FieldCount == 0) {
+      return {};
+    } else {
+      return {field_fixed_size_bytes<Indices>()...};
+    }
+  }
+
+  template <size_t... Indices>
+  static constexpr std::array<size_t, FieldCount>
+  make_field_max_varint_array(std::index_sequence<Indices...>) {
+    if constexpr (FieldCount == 0) {
+      return {};
+    } else {
+      return {field_max_varint_bytes<Indices>()...};
+    }
+  }
+
+  /// Arrays storing encoding info for each field (indexed by original field
+  /// index)
+  static inline constexpr std::array<bool, FieldCount> field_is_fixed =
+      make_field_is_fixed_array(std::make_index_sequence<FieldCount>{});
+  static inline constexpr std::array<bool, FieldCount> field_is_varint =
+      make_field_is_varint_array(std::make_index_sequence<FieldCount>{});
+  static inline constexpr std::array<size_t, FieldCount> field_fixed_sizes =
+      make_field_fixed_size_array(std::make_index_sequence<FieldCount>{});
+  static inline constexpr std::array<size_t, FieldCount> field_max_varints =
+      make_field_max_varint_array(std::make_index_sequence<FieldCount>{});
 
   template <size_t... Indices>
   static constexpr std::array<uint32_t, FieldCount>
@@ -580,6 +775,8 @@ template <typename T> struct CompileTimeFieldHelpers {
       compute_primitive_field_count();
 
   /// Check if a type_id represents a fixed-size primitive (not varint)
+  /// Includes bool, int8, int16, float16, float32, float64
+  /// Note: INT32/INT64 use varint encoding per basic_serializer.h write/read
   static constexpr bool is_fixed_size_primitive(uint32_t tid) {
     switch (static_cast<TypeId>(tid)) {
     case TypeId::BOOL:
@@ -594,7 +791,39 @@ template <typename T> struct CompileTimeFieldHelpers {
     }
   }
 
+  /// Check if a type_id represents a varint primitive (int32/int64 types)
+  /// Per basic_serializer.h, INT32/INT64 use zigzag varint encoding
+  /// VAR_INT32/VAR_INT64/SLI_INT64 also use varint encoding
+  static constexpr bool is_varint_primitive(uint32_t tid) {
+    switch (static_cast<TypeId>(tid)) {
+    case TypeId::INT32:     // int32_t uses zigzag varint per basic_serializer.h
+    case TypeId::INT64:     // int64_t uses zigzag varint per basic_serializer.h
+    case TypeId::VAR_INT32: // explicit varint type
+    case TypeId::VAR_INT64: // explicit varint type
+    case TypeId::SLI_INT64: // alternative int64 encoding
+      return true;
+    default:
+      return false;
+    }
+  }
+
+  /// Get the max varint size in bytes for a type_id (0 if not varint)
+  static constexpr size_t max_varint_bytes(uint32_t tid) {
+    switch (static_cast<TypeId>(tid)) {
+    case TypeId::INT32:     // int32_t uses zigzag varint
+    case TypeId::VAR_INT32: // explicit varint
+      return 5;             // int32 varint max
+    case TypeId::INT64:     // int64_t uses zigzag varint
+    case TypeId::VAR_INT64: // explicit varint
+    case TypeId::SLI_INT64:
+      return 10; // int64 varint max
+    default:
+      return 0;
+    }
+  }
+
   /// Get the fixed size in bytes for a type_id (0 if not fixed-size)
+  /// Note: INT32/INT64 use varint encoding per basic_serializer.h, not fixed
   static constexpr size_t fixed_size_bytes(uint32_t tid) {
     switch (static_cast<TypeId>(tid)) {
     case TypeId::BOOL:
@@ -613,7 +842,9 @@ template <typename T> struct CompileTimeFieldHelpers {
   }
 
   /// Compute total bytes for leading fixed-size primitive fields only
-  /// (stops at first varint field)
+  /// (stops at first varint or non-primitive field)
+  /// Uses type-based arrays to correctly distinguish signed (varint) vs
+  /// unsigned (fixed)
   static constexpr size_t compute_leading_fixed_size_bytes() {
     if constexpr (FieldCount == 0) {
       return 0;
@@ -621,21 +852,20 @@ template <typename T> struct CompileTimeFieldHelpers {
       size_t total = 0;
       for (size_t i = 0; i < FieldCount; ++i) {
         size_t original_idx = sorted_indices[i];
-        if (!is_primitive_type_id(type_ids[original_idx]) ||
-            nullable_flags[original_idx]) {
-          break; // Stop at non-primitive or nullable
+        if (nullable_flags[original_idx]) {
+          break; // Stop at nullable
         }
-        size_t fs = fixed_size_bytes(type_ids[original_idx]);
-        if (fs == 0) {
-          break; // Stop at first varint
+        if (!field_is_fixed[original_idx]) {
+          break; // Stop at first non-fixed (varint or non-primitive)
         }
-        total += fs;
+        total += field_fixed_sizes[original_idx];
       }
       return total;
     }
   }
 
-  /// Count leading fixed-size primitive fields (stops at first varint)
+  /// Count leading fixed-size primitive fields (stops at first varint or
+  /// non-primitive)
   static constexpr size_t compute_leading_fixed_count() {
     if constexpr (FieldCount == 0) {
       return 0;
@@ -643,12 +873,11 @@ template <typename T> struct CompileTimeFieldHelpers {
       size_t count = 0;
       for (size_t i = 0; i < FieldCount; ++i) {
         size_t original_idx = sorted_indices[i];
-        if (!is_primitive_type_id(type_ids[original_idx]) ||
-            nullable_flags[original_idx]) {
+        if (nullable_flags[original_idx]) {
           break;
         }
-        if (fixed_size_bytes(type_ids[original_idx]) == 0) {
-          break; // Varint encountered
+        if (!field_is_fixed[original_idx]) {
+          break; // Varint or non-primitive encountered
         }
         ++count;
       }
@@ -660,6 +889,45 @@ template <typename T> struct CompileTimeFieldHelpers {
       compute_leading_fixed_size_bytes();
   static inline constexpr size_t leading_fixed_count =
       compute_leading_fixed_count();
+
+  /// Count consecutive varint primitives (int32, int64) after leading fixed
+  /// fields
+  static constexpr size_t compute_varint_count() {
+    if constexpr (FieldCount == 0) {
+      return 0;
+    } else {
+      size_t count = 0;
+      for (size_t i = leading_fixed_count; i < FieldCount; ++i) {
+        size_t original_idx = sorted_indices[i];
+        if (nullable_flags[original_idx]) {
+          break; // Stop at nullable
+        }
+        if (!field_is_varint[original_idx]) {
+          break; // Stop at non-varint (e.g., float, double, non-primitive)
+        }
+        ++count;
+      }
+      return count;
+    }
+  }
+
+  /// Compute max bytes needed for all varint fields
+  static constexpr size_t compute_max_varint_bytes() {
+    if constexpr (FieldCount == 0) {
+      return 0;
+    } else {
+      size_t total = 0;
+      for (size_t i = leading_fixed_count;
+           i < leading_fixed_count + compute_varint_count(); ++i) {
+        size_t original_idx = sorted_indices[i];
+        total += field_max_varints[original_idx];
+      }
+      return total;
+    }
+  }
+
+  static inline constexpr size_t varint_count = compute_varint_count();
+  static inline constexpr size_t max_varint_size = compute_max_varint_bytes();
 
   /// Compute max serialized size for leading primitive fields only.
   /// Used for hybrid fast/slow path buffer pre-reservation.
@@ -707,34 +975,145 @@ template <typename T> struct CompileTimeFieldHelpers {
       compute_max_leading_primitive_size();
 };
 
+/// Compute the write offset of field at sorted index I within leading fixed
+/// fields. This is the sum of sizes of all fields before index I.
+/// Uses type-based field_fixed_sizes for correct encoding detection.
+template <typename T, size_t I>
+constexpr size_t compute_fixed_field_write_offset() {
+  using Helpers = CompileTimeFieldHelpers<T>;
+  size_t offset = 0;
+  for (size_t i = 0; i < I; ++i) {
+    size_t original_idx = Helpers::sorted_indices[i];
+    offset += Helpers::field_fixed_sizes[original_idx];
+  }
+  return offset;
+}
+
+/// Helper to write a single fixed-size primitive field at compile-time offset.
+/// No lambda overhead - direct function call that will be inlined.
+template <typename T, size_t SortedIdx>
+FORY_ALWAYS_INLINE void write_single_fixed_field(const T &obj, Buffer &buffer,
+                                                 uint32_t base_offset) {
+  using Helpers = CompileTimeFieldHelpers<T>;
+  constexpr size_t original_index = Helpers::sorted_indices[SortedIdx];
+  constexpr size_t field_offset =
+      compute_fixed_field_write_offset<T, SortedIdx>();
+  const auto field_info = ForyFieldInfo(obj);
+  const auto field_ptr = std::get<original_index>(decltype(field_info)::Ptrs);
+  using FieldType =
+      typename meta::RemoveMemberPointerCVRefT<decltype(field_ptr)>;
+  put_fixed_primitive_at<FieldType>(obj.*field_ptr, buffer,
+                                    base_offset + field_offset);
+}
+
+/// Fast write leading fixed-size primitive fields using compile-time offsets.
+/// Caller must ensure buffer has sufficient capacity.
+/// Optimized: uses compile-time offsets and updates writer_index once at end.
+template <typename T, size_t... Indices>
+FORY_ALWAYS_INLINE void
+write_fixed_primitive_fields(const T &obj, Buffer &buffer,
+                             std::index_sequence<Indices...>) {
+  using Helpers = CompileTimeFieldHelpers<T>;
+  const uint32_t base_offset = buffer.writer_index();
+
+  // Write each field using helper function - no lambda overhead
+  (write_single_fixed_field<T, Indices>(obj, buffer, base_offset), ...);
+
+  // Update writer_index once with total fixed bytes (compile-time constant)
+  buffer.WriterIndex(base_offset + Helpers::leading_fixed_size_bytes);
+}
+
+/// Helper to write a single varint primitive field.
+/// No lambda overhead - direct function call that will be inlined.
+template <typename T, size_t SortedPos>
+FORY_ALWAYS_INLINE void write_single_varint_field(const T &obj, Buffer &buffer,
+                                                  uint32_t &offset) {
+  using Helpers = CompileTimeFieldHelpers<T>;
+  constexpr size_t original_index = Helpers::sorted_indices[SortedPos];
+  const auto field_info = ForyFieldInfo(obj);
+  const auto field_ptr = std::get<original_index>(decltype(field_info)::Ptrs);
+  using FieldType =
+      typename meta::RemoveMemberPointerCVRefT<decltype(field_ptr)>;
+  offset += put_varint_at<FieldType>(obj.*field_ptr, buffer, offset);
+}
+
+/// Fast write consecutive varint primitive fields (int32, int64).
+/// Caller must ensure buffer has sufficient capacity.
+/// Optimized: tracks offset locally and updates writer_index once at the end.
+template <typename T, size_t FixedCount, size_t... Indices>
+FORY_ALWAYS_INLINE void
+write_varint_primitive_fields(const T &obj, Buffer &buffer, uint32_t &offset,
+                              std::index_sequence<Indices...>) {
+  // Write each varint field using helper function - no lambda overhead
+  // Indices are 0, 1, 2, ... so actual sorted position is FixedCount + Indices
+  (write_single_varint_field<T, FixedCount + Indices>(obj, buffer, offset),
+   ...);
+}
+
+/// Helper to write a single remaining primitive field.
+/// No lambda overhead - direct function call that will be inlined.
+template <typename T, size_t SortedPos>
+FORY_ALWAYS_INLINE void
+write_single_remaining_field(const T &obj, Buffer &buffer, uint32_t &offset) {
+  using Helpers = CompileTimeFieldHelpers<T>;
+  constexpr size_t original_index = Helpers::sorted_indices[SortedPos];
+  const auto field_info = ForyFieldInfo(obj);
+  const auto field_ptr = std::get<original_index>(decltype(field_info)::Ptrs);
+  using FieldType =
+      typename meta::RemoveMemberPointerCVRefT<decltype(field_ptr)>;
+  offset += put_primitive_at<FieldType>(obj.*field_ptr, buffer, offset);
+}
+
+/// Write remaining primitive fields after fixed and varint phases.
+/// StartPos is the first sorted index to process.
+template <typename T, size_t StartPos, size_t... Indices>
+FORY_ALWAYS_INLINE void
+write_remaining_primitive_fields(const T &obj, Buffer &buffer, uint32_t &offset,
+                                 std::index_sequence<Indices...>) {
+  // Write each remaining field using helper function - no lambda overhead
+  (write_single_remaining_field<T, StartPos + Indices>(obj, buffer, offset),
+   ...);
+}
+
 /// Fast path writer for primitive-only, non-nullable structs.
 /// Writes all fields directly without Result wrapping.
-/// Optimized: tracks offset locally and updates writer_index once at the end.
+/// Optimized: three-phase approach with single writer_index update at the end.
+/// Phase 1: Fixed-size primitives (compile-time offsets)
+/// Phase 2: Varint primitives (local offset tracking)
+/// Phase 3: Remaining primitives (if any)
 template <typename T, size_t... Indices>
 FORY_ALWAYS_INLINE void
 write_primitive_fields_fast(const T &obj, Buffer &buffer,
                             std::index_sequence<Indices...>) {
   using Helpers = CompileTimeFieldHelpers<T>;
-  const auto field_info = ForyFieldInfo(obj);
-  const auto field_ptrs = decltype(field_info)::Ptrs;
+  constexpr size_t fixed_count = Helpers::leading_fixed_count;
+  constexpr size_t fixed_bytes = Helpers::leading_fixed_size_bytes;
+  constexpr size_t varint_count = Helpers::varint_count;
+  constexpr size_t total_count = sizeof...(Indices);
 
-  // Track offset locally - single writer_index update at the end
-  uint32_t offset = buffer.writer_index();
+  // Phase 1: Write leading fixed-size primitives if any
+  if constexpr (fixed_count > 0 && fixed_bytes > 0) {
+    write_fixed_primitive_fields<T>(obj, buffer,
+                                    std::make_index_sequence<fixed_count>{});
+  }
 
-  // Write each field directly in sorted order using fold expression
-  (
-      [&]() {
-        constexpr size_t original_index = Helpers::sorted_indices[Indices];
-        const auto field_ptr = std::get<original_index>(field_ptrs);
-        using FieldType =
-            typename meta::RemoveMemberPointerCVRefT<decltype(field_ptr)>;
-        const auto &field_value = obj.*field_ptr;
-        offset += put_primitive_at<FieldType>(field_value, buffer, offset);
-      }(),
-      ...);
+  // Phase 2: Write consecutive varint primitives if any
+  if constexpr (varint_count > 0) {
+    uint32_t offset = buffer.writer_index();
+    write_varint_primitive_fields<T, fixed_count>(
+        obj, buffer, offset, std::make_index_sequence<varint_count>{});
+    buffer.WriterIndex(offset);
+  }
 
-  // Single writer_index update for all fields
-  buffer.WriterIndex(offset);
+  // Phase 3: Write remaining primitives (if any) using dedicated helper
+  constexpr size_t fast_count = fixed_count + varint_count;
+  if constexpr (fast_count < total_count) {
+    uint32_t offset = buffer.writer_index();
+    write_remaining_primitive_fields<T, fast_count>(
+        obj, buffer, offset,
+        std::make_index_sequence<total_count - fast_count>{});
+    buffer.WriterIndex(offset);
+  }
 }
 
 template <typename T, size_t Index, typename FieldPtrs>
@@ -1069,6 +1448,30 @@ read_single_field_by_index_compatible(T &obj, ReadContext &ctx,
   return Result<void, Error>();
 }
 
+/// Helper to dispatch field reading by field_id in compatible mode.
+/// Uses fold expression with short-circuit to avoid lambda overhead.
+/// Returns the result of reading; sets handled=true if field was matched.
+template <typename T, size_t... Indices>
+FORY_ALWAYS_INLINE Result<void, Error>
+dispatch_compatible_field_read_impl(T &obj, ReadContext &ctx, int16_t field_id,
+                                    bool read_ref_flag, bool &handled,
+                                    std::index_sequence<Indices...>) {
+  using Helpers = CompileTimeFieldHelpers<T>;
+  Result<void, Error> result;
+
+  // Short-circuit fold: stops at first match
+  // Each element evaluates to bool; || short-circuits on first true
+  ((static_cast<int16_t>(Indices) == field_id
+        ? (handled = true,
+           result = read_single_field_by_index_compatible<
+               Helpers::sorted_indices[Indices]>(obj, ctx, read_ref_flag),
+           true)
+        : false) ||
+   ...);
+
+  return result;
+}
+
 /// Helper to read a single field at compile-time sorted position
 template <typename T, size_t SortedPosition>
 Result<void, Error> read_field_at_sorted_position(T &obj, ReadContext &ctx) {
@@ -1077,58 +1480,164 @@ Result<void, Error> read_field_at_sorted_position(T &obj, ReadContext &ctx) {
   return read_single_field_by_index<original_index>(obj, ctx);
 }
 
-/// Read a fixed-size primitive value directly using UnsafeGet.
-/// Caller must ensure buffer bounds are pre-checked.
+/// Get the fixed size of a primitive type at compile time
+template <typename T> constexpr size_t fixed_primitive_size() {
+  if constexpr (std::is_same_v<T, bool> || std::is_same_v<T, int8_t> ||
+                std::is_same_v<T, uint8_t>) {
+    return 1;
+  } else if constexpr (std::is_same_v<T, int16_t> ||
+                       std::is_same_v<T, uint16_t>) {
+    return 2;
+  } else if constexpr (std::is_same_v<T, uint32_t> ||
+                       std::is_same_v<T, float>) {
+    return 4;
+  } else if constexpr (std::is_same_v<T, uint64_t> ||
+                       std::is_same_v<T, double>) {
+    return 8;
+  } else {
+    return 0; // Not a fixed-size primitive
+  }
+}
+
+/// Compute the offset of field at sorted index I within the leading fixed
+/// fields This is the sum of sizes of all fields before index I
+/// Uses type-based field_fixed_sizes for correct encoding detection
+template <typename T, size_t I> constexpr size_t compute_fixed_field_offset() {
+  using Helpers = CompileTimeFieldHelpers<T>;
+  size_t offset = 0;
+  for (size_t i = 0; i < I; ++i) {
+    size_t original_idx = Helpers::sorted_indices[i];
+    offset += Helpers::field_fixed_sizes[original_idx];
+  }
+  return offset;
+}
+
+/// Read a fixed-size primitive value at a given absolute offset using
+/// UnsafeGet. Does NOT update any offset - purely reads at the specified
+/// position. Caller must ensure buffer bounds are pre-checked.
 template <typename T>
-FORY_ALWAYS_INLINE T read_fixed_primitive(Buffer &buffer) {
-  uint32_t idx = buffer.reader_index();
-  T value;
+FORY_ALWAYS_INLINE T read_fixed_primitive_at(Buffer &buffer, uint32_t offset) {
   if constexpr (std::is_same_v<T, bool>) {
-    value = buffer.UnsafeGet<uint8_t>(idx) != 0;
-    buffer.IncreaseReaderIndex(1);
+    return buffer.UnsafeGet<uint8_t>(offset) != 0;
   } else if constexpr (std::is_same_v<T, int8_t>) {
-    value = static_cast<int8_t>(buffer.UnsafeGet<uint8_t>(idx));
-    buffer.IncreaseReaderIndex(1);
+    return static_cast<int8_t>(buffer.UnsafeGet<uint8_t>(offset));
   } else if constexpr (std::is_same_v<T, uint8_t>) {
-    value = buffer.UnsafeGet<uint8_t>(idx);
-    buffer.IncreaseReaderIndex(1);
+    return buffer.UnsafeGet<uint8_t>(offset);
   } else if constexpr (std::is_same_v<T, int16_t>) {
-    value = buffer.UnsafeGet<int16_t>(idx);
-    buffer.IncreaseReaderIndex(2);
+    return buffer.UnsafeGet<int16_t>(offset);
   } else if constexpr (std::is_same_v<T, uint16_t>) {
-    value = buffer.UnsafeGet<uint16_t>(idx);
-    buffer.IncreaseReaderIndex(2);
+    return buffer.UnsafeGet<uint16_t>(offset);
+  } else if constexpr (std::is_same_v<T, int32_t> || std::is_same_v<T, int>) {
+    // Handle both int32_t and int (different types on some platforms)
+    return static_cast<T>(buffer.UnsafeGet<int32_t>(offset));
+  } else if constexpr (std::is_same_v<T, uint32_t> ||
+                       std::is_same_v<T, unsigned int>) {
+    // Handle both uint32_t and unsigned int (different types on some platforms)
+    return static_cast<T>(buffer.UnsafeGet<uint32_t>(offset));
   } else if constexpr (std::is_same_v<T, float>) {
-    value = buffer.UnsafeGet<float>(idx);
-    buffer.IncreaseReaderIndex(4);
+    return buffer.UnsafeGet<float>(offset);
+  } else if constexpr (std::is_same_v<T, uint64_t> ||
+                       std::is_same_v<T, unsigned long long>) {
+    // Handle both uint64_t and unsigned long long (different types on some
+    // platforms)
+    return static_cast<T>(buffer.UnsafeGet<uint64_t>(offset));
+  } else if constexpr (std::is_same_v<T, int64_t> ||
+                       std::is_same_v<T, long long>) {
+    // Handle both int64_t and long long (different types on some platforms)
+    // Note: int64_t/long long uses varint, but if classified as fixed by
+    // TypeId, we read as fixed 8 bytes
+    return static_cast<T>(buffer.UnsafeGet<int64_t>(offset));
   } else if constexpr (std::is_same_v<T, double>) {
-    value = buffer.UnsafeGet<double>(idx);
-    buffer.IncreaseReaderIndex(8);
+    return buffer.UnsafeGet<double>(offset);
   } else {
     static_assert(sizeof(T) == 0, "Unsupported fixed-size primitive type");
+    return T{};
   }
-  return value;
+}
+
+/// Helper to read a single fixed-size primitive field at compile-time offset.
+/// No lambda overhead - direct function call that will be inlined.
+template <typename T, size_t SortedIdx>
+FORY_ALWAYS_INLINE void read_single_fixed_field(T &obj, Buffer &buffer,
+                                                uint32_t base_offset) {
+  using Helpers = CompileTimeFieldHelpers<T>;
+  constexpr size_t original_index = Helpers::sorted_indices[SortedIdx];
+  constexpr size_t field_offset = compute_fixed_field_offset<T, SortedIdx>();
+  const auto field_info = ForyFieldInfo(obj);
+  const auto field_ptr = std::get<original_index>(decltype(field_info)::Ptrs);
+  using FieldType =
+      typename meta::RemoveMemberPointerCVRefT<decltype(field_ptr)>;
+  obj.*field_ptr =
+      read_fixed_primitive_at<FieldType>(buffer, base_offset + field_offset);
 }
 
 /// Fast read leading fixed-size primitive fields using UnsafeGet.
 /// Caller must ensure buffer bounds are pre-checked.
+/// Optimized: uses compile-time offsets and updates reader_index once at end.
 template <typename T, size_t... Indices>
 FORY_ALWAYS_INLINE void
 read_fixed_primitive_fields(T &obj, Buffer &buffer,
                             std::index_sequence<Indices...>) {
   using Helpers = CompileTimeFieldHelpers<T>;
-  const auto field_info = ForyFieldInfo(obj);
-  const auto field_ptrs = decltype(field_info)::Ptrs;
+  const uint32_t base_offset = buffer.reader_index();
 
-  (
-      [&]() {
-        constexpr size_t original_index = Helpers::sorted_indices[Indices];
-        const auto field_ptr = std::get<original_index>(field_ptrs);
-        using FieldType =
-            typename meta::RemoveMemberPointerCVRefT<decltype(field_ptr)>;
-        obj.*field_ptr = read_fixed_primitive<FieldType>(buffer);
-      }(),
-      ...);
+  // Read each field using helper function - no lambda overhead
+  (read_single_fixed_field<T, Indices>(obj, buffer, base_offset), ...);
+
+  // Update reader_index once with total fixed bytes (compile-time constant)
+  buffer.ReaderIndex(base_offset + Helpers::leading_fixed_size_bytes);
+}
+
+/// Read a single varint field at a given offset.
+/// Does NOT update reader_index - caller must track offset and update once.
+/// Caller must ensure buffer has enough bytes (pre-checked).
+template <typename T>
+FORY_ALWAYS_INLINE T read_varint_at(Buffer &buffer, uint32_t &offset) {
+  uint32_t bytes_read;
+  if constexpr (std::is_same_v<T, int32_t> || std::is_same_v<T, int>) {
+    // Handle both int32_t and int (different types on some platforms)
+    uint32_t raw = buffer.GetVarUint32(offset, &bytes_read);
+    offset += bytes_read;
+    // Zigzag decode
+    return static_cast<T>((raw >> 1) ^ (~(raw & 1) + 1));
+  } else if constexpr (std::is_same_v<T, int64_t> ||
+                       std::is_same_v<T, long long>) {
+    // Handle both int64_t and long long (different types on some platforms)
+    uint64_t raw = buffer.GetVarUint64(offset, &bytes_read);
+    offset += bytes_read;
+    // Zigzag decode
+    return static_cast<T>((raw >> 1) ^ (~(raw & 1) + 1));
+  } else {
+    static_assert(sizeof(T) == 0, "Unsupported varint type");
+    return T{};
+  }
+}
+
+/// Helper to read a single varint primitive field.
+/// No lambda overhead - direct function call that will be inlined.
+template <typename T, size_t SortedPos>
+FORY_ALWAYS_INLINE void read_single_varint_field(T &obj, Buffer &buffer,
+                                                 uint32_t &offset) {
+  using Helpers = CompileTimeFieldHelpers<T>;
+  constexpr size_t original_index = Helpers::sorted_indices[SortedPos];
+  const auto field_info = ForyFieldInfo(obj);
+  const auto field_ptr = std::get<original_index>(decltype(field_info)::Ptrs);
+  using FieldType =
+      typename meta::RemoveMemberPointerCVRefT<decltype(field_ptr)>;
+  obj.*field_ptr = read_varint_at<FieldType>(buffer, offset);
+}
+
+/// Fast read consecutive varint primitive fields (int32, int64).
+/// Caller must ensure buffer bounds are pre-checked for max varint bytes.
+/// Optimized: tracks offset locally and updates reader_index once at the end.
+/// StartIdx is the sorted index to start reading from.
+template <typename T, size_t StartIdx, size_t... Is>
+FORY_ALWAYS_INLINE void
+read_varint_primitive_fields(T &obj, Buffer &buffer, uint32_t &offset,
+                             std::index_sequence<Is...>) {
+  // Read each varint field using helper function - no lambda overhead
+  // Is are 0, 1, 2, ... so actual sorted position is StartIdx + Is
+  (read_single_varint_field<T, StartIdx + Is>(obj, buffer, offset), ...);
 }
 
 /// Helper to read remaining fields starting from Offset
@@ -1150,22 +1659,25 @@ Result<void, Error> read_remaining_fields(T &obj, ReadContext &ctx) {
 
 /// Read struct fields recursively using index sequence (sorted order - matches
 /// write order)
-/// Optimized: when compatible=false and there are leading fixed-size
-/// primitives, pre-check bounds once and use UnsafeGet for those fields. Note:
-/// varints (int32/int64) cannot be pre-checked since their length is unknown.
+/// Optimized: when compatible=false, use fast paths for:
+/// 1. Leading fixed-size primitives (bool, int8, int16, float, double)
+/// 2. Consecutive varint primitives (int32, int64) after fixed fields
+/// Both paths pre-check bounds and update reader_index once at the end.
 template <typename T, size_t... Indices>
 Result<void, Error> read_struct_fields_impl(T &obj, ReadContext &ctx,
                                             std::index_sequence<Indices...>) {
   using Helpers = CompileTimeFieldHelpers<T>;
   constexpr size_t fixed_count = Helpers::leading_fixed_count;
   constexpr size_t fixed_bytes = Helpers::leading_fixed_size_bytes;
+  constexpr size_t varint_count = Helpers::varint_count;
   constexpr size_t total_count = sizeof...(Indices);
 
-  // FAST PATH: When compatible=false and we have leading fixed-size primitives
-  // (bool, int8, int16, float, double - NOT varints like int32/int64)
-  if constexpr (fixed_count > 0 && fixed_bytes > 0) {
-    if (!ctx.is_compatible()) {
-      Buffer &buffer = ctx.buffer();
+  // FAST PATH: When compatible=false, use optimized batch reading
+  if (!ctx.is_compatible()) {
+    Buffer &buffer = ctx.buffer();
+
+    // Phase 1: Read leading fixed-size primitives if any
+    if constexpr (fixed_count > 0 && fixed_bytes > 0) {
       // Pre-check bounds for all fixed-size fields at once
       if (FORY_PREDICT_FALSE(buffer.reader_index() + fixed_bytes >
                              buffer.size())) {
@@ -1175,17 +1687,32 @@ Result<void, Error> read_struct_fields_impl(T &obj, ReadContext &ctx,
       // Fast read fixed-size primitives
       read_fixed_primitive_fields<T>(obj, buffer,
                                      std::make_index_sequence<fixed_count>{});
+    }
 
-      if constexpr (fixed_count < total_count) {
-        // Read remaining fields with normal path
-        return read_remaining_fields<T, fixed_count, total_count>(obj, ctx);
-      } else {
-        return Result<void, Error>();
-      }
+    // Phase 2: Read consecutive varint primitives (int32, int64) if any
+    // Note: varint bounds checking is done per-byte during reading since
+    // varint lengths are variable (actual size << max possible size)
+    if constexpr (varint_count > 0) {
+      // Track offset locally for batch varint reading
+      uint32_t offset = buffer.reader_index();
+      // Fast read varint primitives (bounds checking happens in
+      // GetVarUint32/64)
+      read_varint_primitive_fields<T, fixed_count>(
+          obj, buffer, offset, std::make_index_sequence<varint_count>{});
+      // Update reader_index once after all varints
+      buffer.ReaderIndex(offset);
+    }
+
+    // Phase 3: Read remaining fields (if any) with normal path
+    constexpr size_t fast_count = fixed_count + varint_count;
+    if constexpr (fast_count < total_count) {
+      return read_remaining_fields<T, fast_count, total_count>(obj, ctx);
+    } else {
+      return Result<void, Error>();
     }
   }
 
-  // NORMAL PATH: compatible mode or structs with varints/complex types
+  // NORMAL PATH: compatible mode - all fields need full serialization
   Result<void, Error> result;
   ((result = read_field_at_sorted_position<T, Indices>(obj, ctx),
     result.ok()) &&
@@ -1200,8 +1727,6 @@ Result<void, Error>
 read_struct_fields_compatible(T &obj, ReadContext &ctx,
                               const TypeMeta *remote_type_meta,
                               std::index_sequence<Indices...>) {
-
-  using Helpers = CompileTimeFieldHelpers<T>;
   const auto &remote_fields = remote_type_meta->get_field_infos();
 
   // Iterate through remote fields in their serialization order
@@ -1238,19 +1763,11 @@ read_struct_fields_compatible(T &obj, ReadContext &ctx,
     }
 
     // Dispatch to the correct local field by field_id
+    // Uses fold expression with short-circuit - no lambda overhead
     bool handled = false;
-    Result<void, Error> result;
-
-    detail::for_each_index(
-        std::index_sequence<Indices...>{}, [&](auto index_constant) {
-          constexpr size_t index = decltype(index_constant)::value;
-          if (!handled && static_cast<int16_t>(index) == field_id) {
-            handled = true;
-            constexpr size_t original_index = Helpers::sorted_indices[index];
-            result = read_single_field_by_index_compatible<original_index>(
-                obj, ctx, read_ref_flag);
-          }
-        });
+    Result<void, Error> result = dispatch_compatible_field_read_impl<T>(
+        obj, ctx, field_id, read_ref_flag, handled,
+        std::index_sequence<Indices...>{});
 
     if (!handled) {
       // Shouldn't happen if TypeMeta::assign_field_ids worked correctly
