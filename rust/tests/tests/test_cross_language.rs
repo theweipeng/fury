@@ -872,3 +872,142 @@ fn test_struct_with_map() {
     fory.serialize_to(&remote_struct2, &mut buf).unwrap();
     fs::write(&data_file_path, buf).unwrap();
 }
+
+// ============================================================================
+// Polymorphic Container Test Types - Using Box<dyn Any> for runtime polymorphism
+// ============================================================================
+
+use std::any::Any;
+
+#[derive(ForyObject, Debug, PartialEq, Clone)]
+struct Dog {
+    age: i32,
+    name: Option<String>,
+}
+
+#[derive(ForyObject, Debug, PartialEq, Clone)]
+struct Cat {
+    age: i32,
+    lives: i32,
+}
+
+#[derive(ForyObject, Debug)]
+struct AnimalListHolder {
+    animals: Vec<Box<dyn Any>>,
+}
+
+#[derive(ForyObject, Debug)]
+struct AnimalMapHolder {
+    animal_map: HashMap<Option<String>, Box<dyn Any>>,
+}
+
+#[test]
+#[ignore]
+fn test_polymorphic_list() {
+    let data_file_path = get_data_file();
+    let bytes = fs::read(&data_file_path).unwrap();
+
+    let mut fory = Fory::default().compatible(true).xlang(true);
+    fory.register::<Dog>(302).unwrap();
+    fory.register::<Cat>(303).unwrap();
+    fory.register::<AnimalListHolder>(304).unwrap();
+    let mut reader = Reader::new(bytes.as_slice());
+
+    // Part 1: Read List<Animal> with polymorphic elements (Dog, Cat)
+    let animals: Vec<Box<dyn Any>> = fory.deserialize_from(&mut reader).unwrap();
+    assert_eq!(animals.len(), 2);
+
+    // First element should be Dog
+    let dog = animals[0]
+        .downcast_ref::<Dog>()
+        .expect("First element should be Dog");
+    assert_eq!(dog.age, 3);
+    assert_eq!(dog.name, Some("Buddy".to_string()));
+
+    // Second element should be Cat
+    let cat = animals[1]
+        .downcast_ref::<Cat>()
+        .expect("Second element should be Cat");
+    assert_eq!(cat.age, 5);
+    assert_eq!(cat.lives, 9);
+
+    // Part 2: Read AnimalListHolder (List<Animal> as struct field)
+    let holder: AnimalListHolder = fory.deserialize_from(&mut reader).unwrap();
+    assert_eq!(holder.animals.len(), 2);
+
+    let dog2 = holder.animals[0]
+        .downcast_ref::<Dog>()
+        .expect("First holder element should be Dog");
+    assert_eq!(dog2.name, Some("Rex".to_string()));
+
+    let cat2 = holder.animals[1]
+        .downcast_ref::<Cat>()
+        .expect("Second holder element should be Cat");
+    assert_eq!(cat2.lives, 7);
+
+    // Write back
+    let mut buf = Vec::new();
+    fory.serialize_to(&animals, &mut buf).unwrap();
+    fory.serialize_to(&holder, &mut buf).unwrap();
+    fs::write(&data_file_path, buf).unwrap();
+}
+
+#[test]
+#[ignore]
+fn test_polymorphic_map() {
+    let data_file_path = get_data_file();
+    let bytes = fs::read(&data_file_path).unwrap();
+
+    let mut fory = Fory::default().compatible(true).xlang(true);
+    fory.register::<Dog>(302).unwrap();
+    fory.register::<Cat>(303).unwrap();
+    fory.register::<AnimalMapHolder>(305).unwrap();
+    let mut reader = Reader::new(bytes.as_slice());
+
+    // Part 1: Read Map<String, Animal> with polymorphic values
+    let animal_map: HashMap<Option<String>, Box<dyn Any>> =
+        fory.deserialize_from(&mut reader).unwrap();
+    assert_eq!(animal_map.len(), 2);
+
+    let dog1 = animal_map
+        .get(&Some("dog1".to_string()))
+        .expect("dog1 should exist")
+        .downcast_ref::<Dog>()
+        .expect("dog1 should be Dog");
+    assert_eq!(dog1.name, Some("Rex".to_string()));
+    assert_eq!(dog1.age, 2);
+
+    let cat1 = animal_map
+        .get(&Some("cat1".to_string()))
+        .expect("cat1 should exist")
+        .downcast_ref::<Cat>()
+        .expect("cat1 should be Cat");
+    assert_eq!(cat1.lives, 9);
+    assert_eq!(cat1.age, 4);
+
+    // Part 2: Read AnimalMapHolder (Map<String, Animal> as struct field)
+    let holder: AnimalMapHolder = fory.deserialize_from(&mut reader).unwrap();
+    assert_eq!(holder.animal_map.len(), 2);
+
+    let my_dog = holder
+        .animal_map
+        .get(&Some("myDog".to_string()))
+        .expect("myDog should exist")
+        .downcast_ref::<Dog>()
+        .expect("myDog should be Dog");
+    assert_eq!(my_dog.name, Some("Fido".to_string()));
+
+    let my_cat = holder
+        .animal_map
+        .get(&Some("myCat".to_string()))
+        .expect("myCat should exist")
+        .downcast_ref::<Cat>()
+        .expect("myCat should be Cat");
+    assert_eq!(my_cat.lives, 8);
+
+    // Write back
+    let mut buf = Vec::new();
+    fory.serialize_to(&animal_map, &mut buf).unwrap();
+    fory.serialize_to(&holder, &mut buf).unwrap();
+    fs::write(&data_file_path, buf).unwrap();
+}

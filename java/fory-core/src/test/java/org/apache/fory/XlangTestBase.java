@@ -35,8 +35,6 @@ import java.util.stream.Collectors;
 import lombok.Data;
 import org.apache.fory.config.CompatibleMode;
 import org.apache.fory.config.Language;
-import org.apache.fory.logging.Logger;
-import org.apache.fory.logging.LoggerFactory;
 import org.apache.fory.memory.MemoryBuffer;
 import org.apache.fory.memory.MemoryUtils;
 import org.apache.fory.serializer.Serializer;
@@ -47,7 +45,6 @@ import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
 
 public abstract class XlangTestBase extends ForyTestBase {
-  private static final Logger LOG = LoggerFactory.getLogger(XlangTestBase.class);
 
   protected static class CommandContext {
     private final List<String> command;
@@ -125,7 +122,6 @@ public abstract class XlangTestBase extends ForyTestBase {
 
   protected ExecutionContext prepareExecution(String caseName, byte[] payload) throws IOException {
     Path dataFile = createDataFile(caseName, payload);
-    System.out.println("DATA_FILE(" + caseName + "): " + dataFile);
     return new ExecutionContext(caseName, dataFile, buildCommandContext(caseName, dataFile));
   }
 
@@ -431,46 +427,9 @@ public abstract class XlangTestBase extends ForyTestBase {
     fory.serialize(buffer, new float[] {1.f, 2.f});
     fory.serialize(buffer, new double[] {1.0, 2.0});
     fory.serialize(buffer, strList);
-    int beforeSet = buffer.writerIndex();
-    System.err.printf("[JAVA DEBUG] Before strSet, buffer size = %d bytes%n", beforeSet);
     fory.serialize(buffer, strSet);
-    int setBytes = buffer.writerIndex() - beforeSet;
-    System.err.printf(
-        "[JAVA DEBUG] After strSet, buffer size = %d bytes (set=%d bytes)%n",
-        buffer.writerIndex(), setBytes);
-    // Print set bytes
-    byte[] setBytesArr = buffer.getBytes(beforeSet, setBytes);
-    System.err.print("[JAVA DEBUG] Set bytes: ");
-    for (byte b : setBytesArr) {
-      System.err.printf("%02x ", b & 0xff);
-    }
-    System.err.println();
-    int beforeMap = buffer.writerIndex();
-    System.err.printf("[JAVA DEBUG] Before strMap, buffer size = %d bytes%n", beforeMap);
     fory.serialize(buffer, strMap);
-    int mapBytes = buffer.writerIndex() - beforeMap;
-    System.err.printf(
-        "[JAVA DEBUG] After strMap, buffer size = %d bytes (map=%d bytes)%n",
-        buffer.writerIndex(), mapBytes);
-    // Print map bytes
-    byte[] mapBytesArr = buffer.getBytes(beforeMap, mapBytes);
-    System.err.print("[JAVA DEBUG] Map bytes: ");
-    for (byte b : mapBytesArr) {
-      System.err.printf("%02x ", b & 0xff);
-    }
-    System.err.println();
-    int strMapEnd = buffer.writerIndex();
     fory.serialize(buffer, color);
-    System.err.printf("[JAVA DEBUG] After color, buffer size = %d bytes%n", buffer.writerIndex());
-    // Print bytes around strMap end
-    byte[] allBytes = buffer.getBytes(0, buffer.writerIndex());
-    System.err.printf(
-        "[JAVA DEBUG] Bytes around strMap end (pos %d to %d): ",
-        Math.max(0, strMapEnd - 20), Math.min(allBytes.length, strMapEnd + 20));
-    for (int i = Math.max(0, strMapEnd - 20); i < Math.min(allBytes.length, strMapEnd + 20); i++) {
-      System.err.printf("%02x ", allBytes[i] & 0xff);
-    }
-    System.err.println();
 
     BiConsumer<MemoryBuffer, Boolean> function =
         (MemoryBuffer buf, Boolean useToString) -> {
@@ -819,28 +778,13 @@ public abstract class XlangTestBase extends ForyTestBase {
 
     MemoryBuffer buffer = MemoryUtils.buffer(64);
     fory.serialize(buffer, struct1);
-    int struct1End = buffer.writerIndex();
     fory.serialize(buffer, struct2);
 
     byte[] allBytes = buffer.getBytes(0, buffer.writerIndex());
-    System.err.print("[JAVA WRITE] After struct 1 (" + struct1End + " bytes): ");
-    for (int i = 0; i < Math.min(struct1End, 100); i++) {
-      System.err.print(String.format("%02x ", allBytes[i] & 0xFF));
-    }
-    System.err.println();
-    System.err.println("[JAVA WRITE] Total bytes: " + allBytes.length);
-
     ExecutionContext ctx = prepareExecution(caseName, allBytes);
     runPeer(ctx);
 
     MemoryBuffer buffer2 = readBuffer(ctx.dataFile());
-    byte[] cppBytes = buffer2.getBytes(0, buffer2.writerIndex());
-    System.err.print("[JAVA READ] C++ output (" + cppBytes.length + " bytes): ");
-    for (int i = 0; i < Math.min(cppBytes.length, 100); i++) {
-      System.err.print(String.format("%02x ", cppBytes[i] & 0xFF));
-    }
-    System.err.println();
-
     StructWithList readStruct1 = (StructWithList) fory.deserialize(buffer2);
     Assert.assertEquals(readStruct1.items, Arrays.asList("a", "b", "c"));
     StructWithList readStruct2 = (StructWithList) fory.deserialize(buffer2);
@@ -875,16 +819,7 @@ public abstract class XlangTestBase extends ForyTestBase {
 
     MemoryBuffer buffer = MemoryUtils.buffer(64);
     fory.serialize(buffer, struct1);
-    int struct1End = buffer.writerIndex();
     fory.serialize(buffer, struct2);
-
-    byte[] allBytes = buffer.getBytes(0, buffer.writerIndex());
-    System.err.print("[JAVA WRITE MAP] After struct 1 (" + struct1End + " bytes): ");
-    for (int i = 0; i < Math.min(struct1End, 100); i++) {
-      System.err.print(String.format("%02x ", allBytes[i] & 0xFF));
-    }
-    System.err.println();
-    System.err.println("[JAVA WRITE MAP] Total bytes: " + allBytes.length);
 
     ExecutionContext ctx = prepareExecution(caseName, buffer.getBytes(0, buffer.writerIndex()));
     runPeer(ctx);
@@ -1053,20 +988,9 @@ public abstract class XlangTestBase extends ForyTestBase {
       fory.serialize(buffer, myExt);
     }
     byte[] bytes = buffer.getBytes(0, buffer.writerIndex());
-    System.err.print("[JAVA WRITE testConsistentNamed] (" + bytes.length + " bytes): ");
-    for (int i = 0; i < Math.min(bytes.length, 80); i++) {
-      System.err.printf("%02x ", bytes[i] & 0xff);
-    }
-    System.err.println();
     ExecutionContext ctx = prepareExecution(caseName, bytes);
     runPeer(ctx);
     MemoryBuffer buffer2 = readBuffer(ctx.dataFile());
-    byte[] cppBytes = buffer2.getBytes(0, buffer2.writerIndex());
-    System.err.print("[CPP WRITE testConsistentNamed] (" + cppBytes.length + " bytes): ");
-    for (int i = 0; i < Math.min(cppBytes.length, 80); i++) {
-      System.err.printf("%02x ", cppBytes[i] & 0xff);
-    }
-    System.err.println();
     for (int i = 0; i < 3; i++) {
       Assert.assertEquals(fory.deserialize(buffer2), Color.White);
     }
@@ -1105,13 +1029,171 @@ public abstract class XlangTestBase extends ForyTestBase {
     MemoryBuffer buffer = MemoryBuffer.newHeapBuffer(32);
     fory.serialize(buffer, obj);
     byte[] bytes = buffer.getBytes(0, buffer.writerIndex());
-    LOG.info(
-        "Java serialized bytes (first 30): {}",
-        Arrays.toString(Arrays.copyOf(bytes, Math.min(30, bytes.length))));
     ExecutionContext ctx = prepareExecution(caseName, bytes);
     runPeer(ctx);
     MemoryBuffer buffer2 = readBuffer(ctx.dataFile());
     Assert.assertEquals(fory.deserialize(buffer2), obj);
+  }
+
+  // ============================================================================
+  // Polymorphic Container Tests - Test List/Map with interface element types
+  // ============================================================================
+
+  /** Base interface for polymorphic testing */
+  public interface Animal {
+    int getAge();
+
+    String speak();
+  }
+
+  @Data
+  public static class Dog implements Animal {
+    int age;
+    String name;
+
+    @Override
+    public String speak() {
+      return "Woof";
+    }
+  }
+
+  @Data
+  public static class Cat implements Animal {
+    int age;
+    int lives;
+
+    @Override
+    public String speak() {
+      return "Meow";
+    }
+  }
+
+  @Data
+  static class AnimalListHolder {
+    List<Animal> animals;
+  }
+
+  @Data
+  static class AnimalMapHolder {
+    Map<String, Animal> animal_map;
+  }
+
+  @Test
+  public void testPolymorphicList() throws java.io.IOException {
+    String caseName = "test_polymorphic_list";
+    Fory fory =
+        Fory.builder()
+            .withLanguage(Language.XLANG)
+            .withCompatibleMode(CompatibleMode.COMPATIBLE)
+            .withCodegen(false)
+            .build();
+    // Register concrete types, not the interface
+    fory.register(Dog.class, 302);
+    fory.register(Cat.class, 303);
+    fory.register(AnimalListHolder.class, 304);
+
+    // Part 1: Test List<Animal> with mixed types directly
+    Dog dog = new Dog();
+    dog.age = 3;
+    dog.name = "Buddy";
+    Cat cat = new Cat();
+    cat.age = 5;
+    cat.lives = 9;
+    List<Animal> animals = Arrays.asList(dog, cat);
+
+    // Part 2: Test List<Animal> as struct field
+    AnimalListHolder holder = new AnimalListHolder();
+    Dog dog2 = new Dog();
+    dog2.age = 2;
+    dog2.name = "Rex";
+    Cat cat2 = new Cat();
+    cat2.age = 4;
+    cat2.lives = 7;
+    holder.animals = Arrays.asList(dog2, cat2);
+
+    MemoryBuffer buffer = MemoryUtils.buffer(128);
+    fory.serialize(buffer, animals);
+    fory.serialize(buffer, holder);
+
+    byte[] allBytes = buffer.getBytes(0, buffer.writerIndex());
+    ExecutionContext ctx = prepareExecution(caseName, allBytes);
+    runPeer(ctx);
+
+    MemoryBuffer buffer2 = readBuffer(ctx.dataFile());
+    List<Animal> readAnimals = (List<Animal>) fory.deserialize(buffer2);
+    Assert.assertEquals(readAnimals.size(), 2);
+    Assert.assertTrue(readAnimals.get(0) instanceof Dog);
+    Assert.assertEquals(((Dog) readAnimals.get(0)).name, "Buddy");
+    Assert.assertEquals(readAnimals.get(0).getAge(), 3);
+    Assert.assertTrue(readAnimals.get(1) instanceof Cat);
+    Assert.assertEquals(((Cat) readAnimals.get(1)).lives, 9);
+    Assert.assertEquals(readAnimals.get(1).getAge(), 5);
+
+    AnimalListHolder readHolder = (AnimalListHolder) fory.deserialize(buffer2);
+    Assert.assertEquals(readHolder.animals.size(), 2);
+    Assert.assertTrue(readHolder.animals.get(0) instanceof Dog);
+    Assert.assertEquals(((Dog) readHolder.animals.get(0)).name, "Rex");
+    Assert.assertTrue(readHolder.animals.get(1) instanceof Cat);
+    Assert.assertEquals(((Cat) readHolder.animals.get(1)).lives, 7);
+  }
+
+  @Test
+  public void testPolymorphicMap() throws java.io.IOException {
+    String caseName = "test_polymorphic_map";
+    Fory fory =
+        Fory.builder()
+            .withLanguage(Language.XLANG)
+            .withCompatibleMode(CompatibleMode.COMPATIBLE)
+            .withCodegen(false)
+            .build();
+    fory.register(Dog.class, 302);
+    fory.register(Cat.class, 303);
+    fory.register(AnimalMapHolder.class, 305);
+
+    // Part 1: Test Map<String, Animal> with mixed types directly
+    Dog dog = new Dog();
+    dog.age = 2;
+    dog.name = "Rex";
+    Cat cat = new Cat();
+    cat.age = 4;
+    cat.lives = 9;
+    Map<String, Animal> animalMap = new HashMap<>();
+    animalMap.put("dog1", dog);
+    animalMap.put("cat1", cat);
+
+    // Part 2: Test Map<String, Animal> as struct field
+    AnimalMapHolder holder = new AnimalMapHolder();
+    Dog dog2 = new Dog();
+    dog2.age = 1;
+    dog2.name = "Fido";
+    Cat cat2 = new Cat();
+    cat2.age = 3;
+    cat2.lives = 8;
+    holder.animal_map = new HashMap<>();
+    holder.animal_map.put("myDog", dog2);
+    holder.animal_map.put("myCat", cat2);
+
+    MemoryBuffer buffer = MemoryUtils.buffer(128);
+    fory.serialize(buffer, animalMap);
+    fory.serialize(buffer, holder);
+
+    ExecutionContext ctx = prepareExecution(caseName, buffer.getBytes(0, buffer.writerIndex()));
+    runPeer(ctx);
+
+    MemoryBuffer buffer2 = readBuffer(ctx.dataFile());
+    Map<String, Animal> readAnimalMap = (Map<String, Animal>) fory.deserialize(buffer2);
+    Assert.assertEquals(readAnimalMap.size(), 2);
+    Assert.assertTrue(readAnimalMap.get("dog1") instanceof Dog);
+    Assert.assertEquals(((Dog) readAnimalMap.get("dog1")).name, "Rex");
+    Assert.assertTrue(readAnimalMap.get("cat1") instanceof Cat);
+    Assert.assertEquals(((Cat) readAnimalMap.get("cat1")).lives, 9);
+
+    AnimalMapHolder readHolder = (AnimalMapHolder) fory.deserialize(buffer2);
+    Assert.assertEquals(readHolder.animal_map.size(), 2);
+    Assert.assertTrue(readHolder.animal_map.get("myDog") instanceof Dog);
+    Assert.assertEquals(((Dog) readHolder.animal_map.get("myDog")).name, "Fido");
+    Assert.assertTrue(readHolder.animal_map.get("myCat") instanceof Cat);
+    Assert.assertEquals(((Cat) readHolder.animal_map.get("myCat")).lives, 8);
   }
 
   /**

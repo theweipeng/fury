@@ -33,6 +33,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -225,6 +226,39 @@ struct StructWithMap {
 };
 FORY_STRUCT(StructWithMap, data);
 
+// ============================================================================
+// Polymorphic Container Test Types - Using virtual base class
+// ============================================================================
+
+struct Animal {
+  virtual ~Animal() = default;
+  virtual std::string speak() const = 0;
+  int32_t age = 0;
+};
+FORY_STRUCT(Animal, age);
+
+struct Dog : Animal {
+  std::string speak() const override { return "Woof"; }
+  std::optional<std::string> name;
+};
+FORY_STRUCT(Dog, age, name);
+
+struct Cat : Animal {
+  std::string speak() const override { return "Meow"; }
+  int32_t lives = 9;
+};
+FORY_STRUCT(Cat, age, lives);
+
+struct AnimalListHolder {
+  std::vector<std::shared_ptr<Animal>> animals;
+};
+FORY_STRUCT(AnimalListHolder, animals);
+
+struct AnimalMapHolder {
+  std::map<std::optional<std::string>, std::shared_ptr<Animal>> animal_map;
+};
+FORY_STRUCT(AnimalMapHolder, animal_map);
+
 namespace fory {
 namespace serialization {
 
@@ -381,6 +415,8 @@ void RunTestSkipIdCustom(const std::string &data_file);
 void RunTestSkipNameCustom(const std::string &data_file);
 void RunTestConsistentNamed(const std::string &data_file);
 void RunTestStructVersionCheck(const std::string &data_file);
+void RunTestPolymorphicList(const std::string &data_file);
+void RunTestPolymorphicMap(const std::string &data_file);
 } // namespace
 
 int main(int argc, char **argv) {
@@ -440,6 +476,10 @@ int main(int argc, char **argv) {
       RunTestConsistentNamed(data_file);
     } else if (case_name == "test_struct_version_check") {
       RunTestStructVersionCheck(data_file);
+    } else if (case_name == "test_polymorphic_list") {
+      RunTestPolymorphicList(data_file);
+    } else if (case_name == "test_polymorphic_map") {
+      RunTestPolymorphicMap(data_file);
     } else {
       Fail("Unknown test case: " + case_name);
     }
@@ -1267,6 +1307,130 @@ void RunTestStructVersionCheck(const std::string &data_file) {
   WriteFile(data_file, out);
 }
 
-} // namespace
+void RunTestPolymorphicList(const std::string &data_file) {
+  auto bytes = ReadFile(data_file);
+  auto fory = BuildFory(true, true);
+  EnsureOk(fory.register_struct<Dog>(302), "register Dog");
+  EnsureOk(fory.register_struct<Cat>(303), "register Cat");
+  EnsureOk(fory.register_struct<AnimalListHolder>(304),
+           "register AnimalListHolder");
 
-// Remaining test handlers will be defined below.
+  Buffer buffer = MakeBuffer(bytes);
+
+  // Part 1: Read List<Animal> with polymorphic elements (Dog, Cat)
+  auto animals = ReadNext<std::vector<std::shared_ptr<Animal>>>(fory, buffer);
+  if (animals.size() != 2) {
+    Fail("Animal list size mismatch, got: " + std::to_string(animals.size()));
+  }
+
+  // First element should be Dog
+  auto *dog = dynamic_cast<Dog *>(animals[0].get());
+  if (dog == nullptr) {
+    Fail("First element is not a Dog");
+  }
+  if (dog->age != 3 || dog->name != std::string("Buddy")) {
+    Fail("First Dog mismatch: age=" + std::to_string(dog->age) +
+         ", name=" + dog->name.value_or("null"));
+  }
+
+  // Second element should be Cat
+  auto *cat = dynamic_cast<Cat *>(animals[1].get());
+  if (cat == nullptr) {
+    Fail("Second element is not a Cat");
+  }
+  if (cat->age != 5 || cat->lives != 9) {
+    Fail("Cat mismatch: age=" + std::to_string(cat->age) +
+         ", lives=" + std::to_string(cat->lives));
+  }
+
+  // Part 2: Read AnimalListHolder (List<Animal> as struct field)
+  auto holder = ReadNext<AnimalListHolder>(fory, buffer);
+  if (holder.animals.size() != 2) {
+    Fail("AnimalListHolder size mismatch");
+  }
+
+  auto *dog2 = dynamic_cast<Dog *>(holder.animals[0].get());
+  if (dog2 == nullptr || dog2->name != std::string("Rex")) {
+    Fail("AnimalListHolder first animal (Dog) mismatch");
+  }
+
+  auto *cat2 = dynamic_cast<Cat *>(holder.animals[1].get());
+  if (cat2 == nullptr || cat2->lives != 7) {
+    Fail("AnimalListHolder second animal (Cat) mismatch");
+  }
+
+  // Write back
+  std::vector<uint8_t> out;
+  AppendSerialized(fory, animals, out);
+  AppendSerialized(fory, holder, out);
+  WriteFile(data_file, out);
+}
+
+void RunTestPolymorphicMap(const std::string &data_file) {
+  auto bytes = ReadFile(data_file);
+  auto fory = BuildFory(true, true);
+  EnsureOk(fory.register_struct<Dog>(302), "register Dog");
+  EnsureOk(fory.register_struct<Cat>(303), "register Cat");
+  EnsureOk(fory.register_struct<AnimalMapHolder>(305),
+           "register AnimalMapHolder");
+
+  Buffer buffer = MakeBuffer(bytes);
+
+  // Part 1: Read Map<String, Animal> with polymorphic values
+  using OptStr = std::optional<std::string>;
+  auto animalMap =
+      ReadNext<std::map<OptStr, std::shared_ptr<Animal>>>(fory, buffer);
+  if (animalMap.size() != 2) {
+    Fail("Animal map size mismatch, got: " + std::to_string(animalMap.size()));
+  }
+
+  auto dog1It = animalMap.find(std::string("dog1"));
+  if (dog1It == animalMap.end()) {
+    Fail("Dog1 not found in map");
+  }
+  auto *dog = dynamic_cast<Dog *>(dog1It->second.get());
+  if (dog == nullptr || dog->age != 2 || dog->name != std::string("Rex")) {
+    Fail("Animal map dog1 mismatch");
+  }
+
+  auto cat1It = animalMap.find(std::string("cat1"));
+  if (cat1It == animalMap.end()) {
+    Fail("Cat1 not found in map");
+  }
+  auto *cat = dynamic_cast<Cat *>(cat1It->second.get());
+  if (cat == nullptr || cat->age != 4 || cat->lives != 9) {
+    Fail("Animal map cat1 mismatch");
+  }
+
+  // Part 2: Read AnimalMapHolder (Map<String, Animal> as struct field)
+  auto holder = ReadNext<AnimalMapHolder>(fory, buffer);
+  if (holder.animal_map.size() != 2) {
+    Fail("AnimalMapHolder size mismatch");
+  }
+
+  auto myDogIt = holder.animal_map.find(std::string("myDog"));
+  if (myDogIt == holder.animal_map.end()) {
+    Fail("myDog not found in holder map");
+  }
+  auto *myDog = dynamic_cast<Dog *>(myDogIt->second.get());
+  if (myDog == nullptr || myDog->name != std::string("Fido")) {
+    Fail("AnimalMapHolder myDog mismatch");
+  }
+
+  auto myCatIt = holder.animal_map.find(std::string("myCat"));
+  if (myCatIt == holder.animal_map.end()) {
+    Fail("myCat not found in holder map");
+  }
+  auto *myCat = dynamic_cast<Cat *>(myCatIt->second.get());
+  if (myCat == nullptr || myCat->lives != 8) {
+    Fail("AnimalMapHolder myCat mismatch");
+  }
+
+  // Write back
+  std::vector<uint8_t> out;
+  AppendSerialized(fory, animalMap, out);
+  AppendSerialized(fory, holder, out);
+  WriteFile(data_file, out);
+}
+
+} // namespace
