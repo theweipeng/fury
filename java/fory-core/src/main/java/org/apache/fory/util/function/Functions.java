@@ -34,6 +34,8 @@ import org.apache.fory.collection.Tuple2;
 import org.apache.fory.reflect.ReflectionUtils;
 import org.apache.fory.util.GraalvmSupport;
 import org.apache.fory.util.Preconditions;
+import org.apache.fory.util.record.RecordComponent;
+import org.apache.fory.util.record.RecordUtils;
 import org.apache.fory.util.unsafe._JDKAccess;
 
 /** Utility for lambda functions. */
@@ -71,8 +73,43 @@ public class Functions {
 
   public static Object makeGetterFunction(Class<?> cls, String methodName) {
     try {
-      return makeGetterFunction(cls.getDeclaredMethod(methodName));
+      Method method = cls.getDeclaredMethod(methodName);
+      return makeGetterFunction(method);
     } catch (NoSuchMethodException e) {
+      if (GraalvmSupport.IN_GRAALVM_NATIVE_IMAGE) {
+        // In GraalVM native image, getDeclaredMethod may fail for Record accessor methods
+        // For Record classes, use RecordUtils which uses getRecordComponents() API
+        if (RecordUtils.isRecord(cls)) {
+          RecordComponent[] components = RecordUtils.getRecordComponents(cls);
+          if (components != null) {
+            for (RecordComponent component : components) {
+              if (component.getName().equals(methodName)) {
+                return component.getGetter();
+              }
+            }
+          }
+        }
+        // Fall back to getDeclaredMethods() for private inner classes
+        // Then try getMethods() for public methods
+        try {
+          for (Method method : cls.getDeclaredMethods()) {
+            if (method.getName().equals(methodName) && method.getParameterCount() == 0) {
+              method.setAccessible(true);
+              return makeGetterFunction(method);
+            }
+          }
+          for (Method method : cls.getMethods()) {
+            if (method.getName().equals(methodName) && method.getParameterCount() == 0) {
+              return makeGetterFunction(method);
+            }
+          }
+          throw new NoSuchMethodException(
+              "No no-arg method found: " + cls.getName() + "." + methodName + "()");
+        } catch (NoSuchMethodException ex) {
+          throw new RuntimeException(
+              "Failed to create getter for " + cls.getName() + "." + methodName, ex);
+        }
+      }
       throw new RuntimeException(e);
     }
   }
