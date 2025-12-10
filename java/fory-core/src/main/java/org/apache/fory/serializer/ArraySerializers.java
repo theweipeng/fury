@@ -625,7 +625,6 @@ public class ArraySerializers {
       super(fory, String[].class);
       stringSerializer = new StringSerializer(fory);
       collectionSerializer = new ForyArrayAsListSerializer(fory);
-      collectionSerializer.setElementSerializer(stringSerializer);
       list = new ForyArrayAsListSerializer.ArrayAsList(0);
     }
 
@@ -887,7 +886,7 @@ public class ArraySerializers {
       } else {
         if (fory.getConfig().getCompatibleMode() == CompatibleMode.COMPATIBLE) {
           componentSerializer =
-              new CompatibleSerializer<>(fory, NonexistentClass.NonexistentSkip.class);
+              new ObjectSerializer<>(fory, NonexistentClass.NonexistentSkip.class);
         } else {
           componentSerializer = null;
         }

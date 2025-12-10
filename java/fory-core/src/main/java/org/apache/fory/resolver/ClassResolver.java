@@ -27,7 +27,6 @@ import static org.apache.fory.meta.Encoders.TYPE_NAME_DECODER;
 import static org.apache.fory.meta.Encoders.encodePackage;
 import static org.apache.fory.meta.Encoders.encodeTypeName;
 import static org.apache.fory.serializer.CodegenSerializer.loadCodegenSerializer;
-import static org.apache.fory.serializer.CodegenSerializer.loadCompatibleCodegenSerializer;
 import static org.apache.fory.serializer.CodegenSerializer.supportCodegenForJavaSerialization;
 import static org.apache.fory.type.TypeUtils.OBJECT_TYPE;
 import static org.apache.fory.type.TypeUtils.getRawType;
@@ -107,7 +106,6 @@ import org.apache.fory.reflect.TypeRef;
 import org.apache.fory.serializer.ArraySerializers;
 import org.apache.fory.serializer.BufferSerializers;
 import org.apache.fory.serializer.CodegenSerializer.LazyInitBeanSerializer;
-import org.apache.fory.serializer.CompatibleSerializer;
 import org.apache.fory.serializer.EnumSerializer;
 import org.apache.fory.serializer.ExternalizableSerializer;
 import org.apache.fory.serializer.FinalFieldReplaceResolveSerializer;
@@ -1033,16 +1031,13 @@ public class ClassResolver extends TypeResolver {
                           callback);
               return sc;
             case COMPATIBLE:
-              // If share class meta, compatible serializer won't be necessary, class
-              // definition will be sent to peer to create serializer for deserialization.
+              // Always use ObjectSerializer for compatible mode.
+              // Class definition will be sent to peer to create serializer for deserialization.
               sc =
                   fory.getJITContext()
                       .registerSerializerJITCallback(
-                          () -> shareMeta ? ObjectSerializer.class : CompatibleSerializer.class,
-                          () ->
-                              shareMeta
-                                  ? loadCodegenSerializer(fory, cls)
-                                  : loadCompatibleCodegenSerializer(fory, cls),
+                          () -> ObjectSerializer.class,
+                          () -> loadCodegenSerializer(fory, cls),
                           callback);
               return sc;
             default:
@@ -1057,15 +1052,8 @@ public class ClassResolver extends TypeResolver {
       if (codegen) {
         LOG.info("Object of type {} can't be serialized by jit", cls);
       }
-      switch (fory.getCompatibleMode()) {
-        case SCHEMA_CONSISTENT:
-          return ObjectSerializer.class;
-        case COMPATIBLE:
-          return shareMeta ? ObjectSerializer.class : CompatibleSerializer.class;
-        default:
-          throw new UnsupportedOperationException(
-              String.format("Unsupported mode %s", fory.getCompatibleMode()));
-      }
+      // Always use ObjectSerializer for both modes
+      return ObjectSerializer.class;
     }
   }
 
@@ -1091,18 +1079,6 @@ public class ClassResolver extends TypeResolver {
           }
           return false;
         };
-  }
-
-  public FieldResolver getFieldResolver(Class<?> cls) {
-    // can't use computeIfAbsent, since there may be recursive multiple
-    // `getFieldResolver` thus multiple updates, which cause concurrent
-    // modification exception.
-    FieldResolver fieldResolver = extRegistry.fieldResolverMap.get(cls);
-    if (fieldResolver == null) {
-      fieldResolver = FieldResolver.of(fory, cls);
-      extRegistry.fieldResolverMap.put(cls, fieldResolver);
-    }
-    return fieldResolver;
   }
 
   @Override
@@ -1810,8 +1786,19 @@ public class ClassResolver extends TypeResolver {
                 createSerializer0(cls);
               }
               if (cls.isArray()) {
+                // Also create serializer for the component type
                 createSerializer0(TypeUtils.getArrayComponent(cls));
               }
+            }
+            // Always ensure array class serializers and their component type serializers
+            // are registered in GraalVM registry, since ObjectArraySerializer needs
+            // the component type serializer at construction time
+            if (cls.isArray() && GraalvmSupport.isGraalBuildtime()) {
+              // First ensure component type serializer is registered
+              Class<?> componentType = TypeUtils.getArrayComponent(cls);
+              createSerializer0(componentType);
+              // Then register the array serializer
+              createSerializer0(cls);
             }
           });
       if (GraalvmSupport.isGraalBuildtime()) {
