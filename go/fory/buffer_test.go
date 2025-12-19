@@ -18,55 +18,63 @@
 package fory
 
 import (
-	"github.com/stretchr/testify/require"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
-func TestVarInt(t *testing.T) {
+func TestVarint(t *testing.T) {
 	for i := 1; i <= 32; i++ {
 		buf := NewByteBuffer(nil)
 		for j := 0; j < i; j++ {
 			buf.WriteByte_(1) // make address unaligned.
 			buf.ReadByte_()
 		}
-		checkVarInt(t, buf, 1, 1)
-		checkVarInt(t, buf, 1<<6, 1)
-		checkVarInt(t, buf, 1<<7, 2)
-		checkVarInt(t, buf, 1<<13, 2)
-		checkVarInt(t, buf, 1<<14, 3)
-		checkVarInt(t, buf, 1<<20, 3)
-		checkVarInt(t, buf, 1<<21, 4)
-		checkVarInt(t, buf, 1<<27, 4)
-		checkVarInt(t, buf, 1<<28, 5)
-		checkVarInt(t, buf, MaxInt32, 5)
-		checkVarIntWrite(t, buf, -1)
-		checkVarIntWrite(t, buf, -1<<6)
-		checkVarIntWrite(t, buf, -1<<7)
-		checkVarIntWrite(t, buf, -1<<13)
-		checkVarIntWrite(t, buf, -1<<14)
-		checkVarIntWrite(t, buf, -1<<20)
-		checkVarIntWrite(t, buf, -1<<21)
-		checkVarIntWrite(t, buf, -1<<27)
-		checkVarIntWrite(t, buf, -1<<28)
-		checkVarIntWrite(t, buf, MinInt8)
-		checkVarIntWrite(t, buf, MinInt16)
-		checkVarIntWrite(t, buf, MinInt32)
+		// Zigzag encoding doubles positive values: zigzag(n) = n * 2 for positive n
+		// So boundary values for positive numbers are:
+		// 1 byte: 0-63 (zigzag 0-126, fits in 7 bits)
+		// 2 bytes: 64-8191 (zigzag 128-16382, fits in 14 bits)
+		// 3 bytes: 8192-1048575 (zigzag fits in 21 bits)
+		// 4 bytes: 1048576-134217727 (zigzag fits in 28 bits)
+		// 5 bytes: 134217728+ (zigzag fits in 32 bits)
+		checkVarint(t, buf, 1, 1)
+		checkVarint(t, buf, 63, 1)        // max 1-byte positive: zigzag(63)=126
+		checkVarint(t, buf, 64, 2)        // min 2-byte positive: zigzag(64)=128
+		checkVarint(t, buf, 8191, 2)      // max 2-byte positive: zigzag(8191)=16382
+		checkVarint(t, buf, 8192, 3)      // min 3-byte positive: zigzag(8192)=16384
+		checkVarint(t, buf, 1048575, 3)   // max 3-byte positive
+		checkVarint(t, buf, 1048576, 4)   // min 4-byte positive
+		checkVarint(t, buf, 134217727, 4) // max 4-byte positive
+		checkVarint(t, buf, 134217728, 5) // min 5-byte positive
+		checkVarint(t, buf, MaxInt32, 5)
+		checkVarintWrite(t, buf, -1)
+		checkVarintWrite(t, buf, -1<<6)
+		checkVarintWrite(t, buf, -1<<7)
+		checkVarintWrite(t, buf, -1<<13)
+		checkVarintWrite(t, buf, -1<<14)
+		checkVarintWrite(t, buf, -1<<20)
+		checkVarintWrite(t, buf, -1<<21)
+		checkVarintWrite(t, buf, -1<<27)
+		checkVarintWrite(t, buf, -1<<28)
+		checkVarintWrite(t, buf, MinInt8)
+		checkVarintWrite(t, buf, MinInt16)
+		checkVarintWrite(t, buf, MinInt32)
 	}
 }
 
-func checkVarInt(t *testing.T, buf *ByteBuffer, value int32, bytesWritten int8) {
+func checkVarint(t *testing.T, buf *ByteBuffer, value int32, bytesWritten int8) {
 	require.Equal(t, buf.WriterIndex(), buf.ReaderIndex())
-	actualBytesWritten := buf.WriteVarInt32(value)
+	actualBytesWritten := buf.WriteVarint32(value)
 	require.Equal(t, bytesWritten, actualBytesWritten)
-	varInt := buf.ReadVarInt32()
+	varInt := buf.ReadVarint32()
 	require.Equal(t, buf.ReaderIndex(), buf.WriterIndex())
 	require.Equal(t, value, varInt)
 }
 
-func checkVarIntWrite(t *testing.T, buf *ByteBuffer, value int32) {
+func checkVarintWrite(t *testing.T, buf *ByteBuffer, value int32) {
 	require.Equal(t, buf.WriterIndex(), buf.ReaderIndex())
-	buf.WriteVarInt32(value)
-	varInt := buf.ReadVarInt32()
+	buf.WriteVarint32(value)
+	varInt := buf.ReadVarint32()
 	require.Equal(t, buf.ReaderIndex(), buf.WriterIndex())
 	require.Equal(t, value, varInt)
 }

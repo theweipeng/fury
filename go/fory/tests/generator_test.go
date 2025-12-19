@@ -44,14 +44,14 @@ func TestValidationDemo(t *testing.T) {
 	assert.Equal(t, 3.14159, original.D, "Original D should be 3.14159")
 	assert.Equal(t, true, original.E, "Original E should be true")
 
-	// 2. Serialize using generated code
+	// 2. SerializeWithCallback using generated code
 	f := fory.NewFory(fory.WithRefTracking(true))
 	data, err := f.Marshal(original)
 	require.NoError(t, err, "Serialization should not fail")
 	require.NotEmpty(t, data, "Serialized data should not be empty")
 	assert.Greater(t, len(data), 0, "Serialized data should have positive length")
 
-	// 3. Deserialize using generated code
+	// 3. DeserializeWithCallbackBuffers using generated code
 	var result *ValidationDemo
 	err = f.Unmarshal(data, &result)
 	require.NoError(t, err, "Deserialization should not fail")
@@ -60,7 +60,6 @@ func TestValidationDemo(t *testing.T) {
 	// 4. Verify that serializer is properly registered and can be retrieved
 	validationSerializer := NewSerializerFor_ValidationDemo()
 	assert.NotNil(t, validationSerializer, "Serializer should not be nil")
-	assert.Equal(t, fory.TypeId(fory.NAMED_STRUCT), validationSerializer.TypeId(), "Serializer should have correct TypeId")
 }
 
 func TestSliceDemo(t *testing.T) {
@@ -78,14 +77,14 @@ func TestSliceDemo(t *testing.T) {
 	assert.NotEmpty(t, original.FloatSlice, "FloatSlice should not be empty")
 	assert.NotEmpty(t, original.BoolSlice, "BoolSlice should not be empty")
 
-	// 2. Serialize using generated code
+	// 2. SerializeWithCallback using generated code
 	f := fory.NewFory(fory.WithRefTracking(true))
 	data, err := f.Marshal(original)
 	require.NoError(t, err, "Serialization should not fail")
 	require.NotEmpty(t, data, "Serialized data should not be empty")
 	assert.Greater(t, len(data), 0, "Serialized data should have positive length")
 
-	// 3. Deserialize using generated code
+	// 3. DeserializeWithCallbackBuffers using generated code
 	var result *SliceDemo
 	err = f.Unmarshal(data, &result)
 	require.NoError(t, err, "Deserialization should not fail")
@@ -94,7 +93,6 @@ func TestSliceDemo(t *testing.T) {
 	// 4. Verify that serializer is properly registered and can be retrieved
 	sliceSerializer := NewSerializerFor_SliceDemo()
 	assert.NotNil(t, sliceSerializer, "Serializer should not be nil")
-	assert.Equal(t, fory.TypeId(fory.NAMED_STRUCT), sliceSerializer.TypeId(), "Serializer should have correct TypeId")
 }
 
 func TestDynamicSliceDemo(t *testing.T) {
@@ -117,14 +115,14 @@ func TestDynamicSliceDemo(t *testing.T) {
 	assert.Equal(t, true, original.DynamicSlice[3], "Fourth element should be true")
 	assert.Equal(t, int64(12345), original.DynamicSlice[4], "Fifth element should be int64(12345)")
 
-	// 2. Serialize using generated code
+	// 2. SerializeWithCallback using generated code
 	f := fory.NewFory(fory.WithRefTracking(true))
 	data, err := f.Marshal(original)
 	require.NoError(t, err, "Serialization should not fail")
 	require.NotEmpty(t, data, "Serialized data should not be empty")
 	assert.Greater(t, len(data), 0, "Serialized data should have positive length")
 
-	// 3. Deserialize using generated code
+	// 3. DeserializeWithCallbackBuffers using generated code
 	var result *DynamicSliceDemo
 	err = f.Unmarshal(data, &result)
 	require.NoError(t, err, "Deserialization should not fail")
@@ -133,7 +131,6 @@ func TestDynamicSliceDemo(t *testing.T) {
 	// 4. Verify that serializer is properly registered and can be retrieved
 	dynamicSliceSerializer := NewSerializerFor_DynamicSliceDemo()
 	assert.NotNil(t, dynamicSliceSerializer, "Serializer should not be nil")
-	assert.Equal(t, fory.TypeId(fory.NAMED_STRUCT), dynamicSliceSerializer.TypeId(), "Serializer should have correct TypeId")
 }
 
 func TestDynamicSliceDemoWithNilAndEmpty(t *testing.T) {
@@ -142,13 +139,13 @@ func TestDynamicSliceDemoWithNilAndEmpty(t *testing.T) {
 		DynamicSlice: nil, // nil slice
 	}
 
-	// Serialize using generated code
+	// SerializeWithCallback using generated code
 	f := fory.NewFory(fory.WithRefTracking(true))
 	data, err := f.Marshal(original)
 	require.NoError(t, err, "Serialization should not fail")
 	require.NotEmpty(t, data, "Serialized data should not be empty")
 
-	// Deserialize using generated code
+	// DeserializeWithCallbackBuffers using generated code
 	var result *DynamicSliceDemo
 	err = f.Unmarshal(data, &result)
 	require.NoError(t, err, "Deserialization should not fail")
@@ -190,12 +187,12 @@ func TestMapDemo(t *testing.T) {
 		MixedMap: nil, // Test nil map handling
 	}
 
-	// Serialize with codegen
+	// SerializeWithCallback with codegen
 	f := fory.NewFory(fory.WithRefTracking(true))
 	data, err := f.Marshal(instance)
 	require.NoError(t, err, "Serialization failed")
 
-	// Deserialize back
+	// DeserializeWithCallbackBuffers back
 	var result MapDemo
 	err = f.Unmarshal(data, &result)
 	require.NoError(t, err, "Deserialization failed")

@@ -68,25 +68,11 @@ func (f *Fory) Deserialize(data []byte, v interface{}) error {
 	return inner.Unmarshal(data, v)
 }
 
-// SerializeAny serializes polymorphic values where concrete type is unknown
-func (f *Fory) SerializeAny(value any) ([]byte, error) {
-	inner := f.acquire()
-	defer f.release(inner)
-	return inner.SerializeAny(value)
-}
-
-// DeserializeAny deserializes polymorphic values
-func (f *Fory) DeserializeAny(data []byte) (any, error) {
-	inner := f.acquire()
-	defer f.release(inner)
-	return inner.DeserializeAny(data)
-}
-
 // RegisterNamedType registers a named type for cross-language serialization
 func (f *Fory) RegisterNamedType(type_ interface{}, typeName string) error {
 	inner := f.acquire()
 	defer f.release(inner)
-	return inner.RegisterNamedType(type_, typeName)
+	return inner.RegisterByName(type_, typeName)
 }
 
 // ============================================================================

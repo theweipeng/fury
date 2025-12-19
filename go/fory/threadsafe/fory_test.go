@@ -88,24 +88,26 @@ func TestFory(t *testing.T) {
 	})
 }
 
-// TestSerializeAny tests the SerializeAny/DeserializeAny methods
+// TestSerializeAny tests the Serialize/Deserialize methods
 func TestSerializeAny(t *testing.T) {
 	f := New(fory.WithRefTracking(true))
 
 	t.Run("Primitives", func(t *testing.T) {
-		data, err := f.SerializeAny(int32(42))
+		data, err := f.Serialize(int32(42))
 		require.NoError(t, err)
 
-		result, err := f.DeserializeAny(data)
+		var result int32
+		err = f.Deserialize(data, &result)
 		require.NoError(t, err)
 		require.Equal(t, int32(42), result)
 	})
 
 	t.Run("String", func(t *testing.T) {
-		data, err := f.SerializeAny("hello")
+		data, err := f.Serialize("hello")
 		require.NoError(t, err)
 
-		result, err := f.DeserializeAny(data)
+		var result string
+		err = f.Deserialize(data, &result)
 		require.NoError(t, err)
 		require.Equal(t, "hello", result)
 	})
@@ -138,14 +140,18 @@ func TestDeserialize(t *testing.T) {
 	})
 
 	t.Run("Slice", func(t *testing.T) {
-		original := []int32{1, 2, 3, 4, 5}
+		// Serialize a struct containing the slice since *[]T is not supported
+		type SliceWrapper struct {
+			Items []int32
+		}
+		original := SliceWrapper{Items: []int32{1, 2, 3, 4, 5}}
 		data, err := Serialize(f, &original)
 		require.NoError(t, err)
 
-		var result []int32
+		var result SliceWrapper
 		err = Deserialize(f, data, &result)
 		require.NoError(t, err)
-		require.Equal(t, original, result)
+		require.Equal(t, original.Items, result.Items)
 	})
 }
 
@@ -164,7 +170,7 @@ func TestGlobalFunctions(t *testing.T) {
 
 	t.Run("UnmarshalTo", func(t *testing.T) {
 		// Use non-generic Serialize for compatibility with non-generic UnmarshalTo
-		data, err := globalFory.SerializeAny("hello")
+		data, err := globalFory.Serialize("hello")
 		require.NoError(t, err)
 
 		var result string

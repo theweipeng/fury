@@ -23,7 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestSerializeGenericPrimitives tests Serialize[T]/Deserialize[T] with primitives.
+// TestSerializeGenericPrimitives tests Serialize[T]/DeserializeWithCallbackBuffers[T] with primitives.
 // Both functions take pointers to avoid interface heap allocation and struct copy.
 func TestSerializeGenericPrimitives(t *testing.T) {
 	f := NewFory(WithRefTracking(true))
@@ -132,7 +132,7 @@ func TestSerializeGenericPrimitives(t *testing.T) {
 	})
 }
 
-// TestSerializeGenericComplex tests Serialize[T]/Deserialize[T] with complex types.
+// TestSerializeGenericComplex tests Serialize[T]/DeserializeWithCallbackBuffers[T] with complex types.
 // These fall back to reflection-based serialization.
 func TestSerializeGenericComplex(t *testing.T) {
 	f := NewFory(WithRefTracking(true))
@@ -142,7 +142,7 @@ func TestSerializeGenericComplex(t *testing.T) {
 			Name  string
 			Value int32
 		}
-		err := f.RegisterByNamespace(TestStruct{}, "example", "TestStruct")
+		err := f.RegisterByName(TestStruct{}, "example.TestStruct")
 		require.NoError(t, err)
 
 		original := TestStruct{Name: "test", Value: 100}
@@ -157,25 +157,33 @@ func TestSerializeGenericComplex(t *testing.T) {
 	})
 
 	t.Run("Slice", func(t *testing.T) {
-		original := []int32{1, 2, 3, 4, 5}
+		// Note: *[]T is not supported, use wrapper struct instead
+		type SliceWrapper struct {
+			Items []int32
+		}
+		original := SliceWrapper{Items: []int32{1, 2, 3, 4, 5}}
 		data, err := Serialize(f, &original)
 		require.NoError(t, err)
 
-		var result []int32
+		var result SliceWrapper
 		err = Deserialize(f, data, &result)
 		require.NoError(t, err)
-		require.Equal(t, original, result)
+		require.Equal(t, original.Items, result.Items)
 	})
 
 	t.Run("Map", func(t *testing.T) {
-		original := map[string]int32{"a": 1, "b": 2, "c": 3}
+		// Note: *map[K]V is not supported, use wrapper struct instead
+		type MapWrapper struct {
+			Items map[string]int32
+		}
+		original := MapWrapper{Items: map[string]int32{"a": 1, "b": 2, "c": 3}}
 		data, err := Serialize(f, &original)
 		require.NoError(t, err)
 
-		var result map[string]int32
+		var result MapWrapper
 		err = Deserialize(f, data, &result)
 		require.NoError(t, err)
-		require.Equal(t, original, result)
+		require.Equal(t, original.Items, result.Items)
 	})
 }
 
@@ -183,7 +191,7 @@ func TestSerializeGenericComplex(t *testing.T) {
 func TestSerializeDeserializeRoundTrip(t *testing.T) {
 	f := NewFory(WithRefTracking(true))
 
-	// Test that Serialize[T] uses pointer-based fast path when available
+	// Test that SerializeWithCallback[T] uses pointer-based fast path when available
 	t.Run("TypedSerializerPath", func(t *testing.T) {
 		// Int32 has a registered fast path
 		original := int32(999)
@@ -203,7 +211,7 @@ func TestSerializeDeserializeRoundTrip(t *testing.T) {
 			ID   int64
 			Name string
 		}
-		f.RegisterByNamespace(CustomStruct{}, "test", "CustomStruct")
+		f.RegisterByName(CustomStruct{}, "test.CustomStruct")
 
 		original := CustomStruct{ID: 123, Name: "test"}
 		data, err := Serialize(f, &original)

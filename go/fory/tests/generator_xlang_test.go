@@ -66,7 +66,7 @@ func TestValidationDemoXlang(t *testing.T) {
 
 	// Reflect mode (register with full name)
 	foryForReflect := forygo.NewFory(forygo.WithRefTracking(true))
-	err := foryForReflect.RegisterNamedType(ReflectStruct{}, expectedTypeTag)
+	err := foryForReflect.RegisterByName(ReflectStruct{}, expectedTypeTag)
 	require.NoError(t, err, "Should be able to register ReflectStruct with full name")
 
 	// Serialization test
@@ -131,7 +131,7 @@ func TestSliceDemoXlang(t *testing.T) {
 
 	// Reflect mode - enable reference tracking
 	foryForReflect := forygo.NewFory(forygo.WithRefTracking(true))
-	err := foryForReflect.RegisterNamedType(ReflectSliceStruct{}, expectedTypeTag)
+	err := foryForReflect.RegisterByName(ReflectSliceStruct{}, expectedTypeTag)
 	require.NoError(t, err, "Should be able to register ReflectSliceStruct with full name")
 
 	// Serialization test
@@ -178,10 +178,11 @@ func TestDynamicSliceDemoXlang(t *testing.T) {
 	expectedTypeTag := pkgPath + "." + typeName
 
 	// Create test data with simpler types to avoid reflection issues
+	// Use int64 for interface values since fory deserializes integers to int64 for cross-language compatibility
 	codegenInstance := &DynamicSliceDemo{
 		DynamicSlice: []interface{}{
 			"first",
-			200, // Testing mixed types in dynamic slice
+			int64(200), // Testing mixed types in dynamic slice
 			"third",
 		},
 	}
@@ -194,7 +195,7 @@ func TestDynamicSliceDemoXlang(t *testing.T) {
 	reflectInstance := &ReflectDynamicStruct{
 		DynamicSlice: []interface{}{
 			"first",
-			200, // Testing mixed types in dynamic slice
+			int64(200), // Testing mixed types in dynamic slice
 			"third",
 		},
 	}
@@ -204,7 +205,7 @@ func TestDynamicSliceDemoXlang(t *testing.T) {
 
 	// Reflect mode - enable reference tracking
 	foryForReflect := forygo.NewFory(forygo.WithRefTracking(true))
-	err := foryForReflect.RegisterNamedType(ReflectDynamicStruct{}, expectedTypeTag)
+	err := foryForReflect.RegisterByName(ReflectDynamicStruct{}, expectedTypeTag)
 	require.NoError(t, err, "Should be able to register ReflectDynamicStruct with full name")
 
 	// Serialization test
@@ -262,7 +263,7 @@ func TestMapDemoXlang(t *testing.T) {
 
 	// No need to register MapDemo - it has codegen serializer automatically
 
-	// Serialize both instances
+	// SerializeWithCallback both instances
 	codegenData, err := foryForCodegen.Marshal(codegenInstance)
 	require.NoError(t, err, "Codegen serialization should not fail")
 

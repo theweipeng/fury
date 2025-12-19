@@ -131,7 +131,8 @@ func TestSerializeInterface(t *testing.T) {
 		var a interface{}
 		a = -1
 		serde(t, fory, a)
-		b := []interface{}{1, 2, "str"}
+		// Use int64 for interface values since fory deserializes integers to int64 for cross-language compatibility
+		b := []interface{}{int64(1), int64(2), "str"}
 		serde(t, fory, b)
 		var newB []interface{}
 		serDeserializeTo(t, fory, b, &newB)
@@ -222,19 +223,19 @@ func TestSerializeStructSimple(t *testing.T) {
 		type A struct {
 			F1 []string
 		}
-		require.Nil(t, fory.RegisterNamedType(A{}, "example.A"))
+		require.Nil(t, fory.RegisterByName(A{}, "example.A"))
 		serde(t, fory, A{})
 		serde(t, fory, &A{})
 		serde(t, fory, A{F1: []string{"str1", "", "str2"}})
 		serde(t, fory, &A{F1: []string{"str1", "", "str2"}})
 
-		type B struct {
+		type SimpleB struct {
 			F1 []string
 			F2 map[string]int32
 		}
-		require.Nil(t, fory.RegisterNamedType(B{}, "example.B"))
-		serde(t, fory, B{})
-		serde(t, fory, B{
+		require.Nil(t, fory.RegisterByName(SimpleB{}, "example.SimpleB"))
+		serde(t, fory, SimpleB{})
+		serde(t, fory, SimpleB{
 			F1: []string{"str1", "", "str2"},
 			F2: map[string]int32{
 				"k1": 1,
@@ -249,7 +250,7 @@ func TestRegisterById(t *testing.T) {
 	type simple struct {
 		Field string
 	}
-	require.NoError(t, fory.RegisterNamedType(simple{}, "simple"))
+	require.NoError(t, fory.RegisterByName(simple{}, "simple"))
 	serde(t, fory, simple{Field: "value"})
 }
 
@@ -301,7 +302,7 @@ func newFoo() Foo {
 func TestSerializeStruct(t *testing.T) {
 	for _, referenceTracking := range []bool{false, true} {
 		fory := NewFory(WithRefTracking(referenceTracking))
-		require.Nil(t, fory.RegisterNamedType(Bar{}, "example.Bar"))
+		require.Nil(t, fory.RegisterByName(Bar{}, "example.Bar"))
 		serde(t, fory, &Bar{})
 		bar := Bar{F1: 1, F2: "str"}
 		serde(t, fory, bar)
@@ -311,13 +312,14 @@ func TestSerializeStruct(t *testing.T) {
 			F1 Bar
 			F2 interface{}
 		}
-		require.Nil(t, fory.RegisterNamedType(A{}, "example.A"))
+		require.Nil(t, fory.RegisterByName(A{}, "example.A"))
 		serde(t, fory, A{})
 		serde(t, fory, &A{})
-		serde(t, fory, A{F1: Bar{F1: 1, F2: "str"}, F2: -1})
-		serde(t, fory, &A{F1: Bar{F1: 1, F2: "str"}, F2: -1})
+		// Use int64 for interface{} fields since xlang deserializes integers to int64
+		serde(t, fory, A{F1: Bar{F1: 1, F2: "str"}, F2: int64(-1)})
+		serde(t, fory, &A{F1: Bar{F1: 1, F2: "str"}, F2: int64(-1)})
 
-		require.Nil(t, fory.RegisterNamedType(Foo{}, "example.Foo"))
+		require.Nil(t, fory.RegisterByName(Foo{}, "example.Foo"))
 		foo := newFoo()
 		serde(t, fory, foo)
 		serde(t, fory, &foo)
@@ -330,7 +332,7 @@ func TestSerializeCircularReference(t *testing.T) {
 		type A struct {
 			A1 *A
 		}
-		require.Nil(t, fory.RegisterNamedType(A{}, "example.A"))
+		require.Nil(t, fory.RegisterByName(A{}, "example.A"))
 		// If use `A{}` instead of `&A{}` and pass `a` instead of `&a`, there will be serialization data duplication
 		// and can't be deserialized by other languages too.
 		// TODO(chaokunyang) If pass by value(have a copy) and there are some inner value reference, return a readable
@@ -345,18 +347,18 @@ func TestSerializeCircularReference(t *testing.T) {
 		require.Same(t, a1, a1.A1)
 	}
 	{
-		type B struct {
+		type CircularRefB struct {
 			F1 string
-			F2 *B
-			F3 *B
+			F2 *CircularRefB
+			F3 *CircularRefB
 		}
-		require.Nil(t, fory.RegisterNamedType(B{}, "example.B"))
-		b := &B{F1: "str"}
+		require.Nil(t, fory.RegisterByName(CircularRefB{}, "example.CircularRefB"))
+		b := &CircularRefB{F1: "str"}
 		b.F2 = b
 		b.F3 = b
 		bytes, err := fory.Marshal(b)
 		require.Nil(t, err)
-		var b1 *B
+		var b1 *CircularRefB
 		err = fory.Unmarshal(bytes, &b1)
 		require.Nil(t, err)
 		require.Equal(t, b.F1, b1.F1)
@@ -378,8 +380,8 @@ func TestSerializeComplexReference(t *testing.T) {
 		F3 *A
 		F4 *B
 	}
-	require.Nil(t, fory.RegisterNamedType(A{}, "example.A"))
-	require.Nil(t, fory.RegisterNamedType(B{}, "example.B"))
+	require.Nil(t, fory.RegisterByName(A{}, "example.ComplexRefA"))
+	require.Nil(t, fory.RegisterByName(B{}, "example.ComplexRefB"))
 
 	a := &A{F1: "str"}
 	a.F2 = a
@@ -430,7 +432,7 @@ func TestSerializeZeroCopy(t *testing.T) {
 	list := []interface{}{"str", make([]byte, 1000)}
 	buf := NewByteBuffer(nil)
 	var bufferObjects []BufferObject
-	require.Nil(t, fory.Serialize(buf, list, func(o BufferObject) bool {
+	require.Nil(t, fory.SerializeWithCallback(buf, list, func(o BufferObject) bool {
 		bufferObjects = append(bufferObjects, o)
 		return false
 	}))
@@ -440,7 +442,7 @@ func TestSerializeZeroCopy(t *testing.T) {
 	for _, o := range bufferObjects {
 		buffers = append(buffers, o.ToBuffer())
 	}
-	err := fory.Deserialize(buf, &newList, buffers)
+	err := fory.DeserializeWithCallbackBuffers(buf, &newList, buffers)
 	require.Nil(t, err)
 	require.Equal(t, list, newList)
 }
@@ -498,8 +500,8 @@ func serde(t *testing.T, fory *Fory, value interface{}) {
 
 func BenchmarkMarshal(b *testing.B) {
 	fory := NewFory(WithRefTracking(true))
-	require.Nil(b, fory.RegisterNamedType(Foo{}, "example.Foo"))
-	require.Nil(b, fory.RegisterNamedType(Bar{}, "example.Bar"))
+	require.Nil(b, fory.RegisterByName(Foo{}, "example.Foo"))
+	require.Nil(b, fory.RegisterByName(Bar{}, "example.Bar"))
 	value := benchData()
 	for i := 0; i < b.N; i++ {
 		_, err := fory.Marshal(value)
@@ -511,8 +513,8 @@ func BenchmarkMarshal(b *testing.B) {
 
 func BenchmarkUnmarshal(b *testing.B) {
 	fory := NewFory(WithRefTracking(true))
-	require.Nil(b, fory.RegisterNamedType(Foo{}, "example.Foo"))
-	require.Nil(b, fory.RegisterNamedType(Bar{}, "example.Bar"))
+	require.Nil(b, fory.RegisterByName(Foo{}, "example.Foo"))
+	require.Nil(b, fory.RegisterByName(Bar{}, "example.Bar"))
 	value := benchData()
 	data, err := fory.Marshal(value)
 	if err != nil {
@@ -536,16 +538,16 @@ func benchData() interface{} {
 	return []string{x, x, x, x}
 }
 
-func ExampleFory_SerializeAny() {
+func ExampleFory_Serialize() {
 	f := New()
 	list := []interface{}{true, false, "str", -1.1, 1, make([]int32, 5), make([]float64, 5)}
-	bytes, err := f.SerializeAny(list)
+	bytes, err := f.Serialize(list)
 	if err != nil {
 		panic(err)
 	}
 	// bytes can be data serialized by other languages.
-	newValue, err := f.DeserializeAny(bytes)
-	if err != nil {
+	var newValue interface{}
+	if err = f.Deserialize(bytes, &newValue); err != nil {
 		panic(err)
 	}
 	fmt.Println(newValue)
@@ -555,13 +557,12 @@ func ExampleFory_SerializeAny() {
 		"k2": list,
 		"k3": -1,
 	}
-	bytes, err = f.SerializeAny(dict)
+	bytes, err = f.Serialize(dict)
 	if err != nil {
 		panic(err)
 	}
 	// bytes can be data serialized by other languages.
-	newValue, err = f.DeserializeAny(bytes)
-	if err != nil {
+	if err = f.Deserialize(bytes, &newValue); err != nil {
 		panic(err)
 	}
 	fmt.Println(newValue)
@@ -581,8 +582,10 @@ func TestMapEachIndividually(t *testing.T) {
 	for _, srcAny := range commonMap() {
 		srcType := reflect.TypeOf(srcAny)
 		endPtr := reflect.New(srcType)
-		data, _ := fory.Marshal(srcAny)
-		_ = fory.Unmarshal(data, endPtr.Interface())
+		data, err := fory.Marshal(srcAny)
+		require.NoError(t, err, "Marshal failed for type %v", srcType)
+		err = fory.Unmarshal(data, endPtr.Interface())
+		require.NoError(t, err, "Unmarshal failed for type %v", srcType)
 		endVal := endPtr.Elem()
 		endAny := endVal.Interface()
 		require.Equal(t, srcAny, endAny)
@@ -593,9 +596,12 @@ func TestArrayEachIndividually(t *testing.T) {
 	fory := NewFory(WithRefTracking(true))
 	for _, srcAny := range commonArray() {
 		srcType := reflect.TypeOf(srcAny)
+		t.Logf("Testing type: %v", srcType)
 		endPtr := reflect.New(srcType)
-		data, _ := fory.Marshal(srcAny)
-		_ = fory.Unmarshal(data, endPtr.Interface())
+		data, err := fory.Marshal(srcAny)
+		require.NoError(t, err, "Marshal failed for type %v", srcType)
+		err = fory.Unmarshal(data, endPtr.Interface())
+		require.NoError(t, err, "Unmarshal failed for type %v", srcType)
 		endVal := endPtr.Elem()
 		endAny := endVal.Interface()
 		require.Equal(t, srcAny, endAny)
@@ -626,10 +632,10 @@ func TestStructWithNestedSlice(t *testing.T) {
 	}
 
 	fory := NewFory(WithRefTracking(true))
-	if err := fory.RegisterNamedType(Example{}, "Example"); err != nil {
+	if err := fory.RegisterByName(Example{}, "Example"); err != nil {
 		panic(err)
 	}
-	if err := fory.RegisterNamedType(Item{}, "Item"); err != nil {
+	if err := fory.RegisterByName(Item{}, "Item"); err != nil {
 		panic(err)
 	}
 
@@ -641,6 +647,8 @@ func TestStructWithNestedSlice(t *testing.T) {
 	if err := fory.Unmarshal(bytes, &deserialized2); err != nil {
 		panic(err)
 	}
+	// When unmarshaling to interface{}, named structs are returned as pointers
+	// for circular reference support
 	require.Equal(t, deserialized2, example)
 }
 
@@ -732,6 +740,12 @@ func convertRecursively(newVal, tmplVal reflect.Value) (reflect.Value, error) {
 		}
 		return out, nil
 	default:
+		// Handle pointer-to-value conversion (common when deserializing named structs into interface{})
+		if newVal.Kind() == reflect.Ptr && tmplVal.Kind() == reflect.Struct {
+			if !newVal.IsNil() && newVal.Elem().Type() == tmplVal.Type() {
+				return newVal.Elem(), nil
+			}
+		}
 		if newVal.Type().ConvertibleTo(tmplVal.Type()) {
 			return newVal.Convert(tmplVal.Type()), nil
 		}

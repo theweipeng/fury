@@ -84,7 +84,7 @@ Run C++ xlang tests:
 cd java
 mvn -T16 install -DskipTests
 cd fory-core
-FORY_CPP_JAVA_CI=1 mvn -T16 test -Dtest=org.apache.fory.CPPXlangTest
+FORY_CPP_JAVA_CI=1 ENABLE_FORY_DEBUG_OUTPUT=1 mvn -T16 test -Dtest=org.apache.fory.CPPXlangTest
 ```
 
 ### Python Development
@@ -138,6 +138,15 @@ go build
 
 # Generate code (if using go:generate)
 go generate ./...
+```
+
+Run Go xlang tests:
+
+```bash
+cd java
+mvn -T16 install -DskipTests
+cd fory-core
+FORY_GO_JAVA_CI=1 ENABLE_FORY_DEBUG_OUTPUT=1 mvn test -Dtest=org.apache.fory.GoXlangTest
 ```
 
 ### Rust Development

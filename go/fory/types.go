@@ -119,6 +119,17 @@ func IsNamespacedType(typeID TypeId) bool {
 	}
 }
 
+// NeedsTypeMetaWrite checks whether a type needs additional type meta written after type ID
+// This includes namespaced types and struct types that need meta share in compatible mode
+func NeedsTypeMetaWrite(typeID TypeId) bool {
+	internalID := typeID & 0xFF
+	switch TypeId(internalID) {
+	case NAMED_EXT, NAMED_ENUM, NAMED_STRUCT, NAMED_COMPATIBLE_STRUCT, COMPATIBLE_STRUCT, STRUCT:
+		return true
+	default:
+		return false
+	}
+}
 
 func isPrimitiveType(typeID int16) bool {
 	switch typeID {
@@ -132,6 +143,20 @@ func isPrimitiveType(typeID int16) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// NeedWriteRef returns whether a type with the given type ID needs reference tracking.
+// Primitive types, strings, and time types don't need reference tracking.
+// Collections, structs, and other complex types need reference tracking.
+func NeedWriteRef(typeID TypeId) bool {
+	switch typeID {
+	case BOOL, INT8, INT16, INT32, INT64, VAR_INT32, VAR_INT64, SLI_INT64,
+		FLOAT, DOUBLE, HALF_FLOAT,
+		STRING, TIMESTAMP, LOCAL_DATE, DURATION:
+		return false
+	default:
+		return true
 	}
 }
 
@@ -186,14 +211,15 @@ func getPrimitiveTypeSize(typeID int16) int {
 }
 
 func isUserDefinedType(typeID int16) bool {
-	return typeID == STRUCT ||
-		typeID == COMPATIBLE_STRUCT ||
-		typeID == NAMED_STRUCT ||
-		typeID == NAMED_COMPATIBLE_STRUCT ||
-		typeID == EXT ||
-		typeID == NAMED_EXT ||
-		typeID == ENUM ||
-		typeID == NAMED_ENUM
+	id := int(typeID & 0xff)
+	return id == STRUCT ||
+		id == COMPATIBLE_STRUCT ||
+		id == NAMED_STRUCT ||
+		id == NAMED_COMPATIBLE_STRUCT ||
+		id == EXT ||
+		id == NAMED_EXT ||
+		id == ENUM ||
+		id == NAMED_ENUM
 }
 
 // ============================================================================
@@ -338,4 +364,3 @@ func IsPrimitiveTypeId(typeId TypeId) bool {
 		return false
 	}
 }
-

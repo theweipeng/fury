@@ -443,23 +443,27 @@ func computeStructHash(s *StructInfo) int32 {
 	return hash
 }
 
-// isNullableType checks if a type is nullable (referencable)
-// This matches the reflection implementation's nullable() function
+// isNullableType checks if a type should have nullable=1 in hash computation
+// This matches Java's behavior where primitives have nullable=0 and objects have nullable=1
 func isNullableType(t types.Type) bool {
-	// Check pointer, slice, map, interface directly
-	switch t.(type) {
-	case *types.Pointer, *types.Slice, *types.Map, *types.Interface, *types.Array:
-		return true
+	// Check basic types - only primitives return false
+	if basic, ok := t.(*types.Basic); ok {
+		switch basic.Kind() {
+		case types.Bool,
+			types.Int8, types.Int16, types.Int32, types.Int64,
+			types.Uint8, types.Uint16, types.Uint32, types.Uint64,
+			types.Float32, types.Float64,
+			types.Int, types.Uint:
+			// These are primitive types - not nullable
+			return false
+		case types.String:
+			// String is an object type in Java - nullable
+			return true
+		}
 	}
 
-	// Check basic types (String is nullable)
-	if basic, ok := t.Underlying().(*types.Basic); ok {
-		return basic.Kind() == types.String
-	}
-
-	// For named types (e.g., time.Time, fory.Date), check underlying type
-	// Struct types are not nullable unless they're pointers
-	return false
+	// All other types (pointers, slices, maps, interfaces, arrays, structs) are nullable
+	return true
 }
 
 // getTypeIDForHash returns the TypeId for hash calculation according to new spec
