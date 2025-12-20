@@ -405,7 +405,14 @@ public abstract class BaseObjectCodecBuilder extends CodecBuilder {
     TypeRef<?> typeRef = descriptor.getTypeRef();
     boolean nullable = descriptor.isNullable();
 
+    boolean useRefTracking;
     if (needWriteRef(typeRef)) {
+      useRefTracking = descriptor.isTrackingRef();
+    } else {
+      useRefTracking = false;
+    }
+
+    if (useRefTracking) {
       return new If(
           not(writeRefOrNull(buffer, fieldValue)),
           serializeForNotNullForField(fieldValue, buffer, typeRef, null, false));
@@ -1768,20 +1775,46 @@ public abstract class BaseObjectCodecBuilder extends CodecBuilder {
     TypeRef<?> typeRef = descriptor.getTypeRef();
     boolean nullable = descriptor.isNullable();
 
+    boolean typeNeedsRef = needWriteRef(typeRef);
+    boolean useRefTracking;
     if (needWriteRef(typeRef)) {
+      useRefTracking = descriptor.isTrackingRef();
+    } else {
+      useRefTracking = false;
+    }
+
+    if (useRefTracking) {
       return readRef(buffer, callback, () -> deserializeForNotNullForField(buffer, typeRef, null));
     } else {
       if (!nullable) {
         Expression value = deserializeForNotNullForField(buffer, typeRef, null);
-        // Should put value expr ahead to avoid generated code in wrong scope.
+
+        if (typeNeedsRef) {
+          // When a field explicitly disables ref tracking (@ForyField(trackingRef=false))
+          // but the type normally needs ref tracking (e.g., collections),
+          // we need to preserve a -1 id so that when the deserializer calls reference(),
+          // it will pop this -1 and skip the setReadObject call.
+          Expression preserveStubRefId =
+              new Invoke(refResolverRef, "preserveRefId", new Literal(-1, PRIMITIVE_INT_TYPE));
+          return new ListExpression(preserveStubRefId, value, callback.apply(value));
+        }
         return new ListExpression(value, callback.apply(value));
       }
-      return readNullable(
-          buffer,
-          typeRef,
-          callback,
-          () -> deserializeForNotNullForField(buffer, typeRef, null),
-          true);
+
+      Expression readNullableExpr =
+          readNullable(
+              buffer,
+              typeRef,
+              callback,
+              () -> deserializeForNotNullForField(buffer, typeRef, null),
+              true);
+
+      if (typeNeedsRef) {
+        Expression preserveStubRefId =
+            new Invoke(refResolverRef, "preserveRefId", new Literal(-1, PRIMITIVE_INT_TYPE));
+        return new ListExpression(preserveStubRefId, readNullableExpr);
+      }
+      return readNullableExpr;
     }
   }
 

@@ -146,6 +146,7 @@ import org.apache.fory.serializer.scala.SingletonObjectSerializer;
 import org.apache.fory.serializer.shim.ProtobufDispatcher;
 import org.apache.fory.serializer.shim.ShimDispatcher;
 import org.apache.fory.type.Descriptor;
+import org.apache.fory.type.DescriptorBuilder;
 import org.apache.fory.type.DescriptorGrouper;
 import org.apache.fory.type.GenericType;
 import org.apache.fory.type.TypeUtils;
@@ -1216,12 +1217,42 @@ public class ClassResolver extends TypeResolver {
   public List<Descriptor> getFieldDescriptors(Class<?> clz, boolean searchParent) {
     SortedMap<Member, Descriptor> allDescriptors = getAllDescriptorsMap(clz, searchParent);
     List<Descriptor> result = new ArrayList<>(allDescriptors.size());
+
+    Map<Member, Descriptor>[] newDescriptors = new Map[] {null};
+
     allDescriptors.forEach(
         (member, descriptor) -> {
-          if (member instanceof Field) {
+          if (!(member instanceof Field)) {
+            return;
+          }
+
+          boolean shouldTrack = fory.trackingRef();
+          boolean hasForyField = descriptor.getForyField() != null;
+          // update ref tracking if
+          // - global ref tracking is enabled but field is not tracking ref (@ForyField#ref not set)
+          // - global ref tracking is disabled but field is tracking ref (@ForyField#ref set)
+          boolean needsUpdate =
+              (shouldTrack && !hasForyField)
+                  || (!shouldTrack && hasForyField && descriptor.isTrackingRef());
+
+          if (needsUpdate) {
+            if (newDescriptors[0] == null) {
+              newDescriptors[0] = new HashMap<>();
+            }
+            Descriptor newDescriptor =
+                new DescriptorBuilder(descriptor).trackingRef(shouldTrack).build();
+            result.add(newDescriptor);
+            newDescriptors[0].put(member, newDescriptor);
+          } else {
             result.add(descriptor);
           }
         });
+
+    if (newDescriptors[0] != null) {
+      SortedMap<Member, Descriptor> allDescriptorsCopy = new TreeMap<>(allDescriptors);
+      allDescriptorsCopy.putAll(newDescriptors[0]);
+      extRegistry.descriptorsCache.put(Tuple2.of(clz, searchParent), allDescriptorsCopy);
+    }
     return result;
   }
 
@@ -1230,6 +1261,11 @@ public class ClassResolver extends TypeResolver {
     // when jit thread query this, it is already built by serialization main thread.
     return extRegistry.descriptorsCache.computeIfAbsent(
         Tuple2.of(clz, searchParent), t -> Descriptor.getAllDescriptorsMap(clz, searchParent));
+  }
+
+  public void updateDescriptorsCache(
+      Class<?> clz, boolean searchParent, SortedMap<Member, Descriptor> descriptors) {
+    extRegistry.descriptorsCache.put(Tuple2.of(clz, searchParent), descriptors);
   }
 
   public ClassInfo getClassInfo(short classId) {

@@ -40,8 +40,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.SortedMap;
+import java.util.TreeMap;
 import java.util.stream.Collectors;
 import org.apache.fory.Fory;
+import org.apache.fory.annotation.ForyField;
 import org.apache.fory.builder.MetaSharedCodecBuilder;
 import org.apache.fory.collection.Tuple2;
 import org.apache.fory.config.CompatibleMode;
@@ -61,6 +63,7 @@ import org.apache.fory.serializer.NonexistentClass;
 import org.apache.fory.serializer.converter.FieldConverter;
 import org.apache.fory.serializer.converter.FieldConverters;
 import org.apache.fory.type.Descriptor;
+import org.apache.fory.type.DescriptorBuilder;
 import org.apache.fory.type.FinalObjectTypeStub;
 import org.apache.fory.type.GenericType;
 import org.apache.fory.type.TypeUtils;
@@ -349,17 +352,76 @@ public class ClassDef implements Serializable {
       SortedMap<Member, Descriptor> allDescriptorsMap =
           resolver.getFory().getClassResolver().getAllDescriptorsMap(cls, true);
       Map<String, Descriptor> descriptorsMap = new HashMap<>();
+      Map<Short, Descriptor> fieldIdToDescriptorMap = new HashMap<>();
+      Map<Member, Descriptor>[] newDescriptors = new Map[] {null};
+
       for (Map.Entry<Member, Descriptor> e : allDescriptorsMap.entrySet()) {
-        if (descriptorsMap.put(
-                e.getKey().getDeclaringClass().getName() + "." + e.getKey().getName(), e.getValue())
-            != null) {
+        String fullName = e.getKey().getDeclaringClass().getName() + "." + e.getKey().getName();
+        Descriptor desc = e.getValue();
+        if (descriptorsMap.put(fullName, desc) != null) {
           throw new IllegalStateException("Duplicate key");
         }
+
+        if (e.getKey() instanceof Field) {
+          boolean refTracking = resolver.getFory().trackingRef();
+          ForyField foryField = desc.getForyField();
+          // update ref tracking if
+          // - global ref tracking is disabled but field is tracking ref (@ForyField#ref set)
+          // - global ref tracking is enabled but field is not tracking ref (@ForyField#ref not set)
+          boolean needsUpdate =
+              (refTracking && foryField == null && !desc.isTrackingRef())
+                  || (foryField != null && desc.isTrackingRef());
+
+          if (needsUpdate) {
+            if (newDescriptors[0] == null) {
+              newDescriptors[0] = new HashMap<>();
+            }
+            boolean newTrackingRef = refTracking && foryField == null;
+            Descriptor newDescriptor =
+                new DescriptorBuilder(desc).trackingRef(newTrackingRef).build();
+
+            descriptorsMap.put(fullName, newDescriptor);
+            desc = newDescriptor;
+            newDescriptors[0].put(e.getKey(), newDescriptor);
+          }
+        }
+
+        // If the field has @ForyField annotation with field ID, index by field ID
+        if (desc.getForyField() != null) {
+          int fieldId = desc.getForyField().id();
+          if (fieldId >= 0) {
+            if (fieldIdToDescriptorMap.containsKey((short) fieldId)) {
+              throw new IllegalArgumentException(
+                  "Duplicate field id "
+                      + fieldId
+                      + " for field "
+                      + desc.getName()
+                      + " in class "
+                      + cls.getName());
+            }
+            fieldIdToDescriptorMap.put((short) fieldId, desc);
+          }
+        }
       }
+
+      if (newDescriptors[0] != null) {
+        SortedMap<Member, Descriptor> allDescriptorsCopy = new TreeMap<>(allDescriptorsMap);
+        allDescriptorsCopy.putAll(newDescriptors[0]);
+        resolver.getFory().getClassResolver().updateDescriptorsCache(cls, true, allDescriptorsCopy);
+      }
+
       descriptors = new ArrayList<>(fieldsInfo.size());
       for (FieldInfo fieldInfo : fieldsInfo) {
-        Descriptor descriptor =
-            descriptorsMap.get(fieldInfo.getDefinedClass() + "." + fieldInfo.getFieldName());
+        Descriptor descriptor;
+
+        // Try to match by field ID first if the FieldInfo has an ID
+        if (fieldInfo.hasFieldId()) {
+          descriptor = fieldIdToDescriptorMap.get(fieldInfo.getFieldId());
+        } else {
+          descriptor =
+              descriptorsMap.get(fieldInfo.getDefinedClass() + "." + fieldInfo.getFieldName());
+        }
+
         Descriptor newDesc = fieldInfo.toDescriptor(resolver, descriptor);
         Class<?> rawType = newDesc.getRawType();
         FieldType fieldType = fieldInfo.getFieldType();
@@ -422,10 +484,18 @@ public class ClassDef implements Serializable {
 
     private final FieldType fieldType;
 
+    /** Field ID for schema evolution, -1 means no field ID (use field name). */
+    private final short fieldId;
+
     FieldInfo(String definedClass, String fieldName, FieldType fieldType) {
+      this(definedClass, fieldName, fieldType, (short) -1);
+    }
+
+    FieldInfo(String definedClass, String fieldName, FieldType fieldType, short fieldId) {
       this.definedClass = definedClass;
       this.fieldName = fieldName;
       this.fieldType = fieldType;
+      this.fieldId = fieldId;
     }
 
     /** Returns classname of current field defined. */
@@ -439,13 +509,13 @@ public class ClassDef implements Serializable {
     }
 
     /** Returns whether field is annotated by an unsigned int id. */
-    public boolean hasTag() {
-      return false;
+    public boolean hasFieldId() {
+      return fieldId >= 0;
     }
 
-    /** Returns annotated tag id for the field. */
-    public short getTag() {
-      return -1;
+    /** Returns annotated field-id for the field. */
+    public short getFieldId() {
+      return fieldId;
     }
 
     /** Returns type of current field. */
@@ -465,13 +535,15 @@ public class ClassDef implements Serializable {
         if (typeRef.equals(declared)) {
           return descriptor;
         } else {
+          // TODO fix return here
           descriptor.copyWithTypeName(typeRef.getType().getTypeName());
         }
       }
       // This field doesn't exist in peer class, so any legal modifier will be OK.
       // Use constant instead of reflection to avoid GraalVM native image issues.
       int stubModifiers = Modifier.PRIVATE | Modifier.FINAL;
-      return new Descriptor(typeRef, fieldName, stubModifiers, definedClass);
+      return new Descriptor(
+          typeRef, fieldName, stubModifiers, definedClass, resolver.needToWriteRef(typeRef));
     }
 
     @Override
@@ -483,14 +555,15 @@ public class ClassDef implements Serializable {
         return false;
       }
       FieldInfo fieldInfo = (FieldInfo) o;
-      return Objects.equals(definedClass, fieldInfo.definedClass)
+      return fieldId == fieldInfo.fieldId
+          && Objects.equals(definedClass, fieldInfo.definedClass)
           && Objects.equals(fieldName, fieldInfo.fieldName)
           && Objects.equals(fieldType, fieldInfo.fieldType);
     }
 
     @Override
     public int hashCode() {
-      return Objects.hash(definedClass, fieldName, fieldType);
+      return Objects.hash(definedClass, fieldName, fieldType, fieldId);
     }
 
     @Override
@@ -502,6 +575,7 @@ public class ClassDef implements Serializable {
           + ", fieldName='"
           + fieldName
           + '\''
+          + (fieldId >= 0 ? ", fieldID=" + fieldId : "")
           + ", fieldType="
           + fieldType
           + '}';
@@ -1089,11 +1163,12 @@ public class ClassDef implements Serializable {
   static FieldType buildFieldType(TypeResolver resolver, Field field) {
     Preconditions.checkNotNull(field);
     GenericType genericType = resolver.buildGenericType(field.getGenericType());
-    return buildFieldType(resolver, genericType);
+    return buildFieldType(resolver, field, genericType);
   }
 
   /** Build field type from generics, nested generics will be extracted too. */
-  private static FieldType buildFieldType(TypeResolver resolver, GenericType genericType) {
+  private static FieldType buildFieldType(
+      TypeResolver resolver, Field field, GenericType genericType) {
     Preconditions.checkNotNull(genericType);
     Class<?> rawType = genericType.getCls();
     boolean isXlang = resolver.getFory().isCrossLanguage();
@@ -1108,8 +1183,17 @@ public class ClassDef implements Serializable {
     }
     boolean isMonomorphic = genericType.isMonomorphic();
     boolean trackingRef = genericType.trackingRef(resolver);
-    // TODO support @Nullable/ForyField annotation
     boolean nullable = !genericType.getCls().isPrimitive();
+
+    // Apply @ForyField annotation if present
+    if (field != null) {
+      ForyField foryField = field.getAnnotation(ForyField.class);
+      if (foryField != null) {
+        nullable = foryField.nullable();
+        trackingRef = foryField.ref();
+      }
+    }
+
     if (COLLECTION_TYPE.isSupertypeOf(genericType.getTypeRef())) {
       return new CollectionFieldType(
           xtypeId,
@@ -1118,6 +1202,7 @@ public class ClassDef implements Serializable {
           trackingRef,
           buildFieldType(
               resolver,
+              null, // nested fields don't have Field reference
               genericType.getTypeParameter0() == null
                   ? GenericType.build(Object.class)
                   : genericType.getTypeParameter0()));
@@ -1129,11 +1214,13 @@ public class ClassDef implements Serializable {
           trackingRef,
           buildFieldType(
               resolver,
+              null, // nested fields don't have Field reference
               genericType.getTypeParameter0() == null
                   ? GenericType.build(Object.class)
                   : genericType.getTypeParameter0()),
           buildFieldType(
               resolver,
+              null, // nested fields don't have Field reference
               genericType.getTypeParameter1() == null
                   ? GenericType.build(Object.class)
                   : genericType.getTypeParameter1()));
@@ -1160,7 +1247,7 @@ public class ClassDef implements Serializable {
                 isMonomorphic,
                 nullable,
                 trackingRef,
-                buildFieldType(resolver, GenericType.build(elemType)));
+                buildFieldType(resolver, null, GenericType.build(elemType)));
           }
           Tuple2<Class<?>, Integer> info = TypeUtils.getArrayComponentInfo(rawType);
           return new ArrayFieldType(
@@ -1168,7 +1255,7 @@ public class ClassDef implements Serializable {
               isMonomorphic,
               nullable,
               trackingRef,
-              buildFieldType(resolver, GenericType.build(info.f0)),
+              buildFieldType(resolver, null, GenericType.build(info.f0)),
               info.f1);
         }
         return new ObjectFieldType(xtypeId, isMonomorphic, nullable, trackingRef);
