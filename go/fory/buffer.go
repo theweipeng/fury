@@ -104,8 +104,8 @@ func (b *ByteBuffer) WriteLength(value int) {
 	b.WriteVaruint32(uint32(value))
 }
 
-func (b *ByteBuffer) ReadLength() int {
-	return int(b.ReadVaruint32())
+func (b *ByteBuffer) ReadLength(err *Error) int {
+	return int(b.ReadVaruint32(err))
 }
 
 func (b *ByteBuffer) WriteInt64(value int64) {
@@ -142,66 +142,90 @@ func (b *ByteBuffer) WriteBinary(p []byte) {
 	b.writerIndex += len(p)
 }
 
-func (b *ByteBuffer) ReadBool() bool {
+// ReadBool reads a bool and sets error on bounds violation
+func (b *ByteBuffer) ReadBool(err *Error) bool {
+	if b.readerIndex+1 > len(b.data) {
+		*err = BufferOutOfBoundError(b.readerIndex, 1, len(b.data))
+		return false
+	}
 	v := b.data[b.readerIndex]
 	b.readerIndex++
-	if v == 0 {
-		return false
-	} else {
-		return true
-	}
+	return v != 0
 }
 
-func (b *ByteBuffer) ReadByte_() byte {
+// ReadByte reads a byte and sets error on bounds violation
+func (b *ByteBuffer) ReadByte(err *Error) byte {
+	if b.readerIndex+1 > len(b.data) {
+		*err = BufferOutOfBoundError(b.readerIndex, 1, len(b.data))
+		return 0
+	}
 	v := b.data[b.readerIndex]
 	b.readerIndex++
 	return v
 }
 
-func (b *ByteBuffer) ReadByte() (byte, error) {
-	v := b.data[b.readerIndex]
+// ReadInt8 reads an int8 and sets error on bounds violation
+func (b *ByteBuffer) ReadInt8(err *Error) int8 {
+	if b.readerIndex+1 > len(b.data) {
+		*err = BufferOutOfBoundError(b.readerIndex, 1, len(b.data))
+		return 0
+	}
+	v := int8(b.data[b.readerIndex])
 	b.readerIndex++
-	return v, nil
+	return v
 }
 
-func (b *ByteBuffer) ReadInt8() int8 {
-	i := int8(b.data[b.readerIndex])
-	b.readerIndex += 1
-	return i
-}
-
-func (b *ByteBuffer) ReadInt16() int16 {
-	i := int16(binary.LittleEndian.Uint16(b.data[b.readerIndex:]))
+// ReadInt16 reads an int16 and sets error on bounds violation
+func (b *ByteBuffer) ReadInt16(err *Error) int16 {
+	if b.readerIndex+2 > len(b.data) {
+		*err = BufferOutOfBoundError(b.readerIndex, 2, len(b.data))
+		return 0
+	}
+	v := int16(binary.LittleEndian.Uint16(b.data[b.readerIndex:]))
 	b.readerIndex += 2
-	return i
+	return v
 }
 
-func (b *ByteBuffer) ReadUint32() uint32 {
+// ReadUint32 reads a uint32 and sets error on bounds violation
+func (b *ByteBuffer) ReadUint32(err *Error) uint32 {
+	if b.readerIndex+4 > len(b.data) {
+		*err = BufferOutOfBoundError(b.readerIndex, 4, len(b.data))
+		return 0
+	}
 	i := binary.LittleEndian.Uint32(b.data[b.readerIndex:])
 	b.readerIndex += 4
 	return i
 }
 
-func (b *ByteBuffer) ReadUint64() uint64 {
+// ReadUint64 reads a uint64 and sets error on bounds violation
+func (b *ByteBuffer) ReadUint64(err *Error) uint64 {
+	if b.readerIndex+8 > len(b.data) {
+		*err = BufferOutOfBoundError(b.readerIndex, 8, len(b.data))
+		return 0
+	}
 	i := binary.LittleEndian.Uint64(b.data[b.readerIndex:])
 	b.readerIndex += 8
 	return i
 }
 
-func (b *ByteBuffer) ReadInt32() int32 {
-	return int32(b.ReadUint32())
+// ReadInt32 reads an int32 and sets error on bounds violation
+func (b *ByteBuffer) ReadInt32(err *Error) int32 {
+	return int32(b.ReadUint32(err))
 }
 
-func (b *ByteBuffer) ReadInt64() int64 {
-	return int64(b.ReadUint64())
+// ReadInt64 reads an int64 and sets error on bounds violation
+func (b *ByteBuffer) ReadInt64(err *Error) int64 {
+	return int64(b.ReadUint64(err))
 }
 
-func (b *ByteBuffer) ReadFloat32() float32 {
-	return Float32frombits(b.ReadUint32())
+// ReadFloat32 reads a float32 and sets error on bounds violation
+func (b *ByteBuffer) ReadFloat32(err *Error) float32 {
+	return Float32frombits(b.ReadUint32(err))
 }
 
-func (b *ByteBuffer) ReadFloat64() float64 {
-	return Float64frombits(b.ReadUint64())
+// ReadFloat64 reads a float64 and sets error on bounds violation
+func (b *ByteBuffer) ReadFloat64(err *Error) float64 {
+	return Float64frombits(b.ReadUint64(err))
 }
 
 func (b *ByteBuffer) Read(p []byte) (n int, err error) {
@@ -210,7 +234,12 @@ func (b *ByteBuffer) Read(p []byte) (n int, err error) {
 	return copied, nil
 }
 
-func (b *ByteBuffer) ReadBinary(length int) []byte {
+// ReadBinary reads n bytes and sets error on bounds violation
+func (b *ByteBuffer) ReadBinary(length int, err *Error) []byte {
+	if b.readerIndex+length > len(b.data) {
+		*err = BufferOutOfBoundError(b.readerIndex, length, len(b.data))
+		return nil
+	}
 	v := b.data[b.readerIndex : b.readerIndex+length]
 	b.readerIndex += length
 	return v
@@ -369,11 +398,11 @@ func (b *ByteBuffer) WriteVaruint36Small(value uint64) {
 
 // ReadVaruint36Small reads a varint optimized for small values (up to 36 bits)
 // Used for string headers: (length << 2) | encoding
-func (b *ByteBuffer) ReadVaruint36Small() uint64 {
+func (b *ByteBuffer) ReadVaruint36Small(err *Error) uint64 {
 	if b.remaining() >= 8 {
 		return b.readVaruint36SmallFast()
 	}
-	return b.readVaruint36SmallSlow()
+	return b.readVaruint36SmallSlow(err)
 }
 
 func (b *ByteBuffer) readVaruint36SmallFast() uint64 {
@@ -404,7 +433,7 @@ func (b *ByteBuffer) readVaruint36SmallFast() uint64 {
 	return result
 }
 
-func (b *ByteBuffer) readVaruint36SmallSlow() uint64 {
+func (b *ByteBuffer) readVaruint36SmallSlow(err *Error) uint64 {
 	var result uint64
 	var shift uint
 
@@ -413,19 +442,21 @@ func (b *ByteBuffer) readVaruint36SmallSlow() uint64 {
 		b.readerIndex++
 		result |= uint64(byteVal&0x7F) << shift
 		if (byteVal & 0x80) == 0 {
-			break
+			return result
 		}
 		shift += 7
 		if shift >= 36 {
-			panic("varuint36small overflow")
+			*err = DeserializationError("varuint36small overflow")
+			return 0
 		}
 	}
-	return result
+	*err = BufferOutOfBoundError(b.readerIndex, 1, len(b.data))
+	return 0
 }
 
 // ReadVarint64 reads the varint encoded with zig-zag (compatible with Java's readVarint64).
-func (b *ByteBuffer) ReadVarint64() int64 {
-	u := b.ReadVaruint64()
+func (b *ByteBuffer) ReadVarint64(err *Error) int64 {
+	u := b.ReadVaruint64(err)
 	v := int64(u >> 1)
 	if u&1 != 0 {
 		v = ^v
@@ -434,11 +465,11 @@ func (b *ByteBuffer) ReadVarint64() int64 {
 }
 
 // ReadVaruint64 reads unsigned varint
-func (b *ByteBuffer) ReadVaruint64() uint64 {
+func (b *ByteBuffer) ReadVaruint64(err *Error) uint64 {
 	if b.remaining() >= 9 {
 		return b.readVaruint64Fast()
 	}
-	return b.readVaruint64Slow()
+	return b.readVaruint64Slow(err)
 }
 
 // Fast path (when the remaining bytes are sufficient)
@@ -503,18 +534,24 @@ func (b *ByteBuffer) readVaruint64Fast() uint64 {
 }
 
 // Slow path (read byte by byte)
-func (b *ByteBuffer) readVaruint64Slow() uint64 {
+func (b *ByteBuffer) readVaruint64Slow(err *Error) uint64 {
 	var result uint64
 	var shift uint
 	for {
-		byteVal := b.ReadUint8()
+		if b.readerIndex >= len(b.data) {
+			*err = BufferOutOfBoundError(b.readerIndex, 1, len(b.data))
+			return 0
+		}
+		byteVal := b.data[b.readerIndex]
+		b.readerIndex++
 		result |= (uint64(byteVal) & 0x7F) << shift
 		if byteVal < 0x80 {
 			break
 		}
 		shift += 7
 		if shift >= 64 {
-			panic("varuint64 overflow")
+			*err = DeserializationError("varuint64 overflow")
+			return 0
 		}
 	}
 	return result
@@ -525,9 +562,11 @@ func (b *ByteBuffer) remaining() int {
 	return len(b.data) - b.readerIndex
 }
 
-func (b *ByteBuffer) ReadUint8() uint8 {
+// ReadUint8 reads a uint8 and sets error on bounds violation
+func (b *ByteBuffer) ReadUint8(err *Error) uint8 {
 	if b.readerIndex >= len(b.data) {
-		panic("buffer underflow")
+		*err = BufferOutOfBoundError(b.readerIndex, 1, len(b.data))
+		return 0
 	}
 	v := b.data[b.readerIndex]
 	b.readerIndex++
@@ -541,8 +580,8 @@ func (b *ByteBuffer) WriteVarint32(value int32) int8 {
 }
 
 // ReadVarint32 reads a signed int32 using zigzag decoding (compatible with Java's readVarint32).
-func (b *ByteBuffer) ReadVarint32() int32 {
-	u := b.ReadVaruint32()
+func (b *ByteBuffer) ReadVarint32(err *Error) int32 {
+	u := b.ReadVaruint32(err)
 	v := int32(u >> 1)
 	if u&1 != 0 {
 		v = ^v
@@ -550,11 +589,12 @@ func (b *ByteBuffer) ReadVarint32() int32 {
 	return v
 }
 
-func (b *ByteBuffer) ReadVaruint32() uint32 {
+// ReadVaruint32 reads a varuint32 and sets error on bounds violation
+func (b *ByteBuffer) ReadVaruint32(err *Error) uint32 {
 	if b.remaining() >= 5 {
 		return b.readVaruint32Fast()
 	}
-	return b.readVaruint32Slow()
+	return b.readVaruint32Slow(err)
 }
 
 // Fast path reading (when the remaining bytes are sufficient)
@@ -595,18 +635,24 @@ func (b *ByteBuffer) readVaruint32Fast() uint32 {
 }
 
 // Slow path reading (processing byte by byte)
-func (b *ByteBuffer) readVaruint32Slow() uint32 {
+func (b *ByteBuffer) readVaruint32Slow(err *Error) uint32 {
 	var result uint32
 	var shift uint
 	for {
-		byteVal := b.ReadUint8()
+		if b.readerIndex >= len(b.data) {
+			*err = BufferOutOfBoundError(b.readerIndex, 1, len(b.data))
+			return 0
+		}
+		byteVal := b.data[b.readerIndex]
+		b.readerIndex++
 		result |= (uint32(byteVal) & 0x7F) << shift
 		if byteVal < 0x80 {
 			break
 		}
 		shift += 7
-		if shift >= 28 {
-			panic("varuint32 overflow")
+		if shift >= 35 {
+			*err = DeserializationError("varuint32 overflow")
+			return 0
 		}
 	}
 	return result
@@ -668,21 +714,23 @@ func (b *ByteBuffer) unsafePutInt64(index int, v uint64) {
 	binary.LittleEndian.PutUint64(b.data[index:], v)
 }
 
-// ByteBuffer methods for variable-length integers
-func (b *ByteBuffer) ReadVaruint32Small7() uint32 {
-	readIdx := b.readerIndex
-	if len(b.data)-readIdx > 0 {
-		v := b.data[readIdx]
-		readIdx++
-		if v&0x80 == 0 {
-			b.readerIndex = readIdx
-			return uint32(v)
-		}
+// ReadVaruint32Small7 reads a varuint32 in small-7 format with error checking
+func (b *ByteBuffer) ReadVaruint32Small7(err *Error) uint32 {
+	if b.readerIndex >= len(b.data) {
+		*err = BufferOutOfBoundError(b.readerIndex, 1, len(b.data))
+		return 0
 	}
-	return b.readVaruint32Small14()
+	readIdx := b.readerIndex
+	v := b.data[readIdx]
+	readIdx++
+	if v&0x80 == 0 {
+		b.readerIndex = readIdx
+		return uint32(v)
+	}
+	return b.readVaruint32Small14(err)
 }
 
-func (b *ByteBuffer) readVaruint32Small14() uint32 {
+func (b *ByteBuffer) readVaruint32Small14(err *Error) uint32 {
 	readIdx := b.readerIndex
 	if len(b.data)-readIdx >= 5 {
 		four := binary.LittleEndian.Uint32(b.data[readIdx:])
@@ -698,7 +746,7 @@ func (b *ByteBuffer) readVaruint32Small14() uint32 {
 		b.readerIndex = readIdx
 		return value
 	}
-	return uint32(b.readVaruint36Slow())
+	return uint32(b.readVaruint36Slow(err))
 }
 
 func (b *ByteBuffer) continueReadVaruint32(readIdx int, bulkRead, value uint32) uint32 {
@@ -717,21 +765,45 @@ func (b *ByteBuffer) continueReadVaruint32(readIdx int, bulkRead, value uint32) 
 	return value
 }
 
-func (b *ByteBuffer) readVaruint36Slow() uint64 {
-	// unrolled loop
-	b0, _ := b.ReadByte()
+func (b *ByteBuffer) readVaruint36Slow(err *Error) uint64 {
+	if b.readerIndex >= len(b.data) {
+		*err = BufferOutOfBoundError(b.readerIndex, 1, len(b.data))
+		return 0
+	}
+	b0 := b.data[b.readerIndex]
+	b.readerIndex++
 	result := uint64(b0 & 0x7F)
 	if b0&0x80 != 0 {
-		b1, _ := b.ReadByte()
+		if b.readerIndex >= len(b.data) {
+			*err = BufferOutOfBoundError(b.readerIndex, 1, len(b.data))
+			return 0
+		}
+		b1 := b.data[b.readerIndex]
+		b.readerIndex++
 		result |= uint64(b1&0x7F) << 7
 		if b1&0x80 != 0 {
-			b2, _ := b.ReadByte()
+			if b.readerIndex >= len(b.data) {
+				*err = BufferOutOfBoundError(b.readerIndex, 1, len(b.data))
+				return 0
+			}
+			b2 := b.data[b.readerIndex]
+			b.readerIndex++
 			result |= uint64(b2&0x7F) << 14
 			if b2&0x80 != 0 {
-				b3, _ := b.ReadByte()
+				if b.readerIndex >= len(b.data) {
+					*err = BufferOutOfBoundError(b.readerIndex, 1, len(b.data))
+					return 0
+				}
+				b3 := b.data[b.readerIndex]
+				b.readerIndex++
 				result |= uint64(b3&0x7F) << 21
 				if b3&0x80 != 0 {
-					b4, _ := b.ReadByte()
+					if b.readerIndex >= len(b.data) {
+						*err = BufferOutOfBoundError(b.readerIndex, 1, len(b.data))
+						return 0
+					}
+					b4 := b.data[b.readerIndex]
+					b.readerIndex++
 					result |= uint64(b4) << 28
 				}
 			}
@@ -752,7 +824,7 @@ func (b *ByteBuffer) IncreaseReaderIndex(n int) {
 
 // ReadBytesAsInt64 reads up to 8 bytes and returns as uint64
 // fast path using underlying 64-bit read
-func (b *ByteBuffer) ReadBytesAsInt64(length int) uint64 {
+func (b *ByteBuffer) ReadBytesAsInt64(length int, err *Error) uint64 {
 	readerIdx := b.readerIndex
 	remaining := len(b.data) - readerIdx
 	if remaining >= length {
@@ -763,11 +835,14 @@ func (b *ByteBuffer) ReadBytesAsInt64(length int) uint64 {
 		mask := uint64(0xffffffffffffffff) >> uint((8-length)*8)
 		return v & mask
 	}
-	return b.slowReadBytesAsInt64(remaining, length)
+	return b.slowReadBytesAsInt64(remaining, length, err)
 }
 
-func (b *ByteBuffer) slowReadBytesAsInt64(remaining, length int) uint64 {
-	// fill buffer omitted: assume data available
+func (b *ByteBuffer) slowReadBytesAsInt64(remaining, length int, err *Error) uint64 {
+	if remaining < length {
+		*err = BufferOutOfBoundError(b.readerIndex, length, len(b.data))
+		return 0
+	}
 	readerIdx := b.readerIndex
 	b.readerIndex = readerIdx + length
 	var result uint64
@@ -777,9 +852,22 @@ func (b *ByteBuffer) slowReadBytesAsInt64(remaining, length int) uint64 {
 	return result
 }
 
-// ReadBytes reads n bytes
-func (b *ByteBuffer) ReadBytes(n int) []byte {
+// ReadBytes reads n bytes and sets error on bounds violation
+func (b *ByteBuffer) ReadBytes(n int, err *Error) []byte {
+	if b.readerIndex+n > len(b.data) {
+		*err = BufferOutOfBoundError(b.readerIndex, n, len(b.data))
+		return nil
+	}
 	p := b.data[b.readerIndex : b.readerIndex+n]
 	b.readerIndex += n
 	return p
+}
+
+// Skip skips n bytes and sets error on bounds violation
+func (b *ByteBuffer) Skip(length int, err *Error) {
+	if b.readerIndex+length > len(b.data) {
+		*err = BufferOutOfBoundError(b.readerIndex, length, len(b.data))
+		return
+	}
+	b.readerIndex += length
 }

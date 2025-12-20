@@ -18,7 +18,6 @@
 package fory
 
 import (
-	"fmt"
 	"reflect"
 )
 
@@ -29,7 +28,7 @@ type enumSerializer struct {
 	typeID uint32 // Full type ID including user ID
 }
 
-func (s *enumSerializer) WriteData(ctx *WriteContext, value reflect.Value) error {
+func (s *enumSerializer) WriteData(ctx *WriteContext, value reflect.Value) {
 	// Convert the enum value to its integer ordinal
 	var ordinal uint32
 	switch value.Kind() {
@@ -38,13 +37,13 @@ func (s *enumSerializer) WriteData(ctx *WriteContext, value reflect.Value) error
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		ordinal = uint32(value.Uint())
 	default:
-		return fmt.Errorf("enum serializer: unsupported kind %v", value.Kind())
+		ctx.SetError(SerializationErrorf("enum serializer: unsupported kind %v", value.Kind()))
+		return
 	}
 	ctx.buffer.WriteVaruint32Small7(ordinal)
-	return nil
 }
 
-func (s *enumSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool, value reflect.Value) error {
+func (s *enumSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool, value reflect.Value) {
 	if refMode != RefModeNone {
 		ctx.buffer.WriteInt8(NotNullValueFlag)
 	}
@@ -52,17 +51,23 @@ func (s *enumSerializer) Write(ctx *WriteContext, refMode RefMode, writeType boo
 		// For NAMED_ENUM, need to write type info including namespace and typename meta strings
 		typeInfo, err := ctx.TypeResolver().getTypeInfo(value, true)
 		if err != nil {
-			return err
+			ctx.SetError(FromError(err))
+			return
 		}
 		if err := ctx.TypeResolver().WriteTypeInfo(ctx.buffer, typeInfo); err != nil {
-			return err
+			ctx.SetError(FromError(err))
+			return
 		}
 	}
-	return s.WriteData(ctx, value)
+	s.WriteData(ctx, value)
 }
 
-func (s *enumSerializer) ReadData(ctx *ReadContext, type_ reflect.Type, value reflect.Value) error {
-	ordinal := ctx.buffer.ReadVaruint32Small7()
+func (s *enumSerializer) ReadData(ctx *ReadContext, type_ reflect.Type, value reflect.Value) {
+	err := ctx.Err()
+	ordinal := ctx.buffer.ReadVaruint32Small7(err)
+	if ctx.HasError() {
+		return
+	}
 
 	// Set the value based on the underlying kind
 	switch value.Kind() {
@@ -71,25 +76,28 @@ func (s *enumSerializer) ReadData(ctx *ReadContext, type_ reflect.Type, value re
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		value.SetUint(uint64(ordinal))
 	default:
-		return fmt.Errorf("enum serializer: unsupported kind %v", value.Kind())
+		ctx.SetError(DeserializationErrorf("enum serializer: unsupported kind %v", value.Kind()))
 	}
-	return nil
 }
 
-func (s *enumSerializer) Read(ctx *ReadContext, refMode RefMode, readType bool, value reflect.Value) error {
+func (s *enumSerializer) Read(ctx *ReadContext, refMode RefMode, readType bool, value reflect.Value) {
+	err := ctx.Err()
 	if refMode != RefModeNone {
-		if ctx.buffer.ReadInt8() == NullFlag {
-			return nil
+		if ctx.buffer.ReadInt8(err) == NullFlag {
+			return
 		}
 	}
 	if readType {
-		_ = ctx.buffer.ReadVaruint32Small7()
+		_ = ctx.buffer.ReadVaruint32Small7(err)
 	}
-	return s.ReadData(ctx, value.Type(), value)
+	if ctx.HasError() {
+		return
+	}
+	s.ReadData(ctx, value.Type(), value)
 }
 
-func (s *enumSerializer) ReadWithTypeInfo(ctx *ReadContext, refMode RefMode, typeInfo *TypeInfo, value reflect.Value) error {
-	return s.Read(ctx, refMode, false, value)
+func (s *enumSerializer) ReadWithTypeInfo(ctx *ReadContext, refMode RefMode, typeInfo *TypeInfo, value reflect.Value) {
+	s.Read(ctx, refMode, false, value)
 }
 
 func (s *enumSerializer) GetType() reflect.Type {
