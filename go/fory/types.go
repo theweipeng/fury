@@ -106,7 +106,13 @@ const (
 	// UINT32 Unsigned 32-bit little-endian integer
 	UINT32 = 66
 	// UINT64 Unsigned 64-bit little-endian integer
-	UINT64 = 67
+	UINT64       = 67
+	VAR_UINT32   = 68
+	VAR_UINT64   = 69
+	SLI_UINT64   = 70
+	UINT16_ARRAY = 71
+	UINT32_ARRAY = 72
+	UINT64_ARRAY = 73
 )
 
 // IsNamespacedType checks whether the given type ID is a namespace type
@@ -246,10 +252,13 @@ const (
 	ConcreteTypeInt32Slice
 	ConcreteTypeInt64Slice
 	ConcreteTypeIntSlice
+	ConcreteTypeUintSlice
 	ConcreteTypeFloat32Slice
 	ConcreteTypeFloat64Slice
 	ConcreteTypeBoolSlice
+	ConcreteTypeStringSlice
 	ConcreteTypeStringStringMap
+	ConcreteTypeStringInt32Map
 	ConcreteTypeStringInt64Map
 	ConcreteTypeStringIntMap
 	ConcreteTypeStringFloat64Map
@@ -257,6 +266,7 @@ const (
 	ConcreteTypeInt32Int32Map
 	ConcreteTypeInt64Int64Map
 	ConcreteTypeIntIntMap
+	ConcreteTypeEnum // Enum types (both ENUM and NAMED_ENUM)
 )
 
 // GetStaticTypeId returns the StaticTypeId for a reflect.Type
@@ -295,12 +305,16 @@ func GetStaticTypeId(t reflect.Type) StaticTypeId {
 			return ConcreteTypeInt64Slice
 		case reflect.Int:
 			return ConcreteTypeIntSlice
+		case reflect.Uint:
+			return ConcreteTypeUintSlice
 		case reflect.Float32:
 			return ConcreteTypeFloat32Slice
 		case reflect.Float64:
 			return ConcreteTypeFloat64Slice
 		case reflect.Bool:
 			return ConcreteTypeBoolSlice
+		case reflect.String:
+			return ConcreteTypeStringSlice
 		}
 		return ConcreteTypeOther
 	case reflect.Map:
@@ -362,5 +376,82 @@ func IsPrimitiveTypeId(typeId TypeId) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// isFixedSizePrimitive returns true for non-nullable fixed-size primitives
+func isFixedSizePrimitive(staticId StaticTypeId, referencable bool) bool {
+	if referencable {
+		return false
+	}
+	switch staticId {
+	case ConcreteTypeBool, ConcreteTypeInt8, ConcreteTypeInt16,
+		ConcreteTypeFloat32, ConcreteTypeFloat64:
+		return true
+	default:
+		return false
+	}
+}
+
+// isVarintPrimitive returns true for non-nullable varint primitives
+func isVarintPrimitive(staticId StaticTypeId, referencable bool) bool {
+	if referencable {
+		return false
+	}
+	switch staticId {
+	case ConcreteTypeInt32, ConcreteTypeInt64, ConcreteTypeInt:
+		return true
+	default:
+		return false
+	}
+}
+
+// isPrimitiveStaticId returns true if the staticId represents a primitive type
+func isPrimitiveStaticId(staticId StaticTypeId) bool {
+	switch staticId {
+	case ConcreteTypeBool, ConcreteTypeInt8, ConcreteTypeInt16, ConcreteTypeInt32,
+		ConcreteTypeInt64, ConcreteTypeInt, ConcreteTypeFloat32, ConcreteTypeFloat64:
+		return true
+	default:
+		return false
+	}
+}
+
+// isNumericKind returns true for numeric types (Go enums are typically int-based)
+func isNumericKind(kind reflect.Kind) bool {
+	switch kind {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return true
+	default:
+		return false
+	}
+}
+
+// getFixedSizeByStaticId returns byte size for fixed primitives (0 if not fixed)
+func getFixedSizeByStaticId(staticId StaticTypeId) int {
+	switch staticId {
+	case ConcreteTypeBool, ConcreteTypeInt8:
+		return 1
+	case ConcreteTypeInt16:
+		return 2
+	case ConcreteTypeFloat32:
+		return 4
+	case ConcreteTypeFloat64:
+		return 8
+	default:
+		return 0
+	}
+}
+
+// getVarintMaxSizeByStaticId returns max byte size for varint primitives (0 if not varint)
+func getVarintMaxSizeByStaticId(staticId StaticTypeId) int {
+	switch staticId {
+	case ConcreteTypeInt32:
+		return 5
+	case ConcreteTypeInt64, ConcreteTypeInt:
+		return 10
+	default:
+		return 0
 	}
 }

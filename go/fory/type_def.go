@@ -182,7 +182,7 @@ func (td *TypeDef) ComputeDiff(localDef *TypeDef) string {
 	return diff.String()
 }
 
-func (td *TypeDef) writeTypeDef(buffer *ByteBuffer) {
+func (td *TypeDef) writeTypeDef(buffer *ByteBuffer, err *Error) {
 	buffer.WriteBinary(td.encoded)
 }
 
@@ -218,7 +218,14 @@ func (td *TypeDef) buildTypeInfoWithResolver(resolver *TypeResolver) (TypeInfo, 
 			}
 		} else {
 			// Known struct type - use structSerializer with fieldDefs
-			serializer = newStructSerializer(type_, "", td.fieldDefs)
+			structSer := newStructSerializer(type_, "", td.fieldDefs)
+			// Eagerly initialize the struct serializer with pre-computed field metadata
+			if resolver != nil {
+				if err := structSer.initialize(resolver); err != nil {
+					return TypeInfo{}, err
+				}
+			}
+			serializer = structSer
 		}
 	}
 
@@ -234,8 +241,13 @@ func (td *TypeDef) buildTypeInfoWithResolver(resolver *TypeResolver) (TypeInfo, 
 	return info, nil
 }
 
-func readTypeDef(fory *Fory, buffer *ByteBuffer, header int64) (*TypeDef, error) {
-	return decodeTypeDef(fory, buffer, header)
+func readTypeDef(fory *Fory, buffer *ByteBuffer, header int64, err *Error) *TypeDef {
+	td, decodeErr := decodeTypeDef(fory, buffer, header)
+	if decodeErr != nil {
+		err.SetError(decodeErr)
+		return nil
+	}
+	return td
 }
 
 func skipTypeDef(buffer *ByteBuffer, header int64, err *Error) {
@@ -442,9 +454,9 @@ func buildFieldDefs(fory *Fory, value reflect.Value) ([]FieldDef, error) {
 			nullables[i] = fieldDef.nullable
 		}
 
-		// Use sortFieldsWithNullable to match Java's field ordering
+		// Use sortFields to match Java's field ordering
 		// (primitives before boxed/nullable primitives)
-		_, sortedNames := sortFieldsWithNullable(fory.typeResolver, fieldNames, serializers, typeIds, nullables)
+		_, sortedNames := sortFields(fory.typeResolver, fieldNames, serializers, typeIds, nullables)
 
 		// Rebuild fieldInfos in the sorted order
 		nameToFieldInfo := make(map[string]FieldDef)
@@ -520,7 +532,10 @@ func (b *BaseFieldType) getTypeInfo(fory *Fory) (TypeInfo, error) {
 	if err != nil {
 		return TypeInfo{}, err
 	}
-	return info, nil
+	if info == nil {
+		return TypeInfo{}, nil
+	}
+	return *info, nil
 }
 
 func (b *BaseFieldType) getTypeInfoWithResolver(resolver *TypeResolver) (TypeInfo, error) {
@@ -528,7 +543,10 @@ func (b *BaseFieldType) getTypeInfoWithResolver(resolver *TypeResolver) (TypeInf
 	if err != nil {
 		return TypeInfo{}, err
 	}
-	return info, nil
+	if info == nil {
+		return TypeInfo{}, nil
+	}
+	return *info, nil
 }
 
 // readFieldType reads field type info from the buffer according to the TypeId
@@ -629,9 +647,10 @@ func (c *CollectionFieldType) getTypeInfo(f *Fory) (TypeInfo, error) {
 		return TypeInfo{}, err
 	}
 	collectionType := reflect.SliceOf(elemInfo.Type)
-	sliceSerializer, err := newSliceConcreteValueSerializerForXlang(collectionType, elemInfo.Serializer)
-	if err != nil {
-		return TypeInfo{}, err
+	// Use TypeResolver helper to get the appropriate slice serializer
+	sliceSerializer, serErr := f.GetTypeResolver().GetSliceSerializer(collectionType)
+	if serErr != nil {
+		return TypeInfo{}, serErr
 	}
 	return TypeInfo{Type: collectionType, Serializer: sliceSerializer}, nil
 }
@@ -642,9 +661,10 @@ func (c *CollectionFieldType) getTypeInfoWithResolver(resolver *TypeResolver) (T
 		return TypeInfo{}, err
 	}
 	collectionType := reflect.SliceOf(elemInfo.Type)
-	sliceSerializer, err := newSliceConcreteValueSerializerForXlang(collectionType, elemInfo.Serializer)
-	if err != nil {
-		return TypeInfo{}, err
+	// Use TypeResolver helper to get the appropriate slice serializer
+	sliceSerializer, serErr := resolver.GetSliceSerializer(collectionType)
+	if serErr != nil {
+		return TypeInfo{}, serErr
 	}
 	return TypeInfo{Type: collectionType, Serializer: sliceSerializer}, nil
 }
@@ -769,8 +789,8 @@ func (d *DynamicFieldType) getTypeInfoWithResolver(resolver *TypeResolver) (Type
 
 	// First try direct lookup
 	info, err := resolver.getTypeInfoById(uint32(typeId))
-	if err == nil {
-		return info, nil
+	if err == nil && info != nil {
+		return *info, nil
 	}
 
 	// If direct lookup fails and it's a composite ID, extract the custom ID
@@ -780,8 +800,8 @@ func (d *DynamicFieldType) getTypeInfoWithResolver(resolver *TypeResolver) (Type
 		if customId > 0 {
 			// Try looking up by the custom ID
 			info, err = resolver.getTypeInfoById(uint32(customId))
-			if err == nil {
-				return info, nil
+			if err == nil && info != nil {
+				return *info, nil
 			}
 		}
 	}

@@ -108,28 +108,18 @@ func isNull(v reflect.Value) bool {
 
 // sliceConcreteValueSerializer serialize a slice whose elem is not an interface or pointer to interface.
 // Use newSliceConcreteValueSerializer to create instances with proper type validation.
+// This serializer uses LIST protocol for non-primitive element types.
 type sliceConcreteValueSerializer struct {
 	type_          reflect.Type
 	elemSerializer Serializer
 	referencable   bool
-	typeId         TypeId // TypeId to use: LIST for xlang, -LIST for internal
 }
 
 // newSliceConcreteValueSerializer creates a sliceConcreteValueSerializer for slices with concrete element types.
-// It returns an error if the element type is an interface or pointer to interface.
-// Uses -LIST typeId for internal Go serialization.
+// It returns an error if the element type is an interface, pointer to interface, or a primitive type.
+// Primitive numeric types (bool, int8, int16, int32, int64, uint8, float32, float64) must use
+// dedicated primitive slice serializers that use ARRAY protocol (binary size + binary).
 func newSliceConcreteValueSerializer(type_ reflect.Type, elemSerializer Serializer) (*sliceConcreteValueSerializer, error) {
-	return newSliceConcreteValueSerializerWithTypeId(type_, elemSerializer, -LIST)
-}
-
-// newSliceConcreteValueSerializerForXlang creates a sliceConcreteValueSerializer for xlang struct fields.
-// Uses LIST typeId for cross-language compatibility.
-func newSliceConcreteValueSerializerForXlang(type_ reflect.Type, elemSerializer Serializer) (*sliceConcreteValueSerializer, error) {
-	return newSliceConcreteValueSerializerWithTypeId(type_, elemSerializer, LIST)
-}
-
-// newSliceConcreteValueSerializerWithTypeId creates a sliceConcreteValueSerializer with a specific TypeId.
-func newSliceConcreteValueSerializerWithTypeId(type_ reflect.Type, elemSerializer Serializer, typeId TypeId) (*sliceConcreteValueSerializer, error) {
 	elem := type_.Elem()
 	if elem.Kind() == reflect.Interface {
 		return nil, fmt.Errorf("sliceConcreteValueSerializer does not support interface element type: %v", type_)
@@ -137,15 +127,24 @@ func newSliceConcreteValueSerializerWithTypeId(type_ reflect.Type, elemSerialize
 	if elem.Kind() == reflect.Ptr && elem.Elem().Kind() == reflect.Interface {
 		return nil, fmt.Errorf("sliceConcreteValueSerializer does not support pointer to interface element type: %v", type_)
 	}
+	// Primitive numeric types must use dedicated primitive slice serializers (ARRAY protocol)
+	switch elem.Kind() {
+	case reflect.Bool, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint8, reflect.Float32, reflect.Float64:
+		return nil, fmt.Errorf("sliceConcreteValueSerializer does not support primitive element type %v: use dedicated primitive slice serializer", type_)
+	}
 	return &sliceConcreteValueSerializer{
 		type_:          type_,
 		elemSerializer: elemSerializer,
 		referencable:   nullable(elem),
-		typeId:         typeId,
 	}, nil
 }
 
 func (s *sliceConcreteValueSerializer) WriteData(ctx *WriteContext, value reflect.Value) {
+	s.writeDataWithGenerics(ctx, value, false)
+}
+
+func (s *sliceConcreteValueSerializer) writeDataWithGenerics(ctx *WriteContext, value reflect.Value, hasGenerics bool) {
 	length := value.Len()
 	buf := ctx.Buffer()
 
@@ -156,12 +155,13 @@ func (s *sliceConcreteValueSerializer) WriteData(ctx *WriteContext, value reflec
 	}
 
 	// Determine collection flags
-	// For xlang (positive typeId): Set CollectionIsDeclElementType since Java knows the type from struct definition
-	// For internal Go serialization (negative typeId): Don't set CollectionIsDeclElementType, write element type info
-	collectFlag := CollectionIsSameType
-	isXlang := s.typeId > 0
-	if isXlang {
-		collectFlag |= CollectionIsDeclElementType
+	// When hasGenerics is true, element type is known from TypeDef, use CollectionDeclSameType
+	// When hasGenerics is false, write element type info, use CollectionIsSameType
+	var collectFlag int
+	if hasGenerics {
+		collectFlag = CollectionDeclSameType
+	} else {
+		collectFlag = CollectionIsSameType
 	}
 	hasNull := false
 	elemType := s.type_.Elem()
@@ -186,14 +186,11 @@ func (s *sliceConcreteValueSerializer) WriteData(ctx *WriteContext, value reflec
 	}
 	buf.WriteInt8(int8(collectFlag))
 
-	// Write element type info for internal Go serialization (not xlang)
-	// so the reader knows what type to deserialize
-	if !isXlang {
+	// Write element type info for deserialization only when hasGenerics is false
+	// When hasGenerics is true, the element type is known from the struct's TypeDef
+	if !hasGenerics {
 		elemTypeInfo, _ := ctx.TypeResolver().getTypeInfo(reflect.New(elemType).Elem(), false)
-		if err := ctx.TypeResolver().WriteTypeInfo(buf, elemTypeInfo); err != nil {
-			ctx.SetError(FromError(err))
-			return
-		}
+		ctx.TypeResolver().WriteTypeInfo(buf, elemTypeInfo, ctx.Err())
 	}
 
 	// WriteData elements
@@ -203,6 +200,7 @@ func (s *sliceConcreteValueSerializer) WriteData(ctx *WriteContext, value reflec
 		elemRefMode = RefModeTracking
 	}
 
+	// Serialize elements with ref tracking or nulls handling
 	for i := 0; i < length; i++ {
 		elem := value.Index(i)
 
@@ -210,7 +208,7 @@ func (s *sliceConcreteValueSerializer) WriteData(ctx *WriteContext, value reflec
 		if hasNull && elem.IsNil() {
 			if trackRefs {
 				// When tracking refs, the element serializer will write the null flag
-				s.elemSerializer.Write(ctx, elemRefMode, false, elem)
+				s.elemSerializer.Write(ctx, elemRefMode, false, false, elem)
 			} else {
 				buf.WriteInt8(NullFlag)
 			}
@@ -220,7 +218,7 @@ func (s *sliceConcreteValueSerializer) WriteData(ctx *WriteContext, value reflec
 		if trackRefs {
 			// Use Write with ref tracking enabled
 			// The element serializer will handle writing ref flags
-			s.elemSerializer.Write(ctx, elemRefMode, false, elem)
+			s.elemSerializer.Write(ctx, elemRefMode, false, false, elem)
 		} else if hasNull {
 			// When hasNull is set but trackRefs is not, write NotNullValueFlag before data
 			buf.WriteInt8(NotNullValueFlag)
@@ -235,15 +233,15 @@ func (s *sliceConcreteValueSerializer) WriteData(ctx *WriteContext, value reflec
 	}
 }
 
-func (s *sliceConcreteValueSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool, value reflect.Value) {
-	done := writeSliceRefAndType(ctx, refMode, writeType, value, s.typeId)
+func (s *sliceConcreteValueSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool, hasGenerics bool, value reflect.Value) {
+	done := writeSliceRefAndType(ctx, refMode, writeType, value, LIST)
 	if done || ctx.HasError() {
 		return
 	}
-	s.WriteData(ctx, value)
+	s.writeDataWithGenerics(ctx, value, hasGenerics)
 }
 
-func (s *sliceConcreteValueSerializer) Read(ctx *ReadContext, refMode RefMode, readType bool, value reflect.Value) {
+func (s *sliceConcreteValueSerializer) Read(ctx *ReadContext, refMode RefMode, readType bool, hasGenerics bool, value reflect.Value) {
 	done := readSliceRefAndType(ctx, refMode, readType, value)
 	if done || ctx.HasError() {
 		return
@@ -253,7 +251,7 @@ func (s *sliceConcreteValueSerializer) Read(ctx *ReadContext, refMode RefMode, r
 
 func (s *sliceConcreteValueSerializer) ReadWithTypeInfo(ctx *ReadContext, refMode RefMode, typeInfo *TypeInfo, value reflect.Value) {
 	// typeInfo is already read, don't read it again
-	s.Read(ctx, refMode, false, value)
+	s.Read(ctx, refMode, false, false, value)
 }
 
 func (s *sliceConcreteValueSerializer) ReadData(ctx *ReadContext, type_ reflect.Type, value reflect.Value) {
@@ -278,9 +276,13 @@ func (s *sliceConcreteValueSerializer) ReadData(ctx *ReadContext, type_ reflect.
 		if (collectFlag & CollectionIsDeclElementType) == 0 {
 			typeID := buf.ReadVaruint32Small7(ctxErr)
 			// ReadData additional metadata for namespaced types
-			_, _ = ctx.TypeResolver().readTypeInfoWithTypeID(buf, typeID)
+			ctx.TypeResolver().readTypeInfoWithTypeID(buf, typeID, ctxErr)
 		}
 	}
+
+	trackRefs := (collectFlag & CollectionTrackingRef) != 0
+	hasNull := (collectFlag & CollectionHasNull) != 0
+	elemType := s.type_.Elem()
 
 	// Handle slice vs array allocation
 	if isArrayType {
@@ -299,21 +301,19 @@ func (s *sliceConcreteValueSerializer) ReadData(ctx *ReadContext, type_ reflect.
 	}
 	ctx.RefResolver().Reference(value)
 
-	trackRefs := (collectFlag & CollectionTrackingRef) != 0
-	hasNull := (collectFlag & CollectionHasNull) != 0
 	elemRefMode := RefModeNone
 	if trackRefs {
 		elemRefMode = RefModeTracking
 	}
 
-	elemType := s.type_.Elem()
+	// Slow path: general deserialization with ref tracking or nulls
 	for i := 0; i < length; i++ {
 		elem := value.Index(i)
 
 		if trackRefs {
 			// When trackRefs is true, elemSerializer will read the ref flag via TryPreserveRefId
 			// For pointer types, elemSerializer will handle allocation and reference tracking
-			s.elemSerializer.Read(ctx, elemRefMode, false, elem)
+			s.elemSerializer.Read(ctx, elemRefMode, false, false, elem)
 		} else if hasNull {
 			// When hasNull is set, read a flag byte for each element:
 			// - NullFlag (-3) for null elements

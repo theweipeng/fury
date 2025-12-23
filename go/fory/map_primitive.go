@@ -26,8 +26,8 @@ import (
 // ============================================================================
 
 // writeMapStringString writes map[string]string using chunk protocol
-// Writes type info for generic deserialization compatibility
-func writeMapStringString(buf *ByteBuffer, m map[string]string) {
+// When hasGenerics=true, element types are known so we set DECL_TYPE flags and skip type info
+func writeMapStringString(buf *ByteBuffer, m map[string]string, hasGenerics bool) {
 	length := len(m)
 	buf.WriteVaruint32(uint32(length))
 	if length == 0 {
@@ -42,11 +42,17 @@ func writeMapStringString(buf *ByteBuffer, m map[string]string) {
 			chunkSize = MAX_CHUNK_SIZE
 		}
 
-		// Don't set DECL_TYPE flags - write type info for generic reader compatibility
-		buf.WriteUint8(0)
-		buf.WriteUint8(uint8(chunkSize))
-		buf.WriteVaruint32Small7(uint32(STRING)) // key type
-		buf.WriteVaruint32Small7(uint32(STRING)) // value type
+		if hasGenerics {
+			// Element types are known from generics, set DECL_TYPE flags
+			buf.WriteUint8(KEY_DECL_TYPE | VALUE_DECL_TYPE)
+			buf.WriteUint8(uint8(chunkSize))
+		} else {
+			// Write type info for generic reader compatibility
+			buf.WriteUint8(0)
+			buf.WriteUint8(uint8(chunkSize))
+			buf.WriteVaruint32Small7(uint32(STRING)) // key type
+			buf.WriteVaruint32Small7(uint32(STRING)) // value type
+		}
 
 		// WriteData chunk entries
 		count := 0
@@ -77,8 +83,29 @@ func readMapStringString(buf *ByteBuffer, err *Error) map[string]string {
 		keyHasNull := (chunkHeader & KEY_HAS_NULL) != 0
 		valueHasNull := (chunkHeader & VALUE_HAS_NULL) != 0
 
-		if keyHasNull || valueHasNull {
-			// Skip null entries (strings can't be null in Go)
+		if keyHasNull && valueHasNull {
+			// Both null - use empty strings for key and value
+			result[""] = ""
+			size--
+			continue
+		} else if keyHasNull {
+			// Null key with non-null value
+			valueDeclared := (chunkHeader & VALUE_DECL_TYPE) != 0
+			if !valueDeclared {
+				buf.ReadVaruint32Small7(err) // skip value type
+			}
+			v := readString(buf, err)
+			result[""] = v // empty string as null key
+			size--
+			continue
+		} else if valueHasNull {
+			// Non-null key with null value
+			keyDeclared := (chunkHeader & KEY_DECL_TYPE) != 0
+			if !keyDeclared {
+				buf.ReadVaruint32Small7(err) // skip key type
+			}
+			k := readString(buf, err)
+			result[k] = "" // empty string as null value
 			size--
 			continue
 		}
@@ -96,8 +123,8 @@ func readMapStringString(buf *ByteBuffer, err *Error) map[string]string {
 
 		// ReadData chunk entries
 		for i := 0; i < chunkSize && size > 0; i++ {
-			k := readStringE(buf, err)
-			v := readStringE(buf, err)
+			k := readString(buf, err)
+			v := readString(buf, err)
 			result[k] = v
 			size--
 		}
@@ -106,8 +133,8 @@ func readMapStringString(buf *ByteBuffer, err *Error) map[string]string {
 }
 
 // writeMapStringInt64 writes map[string]int64 using chunk protocol
-// Writes type info for generic deserialization compatibility
-func writeMapStringInt64(buf *ByteBuffer, m map[string]int64) {
+// When hasGenerics=true, element types are known so we set DECL_TYPE flags and skip type info
+func writeMapStringInt64(buf *ByteBuffer, m map[string]int64, hasGenerics bool) {
 	length := len(m)
 	buf.WriteVaruint32(uint32(length))
 	if length == 0 {
@@ -121,10 +148,15 @@ func writeMapStringInt64(buf *ByteBuffer, m map[string]int64) {
 			chunkSize = MAX_CHUNK_SIZE
 		}
 
-		buf.WriteUint8(0) // no DECL_TYPE flags
-		buf.WriteUint8(uint8(chunkSize))
-		buf.WriteVaruint32Small7(uint32(STRING))    // key type
-		buf.WriteVaruint32Small7(uint32(VAR_INT64)) // value type
+		if hasGenerics {
+			buf.WriteUint8(KEY_DECL_TYPE | VALUE_DECL_TYPE)
+			buf.WriteUint8(uint8(chunkSize))
+		} else {
+			buf.WriteUint8(0)
+			buf.WriteUint8(uint8(chunkSize))
+			buf.WriteVaruint32Small7(uint32(STRING))    // key type
+			buf.WriteVaruint32Small7(uint32(VAR_INT64)) // value type
+		}
 
 		count := 0
 		for k, v := range m {
@@ -165,7 +197,7 @@ func readMapStringInt64(buf *ByteBuffer, err *Error) map[string]int64 {
 			buf.ReadVaruint32Small7(err)
 		}
 		for i := 0; i < chunkSize && size > 0; i++ {
-			k := readStringE(buf, err)
+			k := readString(buf, err)
 			v := buf.ReadVarint64(err)
 			result[k] = v
 			size--
@@ -174,9 +206,9 @@ func readMapStringInt64(buf *ByteBuffer, err *Error) map[string]int64 {
 	return result
 }
 
-// writeMapStringInt writes map[string]int using chunk protocol
-// Writes type info for generic deserialization compatibility
-func writeMapStringInt(buf *ByteBuffer, m map[string]int) {
+// writeMapStringInt32 writes map[string]int32 using chunk protocol
+// When hasGenerics=true, element types are known so we set DECL_TYPE flags and skip type info
+func writeMapStringInt32(buf *ByteBuffer, m map[string]int32, hasGenerics bool) {
 	length := len(m)
 	buf.WriteVaruint32(uint32(length))
 	if length == 0 {
@@ -190,10 +222,89 @@ func writeMapStringInt(buf *ByteBuffer, m map[string]int) {
 			chunkSize = MAX_CHUNK_SIZE
 		}
 
-		buf.WriteUint8(0) // no DECL_TYPE flags
-		buf.WriteUint8(uint8(chunkSize))
-		buf.WriteVaruint32Small7(uint32(STRING))    // key type
-		buf.WriteVaruint32Small7(uint32(VAR_INT64)) // value type (int serialized as varint64)
+		if hasGenerics {
+			buf.WriteUint8(KEY_DECL_TYPE | VALUE_DECL_TYPE)
+			buf.WriteUint8(uint8(chunkSize))
+		} else {
+			buf.WriteUint8(0)
+			buf.WriteUint8(uint8(chunkSize))
+			buf.WriteVaruint32Small7(uint32(STRING))    // key type
+			buf.WriteVaruint32Small7(uint32(VAR_INT32)) // value type
+		}
+
+		count := 0
+		for k, v := range m {
+			writeString(buf, k)
+			buf.WriteVarint32(v)
+			count++
+			if count >= chunkSize {
+				break
+			}
+		}
+		remaining -= chunkSize
+	}
+}
+
+// readMapStringInt32 reads map[string]int32 using chunk protocol
+func readMapStringInt32(buf *ByteBuffer, err *Error) map[string]int32 {
+	size := int(buf.ReadVaruint32(err))
+	result := make(map[string]int32, size)
+	if size == 0 {
+		return result
+	}
+
+	for size > 0 {
+		chunkHeader := buf.ReadUint8(err)
+		keyHasNull := (chunkHeader & KEY_HAS_NULL) != 0
+		valueHasNull := (chunkHeader & VALUE_HAS_NULL) != 0
+
+		if keyHasNull || valueHasNull {
+			size--
+			continue
+		}
+
+		chunkSize := int(buf.ReadUint8(err))
+		if (chunkHeader & KEY_DECL_TYPE) == 0 {
+			buf.ReadVaruint32Small7(err)
+		}
+		if (chunkHeader & VALUE_DECL_TYPE) == 0 {
+			buf.ReadVaruint32Small7(err)
+		}
+		for i := 0; i < chunkSize && size > 0; i++ {
+			k := readString(buf, err)
+			v := buf.ReadVarint32(err)
+			result[k] = v
+			size--
+		}
+	}
+	return result
+}
+
+// writeMapStringInt writes map[string]int using chunk protocol
+// When hasGenerics=true, element types are known so we set DECL_TYPE flags and skip type info
+func writeMapStringInt(buf *ByteBuffer, m map[string]int, hasGenerics bool) {
+	length := len(m)
+	buf.WriteVaruint32(uint32(length))
+	if length == 0 {
+		return
+	}
+
+	remaining := length
+	for remaining > 0 {
+		chunkSize := remaining
+		if chunkSize > MAX_CHUNK_SIZE {
+			chunkSize = MAX_CHUNK_SIZE
+		}
+
+		if hasGenerics {
+			buf.WriteUint8(KEY_DECL_TYPE | VALUE_DECL_TYPE)
+			buf.WriteUint8(uint8(chunkSize))
+		} else {
+			buf.WriteUint8(0)
+			buf.WriteUint8(uint8(chunkSize))
+			buf.WriteVaruint32Small7(uint32(STRING))    // key type
+			buf.WriteVaruint32Small7(uint32(VAR_INT64)) // value type (int serialized as varint64)
+		}
 
 		count := 0
 		for k, v := range m {
@@ -234,7 +345,7 @@ func readMapStringInt(buf *ByteBuffer, err *Error) map[string]int {
 			buf.ReadVaruint32Small7(err)
 		}
 		for i := 0; i < chunkSize && size > 0; i++ {
-			k := readStringE(buf, err)
+			k := readString(buf, err)
 			v := buf.ReadVarint64(err)
 			result[k] = int(v)
 			size--
@@ -244,8 +355,8 @@ func readMapStringInt(buf *ByteBuffer, err *Error) map[string]int {
 }
 
 // writeMapStringFloat64 writes map[string]float64 using chunk protocol
-// Writes type info for generic deserialization compatibility
-func writeMapStringFloat64(buf *ByteBuffer, m map[string]float64) {
+// When hasGenerics=true, element types are known so we set DECL_TYPE flags and skip type info
+func writeMapStringFloat64(buf *ByteBuffer, m map[string]float64, hasGenerics bool) {
 	length := len(m)
 	buf.WriteVaruint32(uint32(length))
 	if length == 0 {
@@ -259,10 +370,15 @@ func writeMapStringFloat64(buf *ByteBuffer, m map[string]float64) {
 			chunkSize = MAX_CHUNK_SIZE
 		}
 
-		buf.WriteUint8(0) // no DECL_TYPE flags
-		buf.WriteUint8(uint8(chunkSize))
-		buf.WriteVaruint32Small7(uint32(STRING)) // key type
-		buf.WriteVaruint32Small7(uint32(DOUBLE)) // value type
+		if hasGenerics {
+			buf.WriteUint8(KEY_DECL_TYPE | VALUE_DECL_TYPE)
+			buf.WriteUint8(uint8(chunkSize))
+		} else {
+			buf.WriteUint8(0)
+			buf.WriteUint8(uint8(chunkSize))
+			buf.WriteVaruint32Small7(uint32(STRING)) // key type
+			buf.WriteVaruint32Small7(uint32(DOUBLE)) // value type
+		}
 
 		count := 0
 		for k, v := range m {
@@ -303,7 +419,7 @@ func readMapStringFloat64(buf *ByteBuffer, err *Error) map[string]float64 {
 			buf.ReadVaruint32Small7(err)
 		}
 		for i := 0; i < chunkSize && size > 0; i++ {
-			k := readStringE(buf, err)
+			k := readString(buf, err)
 			v := buf.ReadFloat64(err)
 			result[k] = v
 			size--
@@ -313,8 +429,8 @@ func readMapStringFloat64(buf *ByteBuffer, err *Error) map[string]float64 {
 }
 
 // writeMapStringBool writes map[string]bool using chunk protocol
-// Writes type info for generic deserialization compatibility
-func writeMapStringBool(buf *ByteBuffer, m map[string]bool) {
+// When hasGenerics=true, element types are known so we set DECL_TYPE flags and skip type info
+func writeMapStringBool(buf *ByteBuffer, m map[string]bool, hasGenerics bool) {
 	length := len(m)
 	buf.WriteVaruint32(uint32(length))
 	if length == 0 {
@@ -328,10 +444,15 @@ func writeMapStringBool(buf *ByteBuffer, m map[string]bool) {
 			chunkSize = MAX_CHUNK_SIZE
 		}
 
-		buf.WriteUint8(0) // no DECL_TYPE flags
-		buf.WriteUint8(uint8(chunkSize))
-		buf.WriteVaruint32Small7(uint32(STRING)) // key type
-		buf.WriteVaruint32Small7(uint32(BOOL))   // value type
+		if hasGenerics {
+			buf.WriteUint8(KEY_DECL_TYPE | VALUE_DECL_TYPE)
+			buf.WriteUint8(uint8(chunkSize))
+		} else {
+			buf.WriteUint8(0)
+			buf.WriteUint8(uint8(chunkSize))
+			buf.WriteVaruint32Small7(uint32(STRING)) // key type
+			buf.WriteVaruint32Small7(uint32(BOOL))   // value type
+		}
 
 		count := 0
 		for k, v := range m {
@@ -377,7 +498,7 @@ func readMapStringBool(buf *ByteBuffer, err *Error) map[string]bool {
 		}
 
 		for i := 0; i < chunkSize && size > 0; i++ {
-			k := readStringE(buf, err)
+			k := readString(buf, err)
 			v := buf.ReadBool(err)
 			result[k] = v
 			size--
@@ -387,8 +508,8 @@ func readMapStringBool(buf *ByteBuffer, err *Error) map[string]bool {
 }
 
 // writeMapInt32Int32 writes map[int32]int32 using chunk protocol
-// Writes type info for generic deserialization compatibility
-func writeMapInt32Int32(buf *ByteBuffer, m map[int32]int32) {
+// When hasGenerics=true, element types are known so we set DECL_TYPE flags and skip type info
+func writeMapInt32Int32(buf *ByteBuffer, m map[int32]int32, hasGenerics bool) {
 	length := len(m)
 	buf.WriteVaruint32(uint32(length))
 	if length == 0 {
@@ -402,10 +523,15 @@ func writeMapInt32Int32(buf *ByteBuffer, m map[int32]int32) {
 			chunkSize = MAX_CHUNK_SIZE
 		}
 
-		buf.WriteUint8(0) // no DECL_TYPE flags
-		buf.WriteUint8(uint8(chunkSize))
-		buf.WriteVaruint32Small7(uint32(VAR_INT32)) // key type
-		buf.WriteVaruint32Small7(uint32(VAR_INT32)) // value type
+		if hasGenerics {
+			buf.WriteUint8(KEY_DECL_TYPE | VALUE_DECL_TYPE)
+			buf.WriteUint8(uint8(chunkSize))
+		} else {
+			buf.WriteUint8(0)
+			buf.WriteUint8(uint8(chunkSize))
+			buf.WriteVaruint32Small7(uint32(VAR_INT32)) // key type
+			buf.WriteVaruint32Small7(uint32(VAR_INT32)) // value type
+		}
 
 		count := 0
 		for k, v := range m {
@@ -456,8 +582,8 @@ func readMapInt32Int32(buf *ByteBuffer, err *Error) map[int32]int32 {
 }
 
 // writeMapInt64Int64 writes map[int64]int64 using chunk protocol
-// Writes type info for generic deserialization compatibility
-func writeMapInt64Int64(buf *ByteBuffer, m map[int64]int64) {
+// When hasGenerics=true, element types are known so we set DECL_TYPE flags and skip type info
+func writeMapInt64Int64(buf *ByteBuffer, m map[int64]int64, hasGenerics bool) {
 	length := len(m)
 	buf.WriteVaruint32(uint32(length))
 	if length == 0 {
@@ -471,10 +597,15 @@ func writeMapInt64Int64(buf *ByteBuffer, m map[int64]int64) {
 			chunkSize = MAX_CHUNK_SIZE
 		}
 
-		buf.WriteUint8(0) // no DECL_TYPE flags
-		buf.WriteUint8(uint8(chunkSize))
-		buf.WriteVaruint32Small7(uint32(VAR_INT64)) // key type
-		buf.WriteVaruint32Small7(uint32(VAR_INT64)) // value type
+		if hasGenerics {
+			buf.WriteUint8(KEY_DECL_TYPE | VALUE_DECL_TYPE)
+			buf.WriteUint8(uint8(chunkSize))
+		} else {
+			buf.WriteUint8(0)
+			buf.WriteUint8(uint8(chunkSize))
+			buf.WriteVaruint32Small7(uint32(VAR_INT64)) // key type
+			buf.WriteVaruint32Small7(uint32(VAR_INT64)) // value type
+		}
 
 		count := 0
 		for k, v := range m {
@@ -525,8 +656,8 @@ func readMapInt64Int64(buf *ByteBuffer, err *Error) map[int64]int64 {
 }
 
 // writeMapIntInt writes map[int]int using chunk protocol
-// Writes type info for generic deserialization compatibility
-func writeMapIntInt(buf *ByteBuffer, m map[int]int) {
+// When hasGenerics=true, element types are known so we set DECL_TYPE flags and skip type info
+func writeMapIntInt(buf *ByteBuffer, m map[int]int, hasGenerics bool) {
 	length := len(m)
 	buf.WriteVaruint32(uint32(length))
 	if length == 0 {
@@ -540,10 +671,15 @@ func writeMapIntInt(buf *ByteBuffer, m map[int]int) {
 			chunkSize = MAX_CHUNK_SIZE
 		}
 
-		buf.WriteUint8(0) // no DECL_TYPE flags
-		buf.WriteUint8(uint8(chunkSize))
-		buf.WriteVaruint32Small7(uint32(VAR_INT64)) // key type (int serialized as varint64)
-		buf.WriteVaruint32Small7(uint32(VAR_INT64)) // value type
+		if hasGenerics {
+			buf.WriteUint8(KEY_DECL_TYPE | VALUE_DECL_TYPE)
+			buf.WriteUint8(uint8(chunkSize))
+		} else {
+			buf.WriteUint8(0)
+			buf.WriteUint8(uint8(chunkSize))
+			buf.WriteVaruint32Small7(uint32(VAR_INT64)) // key type (int serialized as varint64)
+			buf.WriteVaruint32Small7(uint32(VAR_INT64)) // value type
+		}
 
 		count := 0
 		for k, v := range m {
@@ -600,15 +736,15 @@ func readMapIntInt(buf *ByteBuffer, err *Error) map[int]int {
 type stringStringMapSerializer struct{}
 
 func (s stringStringMapSerializer) WriteData(ctx *WriteContext, value reflect.Value) {
-	writeMapStringString(ctx.buffer, value.Interface().(map[string]string))
+	writeMapStringString(ctx.buffer, value.Interface().(map[string]string), false)
 }
 
-func (s stringStringMapSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool, value reflect.Value) {
+func (s stringStringMapSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool, hasGenerics bool, value reflect.Value) {
 	done := writeMapRefAndType(ctx, refMode, writeType, value)
 	if done || ctx.HasError() {
 		return
 	}
-	s.WriteData(ctx, value)
+	writeMapStringString(ctx.buffer, value.Interface().(map[string]string), hasGenerics)
 }
 
 func (s stringStringMapSerializer) ReadData(ctx *ReadContext, type_ reflect.Type, value reflect.Value) {
@@ -620,7 +756,7 @@ func (s stringStringMapSerializer) ReadData(ctx *ReadContext, type_ reflect.Type
 	value.Set(reflect.ValueOf(result))
 }
 
-func (s stringStringMapSerializer) Read(ctx *ReadContext, refMode RefMode, readType bool, value reflect.Value) {
+func (s stringStringMapSerializer) Read(ctx *ReadContext, refMode RefMode, readType bool, hasGenerics bool, value reflect.Value) {
 	done := readMapRefAndType(ctx, refMode, readType, value)
 	if done || ctx.HasError() {
 		return
@@ -629,21 +765,21 @@ func (s stringStringMapSerializer) Read(ctx *ReadContext, refMode RefMode, readT
 }
 
 func (s stringStringMapSerializer) ReadWithTypeInfo(ctx *ReadContext, refMode RefMode, typeInfo *TypeInfo, value reflect.Value) {
-	s.Read(ctx, refMode, false, value)
+	s.Read(ctx, refMode, false, false, value)
 }
 
 type stringInt64MapSerializer struct{}
 
 func (s stringInt64MapSerializer) WriteData(ctx *WriteContext, value reflect.Value) {
-	writeMapStringInt64(ctx.buffer, value.Interface().(map[string]int64))
+	writeMapStringInt64(ctx.buffer, value.Interface().(map[string]int64), false)
 }
 
-func (s stringInt64MapSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool, value reflect.Value) {
+func (s stringInt64MapSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool, hasGenerics bool, value reflect.Value) {
 	done := writeMapRefAndType(ctx, refMode, writeType, value)
 	if done || ctx.HasError() {
 		return
 	}
-	s.WriteData(ctx, value)
+	writeMapStringInt64(ctx.buffer, value.Interface().(map[string]int64), hasGenerics)
 }
 
 func (s stringInt64MapSerializer) ReadData(ctx *ReadContext, type_ reflect.Type, value reflect.Value) {
@@ -655,7 +791,7 @@ func (s stringInt64MapSerializer) ReadData(ctx *ReadContext, type_ reflect.Type,
 	value.Set(reflect.ValueOf(result))
 }
 
-func (s stringInt64MapSerializer) Read(ctx *ReadContext, refMode RefMode, readType bool, value reflect.Value) {
+func (s stringInt64MapSerializer) Read(ctx *ReadContext, refMode RefMode, readType bool, hasGenerics bool, value reflect.Value) {
 	done := readMapRefAndType(ctx, refMode, readType, value)
 	if done || ctx.HasError() {
 		return
@@ -664,21 +800,21 @@ func (s stringInt64MapSerializer) Read(ctx *ReadContext, refMode RefMode, readTy
 }
 
 func (s stringInt64MapSerializer) ReadWithTypeInfo(ctx *ReadContext, refMode RefMode, typeInfo *TypeInfo, value reflect.Value) {
-	s.Read(ctx, refMode, false, value)
+	s.Read(ctx, refMode, false, false, value)
 }
 
 type stringIntMapSerializer struct{}
 
 func (s stringIntMapSerializer) WriteData(ctx *WriteContext, value reflect.Value) {
-	writeMapStringInt(ctx.buffer, value.Interface().(map[string]int))
+	writeMapStringInt(ctx.buffer, value.Interface().(map[string]int), false)
 }
 
-func (s stringIntMapSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool, value reflect.Value) {
+func (s stringIntMapSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool, hasGenerics bool, value reflect.Value) {
 	done := writeMapRefAndType(ctx, refMode, writeType, value)
 	if done || ctx.HasError() {
 		return
 	}
-	s.WriteData(ctx, value)
+	writeMapStringInt(ctx.buffer, value.Interface().(map[string]int), hasGenerics)
 }
 
 func (s stringIntMapSerializer) ReadData(ctx *ReadContext, type_ reflect.Type, value reflect.Value) {
@@ -690,7 +826,7 @@ func (s stringIntMapSerializer) ReadData(ctx *ReadContext, type_ reflect.Type, v
 	value.Set(reflect.ValueOf(result))
 }
 
-func (s stringIntMapSerializer) Read(ctx *ReadContext, refMode RefMode, readType bool, value reflect.Value) {
+func (s stringIntMapSerializer) Read(ctx *ReadContext, refMode RefMode, readType bool, hasGenerics bool, value reflect.Value) {
 	done := readMapRefAndType(ctx, refMode, readType, value)
 	if done || ctx.HasError() {
 		return
@@ -699,21 +835,21 @@ func (s stringIntMapSerializer) Read(ctx *ReadContext, refMode RefMode, readType
 }
 
 func (s stringIntMapSerializer) ReadWithTypeInfo(ctx *ReadContext, refMode RefMode, typeInfo *TypeInfo, value reflect.Value) {
-	s.Read(ctx, refMode, false, value)
+	s.Read(ctx, refMode, false, false, value)
 }
 
 type stringFloat64MapSerializer struct{}
 
 func (s stringFloat64MapSerializer) WriteData(ctx *WriteContext, value reflect.Value) {
-	writeMapStringFloat64(ctx.buffer, value.Interface().(map[string]float64))
+	writeMapStringFloat64(ctx.buffer, value.Interface().(map[string]float64), false)
 }
 
-func (s stringFloat64MapSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool, value reflect.Value) {
+func (s stringFloat64MapSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool, hasGenerics bool, value reflect.Value) {
 	done := writeMapRefAndType(ctx, refMode, writeType, value)
 	if done || ctx.HasError() {
 		return
 	}
-	s.WriteData(ctx, value)
+	writeMapStringFloat64(ctx.buffer, value.Interface().(map[string]float64), hasGenerics)
 }
 
 func (s stringFloat64MapSerializer) ReadData(ctx *ReadContext, type_ reflect.Type, value reflect.Value) {
@@ -725,7 +861,7 @@ func (s stringFloat64MapSerializer) ReadData(ctx *ReadContext, type_ reflect.Typ
 	value.Set(reflect.ValueOf(result))
 }
 
-func (s stringFloat64MapSerializer) Read(ctx *ReadContext, refMode RefMode, readType bool, value reflect.Value) {
+func (s stringFloat64MapSerializer) Read(ctx *ReadContext, refMode RefMode, readType bool, hasGenerics bool, value reflect.Value) {
 	done := readMapRefAndType(ctx, refMode, readType, value)
 	if done || ctx.HasError() {
 		return
@@ -734,21 +870,21 @@ func (s stringFloat64MapSerializer) Read(ctx *ReadContext, refMode RefMode, read
 }
 
 func (s stringFloat64MapSerializer) ReadWithTypeInfo(ctx *ReadContext, refMode RefMode, typeInfo *TypeInfo, value reflect.Value) {
-	s.Read(ctx, refMode, false, value)
+	s.Read(ctx, refMode, false, false, value)
 }
 
 type stringBoolMapSerializer struct{}
 
 func (s stringBoolMapSerializer) WriteData(ctx *WriteContext, value reflect.Value) {
-	writeMapStringBool(ctx.buffer, value.Interface().(map[string]bool))
+	writeMapStringBool(ctx.buffer, value.Interface().(map[string]bool), false)
 }
 
-func (s stringBoolMapSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool, value reflect.Value) {
+func (s stringBoolMapSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool, hasGenerics bool, value reflect.Value) {
 	done := writeMapRefAndType(ctx, refMode, writeType, value)
 	if done || ctx.HasError() {
 		return
 	}
-	s.WriteData(ctx, value)
+	writeMapStringBool(ctx.buffer, value.Interface().(map[string]bool), hasGenerics)
 }
 
 func (s stringBoolMapSerializer) ReadData(ctx *ReadContext, type_ reflect.Type, value reflect.Value) {
@@ -760,7 +896,7 @@ func (s stringBoolMapSerializer) ReadData(ctx *ReadContext, type_ reflect.Type, 
 	value.Set(reflect.ValueOf(result))
 }
 
-func (s stringBoolMapSerializer) Read(ctx *ReadContext, refMode RefMode, readType bool, value reflect.Value) {
+func (s stringBoolMapSerializer) Read(ctx *ReadContext, refMode RefMode, readType bool, hasGenerics bool, value reflect.Value) {
 	done := readMapRefAndType(ctx, refMode, readType, value)
 	if done || ctx.HasError() {
 		return
@@ -769,21 +905,21 @@ func (s stringBoolMapSerializer) Read(ctx *ReadContext, refMode RefMode, readTyp
 }
 
 func (s stringBoolMapSerializer) ReadWithTypeInfo(ctx *ReadContext, refMode RefMode, typeInfo *TypeInfo, value reflect.Value) {
-	s.Read(ctx, refMode, false, value)
+	s.Read(ctx, refMode, false, false, value)
 }
 
 type int32Int32MapSerializer struct{}
 
 func (s int32Int32MapSerializer) WriteData(ctx *WriteContext, value reflect.Value) {
-	writeMapInt32Int32(ctx.buffer, value.Interface().(map[int32]int32))
+	writeMapInt32Int32(ctx.buffer, value.Interface().(map[int32]int32), false)
 }
 
-func (s int32Int32MapSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool, value reflect.Value) {
+func (s int32Int32MapSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool, hasGenerics bool, value reflect.Value) {
 	done := writeMapRefAndType(ctx, refMode, writeType, value)
 	if done || ctx.HasError() {
 		return
 	}
-	s.WriteData(ctx, value)
+	writeMapInt32Int32(ctx.buffer, value.Interface().(map[int32]int32), hasGenerics)
 }
 
 func (s int32Int32MapSerializer) ReadData(ctx *ReadContext, type_ reflect.Type, value reflect.Value) {
@@ -795,7 +931,7 @@ func (s int32Int32MapSerializer) ReadData(ctx *ReadContext, type_ reflect.Type, 
 	value.Set(reflect.ValueOf(result))
 }
 
-func (s int32Int32MapSerializer) Read(ctx *ReadContext, refMode RefMode, readType bool, value reflect.Value) {
+func (s int32Int32MapSerializer) Read(ctx *ReadContext, refMode RefMode, readType bool, hasGenerics bool, value reflect.Value) {
 	done := readMapRefAndType(ctx, refMode, readType, value)
 	if done || ctx.HasError() {
 		return
@@ -804,21 +940,21 @@ func (s int32Int32MapSerializer) Read(ctx *ReadContext, refMode RefMode, readTyp
 }
 
 func (s int32Int32MapSerializer) ReadWithTypeInfo(ctx *ReadContext, refMode RefMode, typeInfo *TypeInfo, value reflect.Value) {
-	s.Read(ctx, refMode, false, value)
+	s.Read(ctx, refMode, false, false, value)
 }
 
 type int64Int64MapSerializer struct{}
 
 func (s int64Int64MapSerializer) WriteData(ctx *WriteContext, value reflect.Value) {
-	writeMapInt64Int64(ctx.buffer, value.Interface().(map[int64]int64))
+	writeMapInt64Int64(ctx.buffer, value.Interface().(map[int64]int64), false)
 }
 
-func (s int64Int64MapSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool, value reflect.Value) {
+func (s int64Int64MapSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool, hasGenerics bool, value reflect.Value) {
 	done := writeMapRefAndType(ctx, refMode, writeType, value)
 	if done || ctx.HasError() {
 		return
 	}
-	s.WriteData(ctx, value)
+	writeMapInt64Int64(ctx.buffer, value.Interface().(map[int64]int64), hasGenerics)
 }
 
 func (s int64Int64MapSerializer) ReadData(ctx *ReadContext, type_ reflect.Type, value reflect.Value) {
@@ -830,7 +966,7 @@ func (s int64Int64MapSerializer) ReadData(ctx *ReadContext, type_ reflect.Type, 
 	value.Set(reflect.ValueOf(result))
 }
 
-func (s int64Int64MapSerializer) Read(ctx *ReadContext, refMode RefMode, readType bool, value reflect.Value) {
+func (s int64Int64MapSerializer) Read(ctx *ReadContext, refMode RefMode, readType bool, hasGenerics bool, value reflect.Value) {
 	done := readMapRefAndType(ctx, refMode, readType, value)
 	if done || ctx.HasError() {
 		return
@@ -839,21 +975,21 @@ func (s int64Int64MapSerializer) Read(ctx *ReadContext, refMode RefMode, readTyp
 }
 
 func (s int64Int64MapSerializer) ReadWithTypeInfo(ctx *ReadContext, refMode RefMode, typeInfo *TypeInfo, value reflect.Value) {
-	s.Read(ctx, refMode, false, value)
+	s.Read(ctx, refMode, false, false, value)
 }
 
 type intIntMapSerializer struct{}
 
 func (s intIntMapSerializer) WriteData(ctx *WriteContext, value reflect.Value) {
-	writeMapIntInt(ctx.buffer, value.Interface().(map[int]int))
+	writeMapIntInt(ctx.buffer, value.Interface().(map[int]int), false)
 }
 
-func (s intIntMapSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool, value reflect.Value) {
+func (s intIntMapSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool, hasGenerics bool, value reflect.Value) {
 	done := writeMapRefAndType(ctx, refMode, writeType, value)
 	if done || ctx.HasError() {
 		return
 	}
-	s.WriteData(ctx, value)
+	writeMapIntInt(ctx.buffer, value.Interface().(map[int]int), hasGenerics)
 }
 
 func (s intIntMapSerializer) ReadData(ctx *ReadContext, type_ reflect.Type, value reflect.Value) {
@@ -865,7 +1001,7 @@ func (s intIntMapSerializer) ReadData(ctx *ReadContext, type_ reflect.Type, valu
 	value.Set(reflect.ValueOf(result))
 }
 
-func (s intIntMapSerializer) Read(ctx *ReadContext, refMode RefMode, readType bool, value reflect.Value) {
+func (s intIntMapSerializer) Read(ctx *ReadContext, refMode RefMode, readType bool, hasGenerics bool, value reflect.Value) {
 	done := readMapRefAndType(ctx, refMode, readType, value)
 	if done || ctx.HasError() {
 		return
@@ -874,5 +1010,5 @@ func (s intIntMapSerializer) Read(ctx *ReadContext, refMode RefMode, readType bo
 }
 
 func (s intIntMapSerializer) ReadWithTypeInfo(ctx *ReadContext, refMode RefMode, typeInfo *TypeInfo, value reflect.Value) {
-	s.Read(ctx, refMode, false, value)
+	s.Read(ctx, refMode, false, false, value)
 }

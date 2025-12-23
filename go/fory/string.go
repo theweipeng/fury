@@ -31,35 +31,45 @@ const (
 )
 
 // writeString writes a string to buffer using xlang encoding
+// Optimized to combine header and data writes with single grow() call
 func writeString(buf *ByteBuffer, value string) {
 	data := unsafeGetBytes(value)
-	header := (uint64(len(data)) << 2) | encodingUTF8
-	buf.WriteVaruint36Small(header)
-	buf.WriteBinary(data)
+	dataLen := len(data)
+	header := (uint64(dataLen) << 2) | encodingUTF8
+
+	// Reserve space for header (max 5 bytes) + data in one call
+	buf.Reserve(5 + dataLen)
+	// Write header inline without grow check
+	buf.UnsafeWriteVaruint64(header)
+	// Write data inline without grow check
+	if dataLen > 0 {
+		copy(buf.data[buf.writerIndex:], data)
+		buf.writerIndex += dataLen
+	}
 }
 
-// readStringE reads a string from buffer using xlang encoding with error handling
-func readStringE(buf *ByteBuffer, err *Error) string {
+// readString reads a string from buffer using xlang encoding
+func readString(buf *ByteBuffer, err *Error) string {
 	header := buf.ReadVaruint36Small(err)
 	size := header >> 2       // Extract byte count
 	encoding := header & 0b11 // Extract encoding type
 
 	switch encoding {
 	case encodingLatin1:
-		return readLatin1E(buf, int(size), err)
+		return readLatin1(buf, int(size), err)
 	case encodingUTF16LE:
 		// For UTF16LE, size is byte count, need to convert to char count
-		return readUTF16LEE(buf, int(size), err)
+		return readUTF16LE(buf, int(size), err)
 	case encodingUTF8:
-		return readUTF8E(buf, int(size), err)
+		return readUTF8(buf, int(size), err)
 	default:
-		err.SetIfOk(fmt.Errorf("invalid string encoding: %d", encoding))
+		err.SetError(fmt.Errorf("invalid string encoding: %d", encoding))
 		return ""
 	}
 }
 
 // Specific encoding read methods
-func readLatin1E(buf *ByteBuffer, size int, err *Error) string {
+func readLatin1(buf *ByteBuffer, size int, err *Error) string {
 	data := buf.ReadBinary(size, err)
 	// Latin1 bytes need to be converted to UTF-8
 	// Each Latin1 byte is a single Unicode code point (0-255)
@@ -70,7 +80,7 @@ func readLatin1E(buf *ByteBuffer, size int, err *Error) string {
 	return string(runes)
 }
 
-func readUTF16LEE(buf *ByteBuffer, byteCount int, err *Error) string {
+func readUTF16LE(buf *ByteBuffer, byteCount int, err *Error) string {
 	data := buf.ReadBinary(byteCount, err)
 
 	// Reconstruct UTF-16 code units
@@ -83,7 +93,7 @@ func readUTF16LEE(buf *ByteBuffer, byteCount int, err *Error) string {
 	return string(utf16.Decode(u16s))
 }
 
-func readUTF8E(buf *ByteBuffer, size int, err *Error) string {
+func readUTF8(buf *ByteBuffer, size int, err *Error) string {
 	data := buf.ReadBinary(size, err)
 	return string(data) // Direct UTF-8 conversion
 }
@@ -101,7 +111,7 @@ func (s stringSerializer) WriteData(ctx *WriteContext, value reflect.Value) {
 	writeString(ctx.buffer, value.String())
 }
 
-func (s stringSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool, value reflect.Value) {
+func (s stringSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool, hasGenerics bool, value reflect.Value) {
 	if refMode != RefModeNone {
 		// String is non-primitive, needs ref flag
 		ctx.buffer.WriteInt8(NotNullValueFlag)
@@ -114,14 +124,14 @@ func (s stringSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bo
 
 func (s stringSerializer) ReadData(ctx *ReadContext, type_ reflect.Type, value reflect.Value) {
 	err := ctx.Err()
-	str := readStringE(ctx.buffer, err)
+	str := readString(ctx.buffer, err)
 	if ctx.HasError() {
 		return
 	}
 	value.SetString(str)
 }
 
-func (s stringSerializer) Read(ctx *ReadContext, refMode RefMode, readType bool, value reflect.Value) {
+func (s stringSerializer) Read(ctx *ReadContext, refMode RefMode, readType bool, hasGenerics bool, value reflect.Value) {
 	err := ctx.Err()
 	if refMode != RefModeNone {
 		// String is non-primitive, needs ref flag
@@ -141,13 +151,13 @@ func (s stringSerializer) Read(ctx *ReadContext, refMode RefMode, readType bool,
 }
 
 func (s stringSerializer) ReadWithTypeInfo(ctx *ReadContext, refMode RefMode, typeInfo *TypeInfo, value reflect.Value) {
-	s.Read(ctx, refMode, false, value)
+	s.Read(ctx, refMode, false, false, value)
 }
 
 // ptrToStringSerializer serializes a pointer to string
 type ptrToStringSerializer struct{}
 
-func (s ptrToStringSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool, value reflect.Value) {
+func (s ptrToStringSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool, hasGenerics bool, value reflect.Value) {
 	if refMode != RefModeNone {
 		if value.IsNil() {
 			ctx.buffer.WriteInt8(NullFlag)
@@ -166,7 +176,7 @@ func (s ptrToStringSerializer) WriteData(ctx *WriteContext, value reflect.Value)
 	writeString(ctx.buffer, *str)
 }
 
-func (s ptrToStringSerializer) Read(ctx *ReadContext, refMode RefMode, readType bool, value reflect.Value) {
+func (s ptrToStringSerializer) Read(ctx *ReadContext, refMode RefMode, readType bool, hasGenerics bool, value reflect.Value) {
 	err := ctx.Err()
 	if refMode != RefModeNone {
 		if ctx.buffer.ReadInt8(err) == NullFlag {
@@ -184,7 +194,7 @@ func (s ptrToStringSerializer) Read(ctx *ReadContext, refMode RefMode, readType 
 
 func (s ptrToStringSerializer) ReadData(ctx *ReadContext, type_ reflect.Type, value reflect.Value) {
 	err := ctx.Err()
-	str := readStringE(ctx.buffer, err)
+	str := readString(ctx.buffer, err)
 	if ctx.HasError() {
 		return
 	}
@@ -194,5 +204,5 @@ func (s ptrToStringSerializer) ReadData(ctx *ReadContext, type_ reflect.Type, va
 }
 
 func (s ptrToStringSerializer) ReadWithTypeInfo(ctx *ReadContext, refMode RefMode, typeInfo *TypeInfo, value reflect.Value) {
-	s.Read(ctx, refMode, false, value)
+	s.Read(ctx, refMode, false, false, value)
 }

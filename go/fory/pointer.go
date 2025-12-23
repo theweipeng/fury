@@ -39,7 +39,7 @@ func (s *ptrToValueSerializer) WriteData(ctx *WriteContext, value reflect.Value)
 	s.valueSerializer.WriteData(ctx, elemValue)
 }
 
-func (s *ptrToValueSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool, value reflect.Value) {
+func (s *ptrToValueSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool, hasGenerics bool, value reflect.Value) {
 	switch refMode {
 	case RefModeTracking:
 		if value.IsNil() {
@@ -69,10 +69,7 @@ func (s *ptrToValueSerializer) Write(ctx *WriteContext, refMode RefMode, writeTy
 			ctx.SetError(FromError(err))
 			return
 		}
-		if err := ctx.TypeResolver().WriteTypeInfo(ctx.Buffer(), typeInfo); err != nil {
-			ctx.SetError(FromError(err))
-			return
-		}
+		ctx.TypeResolver().WriteTypeInfo(ctx.Buffer(), typeInfo, ctx.Err())
 	}
 	s.WriteData(ctx, value)
 }
@@ -96,7 +93,7 @@ func (s *ptrToValueSerializer) ReadData(ctx *ReadContext, type_ reflect.Type, va
 	s.valueSerializer.ReadData(ctx, type_.Elem(), newVal.Elem())
 }
 
-func (s *ptrToValueSerializer) Read(ctx *ReadContext, refMode RefMode, readType bool, value reflect.Value) {
+func (s *ptrToValueSerializer) Read(ctx *ReadContext, refMode RefMode, readType bool, hasGenerics bool, value reflect.Value) {
 	buf := ctx.Buffer()
 	ctxErr := ctx.Err()
 	switch refMode {
@@ -129,11 +126,7 @@ func (s *ptrToValueSerializer) Read(ctx *ReadContext, refMode RefMode, readType 
 		internalTypeID := TypeId(typeID & 0xFF)
 		// Check if this is a struct type that needs type meta reading
 		if IsNamespacedType(TypeId(typeID)) || internalTypeID == COMPATIBLE_STRUCT || internalTypeID == STRUCT {
-			typeInfo, typeErr := ctx.TypeResolver().readTypeInfoWithTypeID(buf, typeID)
-			if typeErr != nil {
-				ctx.SetError(FromError(typeErr))
-				return
-			}
+			typeInfo := ctx.TypeResolver().readTypeInfoWithTypeID(buf, typeID, ctxErr)
 			// Use the serializer from TypeInfo which has the remote field definitions
 			if structSer, ok := typeInfo.Serializer.(*structSerializer); ok && len(structSer.fieldDefs) > 0 {
 				// Allocate the pointer value if needed
@@ -151,7 +144,7 @@ func (s *ptrToValueSerializer) Read(ctx *ReadContext, refMode RefMode, readType 
 }
 
 func (s *ptrToValueSerializer) ReadWithTypeInfo(ctx *ReadContext, refMode RefMode, typeInfo *TypeInfo, value reflect.Value) {
-	s.Read(ctx, refMode, false, value)
+	s.Read(ctx, refMode, false, false, value)
 }
 
 // ============================================================================
@@ -166,7 +159,7 @@ func (s *ptrToInterfaceSerializer) WriteData(ctx *WriteContext, value reflect.Va
 	ctx.WriteValue(elemValue)
 }
 
-func (s *ptrToInterfaceSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool, value reflect.Value) {
+func (s *ptrToInterfaceSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool, hasGenerics bool, value reflect.Value) {
 	switch refMode {
 	case RefModeTracking:
 		if value.IsNil() {
@@ -207,7 +200,7 @@ func (s *ptrToInterfaceSerializer) ReadData(ctx *ReadContext, type_ reflect.Type
 	value.Set(newVal)
 }
 
-func (s *ptrToInterfaceSerializer) Read(ctx *ReadContext, refMode RefMode, readType bool, value reflect.Value) {
+func (s *ptrToInterfaceSerializer) Read(ctx *ReadContext, refMode RefMode, readType bool, hasGenerics bool, value reflect.Value) {
 	buf := ctx.Buffer()
 	ctxErr := ctx.Err()
 	switch refMode {
@@ -236,5 +229,5 @@ func (s *ptrToInterfaceSerializer) Read(ctx *ReadContext, refMode RefMode, readT
 }
 
 func (s *ptrToInterfaceSerializer) ReadWithTypeInfo(ctx *ReadContext, refMode RefMode, typeInfo *TypeInfo, value reflect.Value) {
-	s.Read(ctx, refMode, false, value)
+	s.Read(ctx, refMode, false, false, value)
 }

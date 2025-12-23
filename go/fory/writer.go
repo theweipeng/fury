@@ -226,61 +226,85 @@ func (c *WriteContext) WriteString(value string) {
 // WriteBoolSlice writes []bool with ref/type info
 func (c *WriteContext) WriteBoolSlice(value []bool, refMode RefMode, writeTypeInfo bool) {
 	if refMode != RefModeNone {
+		if value == nil {
+			c.buffer.WriteInt8(NullFlag)
+			return
+		}
 		c.buffer.WriteInt8(NotNullValueFlag)
 	}
 	if writeTypeInfo {
 		c.WriteTypeId(BOOL_ARRAY)
 	}
-	writeBoolSlice(c.buffer, value, c.Err())
+	WriteBoolSlice(c.buffer, value)
 }
 
 // WriteInt8Slice writes []int8 with ref/type info
 func (c *WriteContext) WriteInt8Slice(value []int8, refMode RefMode, writeTypeInfo bool) {
 	if refMode != RefModeNone {
+		if value == nil {
+			c.buffer.WriteInt8(NullFlag)
+			return
+		}
 		c.buffer.WriteInt8(NotNullValueFlag)
 	}
 	if writeTypeInfo {
 		c.WriteTypeId(INT8_ARRAY)
 	}
-	writeInt8Slice(c.buffer, value, c.Err())
+	WriteInt8Slice(c.buffer, value)
 }
 
 // WriteInt16Slice writes []int16 with ref/type info
 func (c *WriteContext) WriteInt16Slice(value []int16, refMode RefMode, writeTypeInfo bool) {
 	if refMode != RefModeNone {
+		if value == nil {
+			c.buffer.WriteInt8(NullFlag)
+			return
+		}
 		c.buffer.WriteInt8(NotNullValueFlag)
 	}
 	if writeTypeInfo {
 		c.WriteTypeId(INT16_ARRAY)
 	}
-	writeInt16Slice(c.buffer, value, c.Err())
+	WriteInt16Slice(c.buffer, value)
 }
 
 // WriteInt32Slice writes []int32 with ref/type info
 func (c *WriteContext) WriteInt32Slice(value []int32, refMode RefMode, writeTypeInfo bool) {
 	if refMode != RefModeNone {
+		if value == nil {
+			c.buffer.WriteInt8(NullFlag)
+			return
+		}
 		c.buffer.WriteInt8(NotNullValueFlag)
 	}
 	if writeTypeInfo {
 		c.WriteTypeId(INT32_ARRAY)
 	}
-	writeInt32Slice(c.buffer, value, c.Err())
+	WriteInt32Slice(c.buffer, value)
 }
 
 // WriteInt64Slice writes []int64 with ref/type info
 func (c *WriteContext) WriteInt64Slice(value []int64, refMode RefMode, writeTypeInfo bool) {
 	if refMode != RefModeNone {
+		if value == nil {
+			c.buffer.WriteInt8(NullFlag)
+			return
+		}
 		c.buffer.WriteInt8(NotNullValueFlag)
 	}
 	if writeTypeInfo {
 		c.WriteTypeId(INT64_ARRAY)
 	}
-	writeInt64Slice(c.buffer, value, c.Err())
+	WriteInt64Slice(c.buffer, value)
 }
 
 // WriteIntSlice writes []int with ref/type info
 func (c *WriteContext) WriteIntSlice(value []int, refMode RefMode, writeTypeInfo bool) {
 	if refMode != RefModeNone {
+		if value == nil {
+			c.buffer.WriteInt8(NullFlag)
+			return
+		}
 		c.buffer.WriteInt8(NotNullValueFlag)
 	}
 	if writeTypeInfo {
@@ -290,34 +314,65 @@ func (c *WriteContext) WriteIntSlice(value []int, refMode RefMode, writeTypeInfo
 			c.WriteTypeId(INT32_ARRAY)
 		}
 	}
-	writeIntSlice(c.buffer, value, c.Err())
+	WriteIntSlice(c.buffer, value)
+}
+
+// WriteUintSlice writes []uint with ref/type info
+func (c *WriteContext) WriteUintSlice(value []uint, refMode RefMode, writeTypeInfo bool) {
+	if refMode != RefModeNone {
+		if value == nil {
+			c.buffer.WriteInt8(NullFlag)
+			return
+		}
+		c.buffer.WriteInt8(NotNullValueFlag)
+	}
+	if writeTypeInfo {
+		if strconv.IntSize == 64 {
+			c.WriteTypeId(UINT64_ARRAY)
+		} else {
+			c.WriteTypeId(UINT32_ARRAY)
+		}
+	}
+	WriteUintSlice(c.buffer, value)
 }
 
 // WriteFloat32Slice writes []float32 with ref/type info
 func (c *WriteContext) WriteFloat32Slice(value []float32, refMode RefMode, writeTypeInfo bool) {
 	if refMode != RefModeNone {
+		if value == nil {
+			c.buffer.WriteInt8(NullFlag)
+			return
+		}
 		c.buffer.WriteInt8(NotNullValueFlag)
 	}
 	if writeTypeInfo {
 		c.WriteTypeId(FLOAT32_ARRAY)
 	}
-	writeFloat32Slice(c.buffer, value, c.Err())
+	WriteFloat32Slice(c.buffer, value)
 }
 
 // WriteFloat64Slice writes []float64 with ref/type info
 func (c *WriteContext) WriteFloat64Slice(value []float64, refMode RefMode, writeTypeInfo bool) {
 	if refMode != RefModeNone {
+		if value == nil {
+			c.buffer.WriteInt8(NullFlag)
+			return
+		}
 		c.buffer.WriteInt8(NotNullValueFlag)
 	}
 	if writeTypeInfo {
 		c.WriteTypeId(FLOAT64_ARRAY)
 	}
-	writeFloat64Slice(c.buffer, value, c.Err())
+	WriteFloat64Slice(c.buffer, value)
 }
 
 // WriteByteSlice writes []byte with ref/type info
 func (c *WriteContext) WriteByteSlice(value []byte, refMode RefMode, writeTypeInfo bool) {
 	if refMode != RefModeNone {
+		if value == nil {
+			c.buffer.WriteInt8(NullFlag)
+			return
+		}
 		c.buffer.WriteInt8(NotNullValueFlag)
 	}
 	if writeTypeInfo {
@@ -328,92 +383,155 @@ func (c *WriteContext) WriteByteSlice(value []byte, refMode RefMode, writeTypeIn
 	c.buffer.WriteBinary(value)
 }
 
+// WriteStringSlice writes []string with ref/type info using LIST protocol.
+// hasGenerics indicates whether element type is known from TypeDef/generics (struct field context).
+func (c *WriteContext) WriteStringSlice(value []string, refMode RefMode, writeTypeInfo bool, hasGenerics bool) {
+	if refMode != RefModeNone {
+		if value == nil {
+			c.buffer.WriteInt8(NullFlag)
+			return
+		}
+		c.buffer.WriteInt8(NotNullValueFlag)
+	}
+	if writeTypeInfo {
+		c.WriteTypeId(LIST)
+	}
+	WriteStringSlice(c.buffer, value, hasGenerics)
+}
+
 // WriteStringStringMap writes map[string]string with ref/type info
 func (c *WriteContext) WriteStringStringMap(value map[string]string, refMode RefMode, writeTypeInfo bool) {
 	if refMode != RefModeNone {
+		if value == nil {
+			c.buffer.WriteInt8(NullFlag)
+			return
+		}
 		c.buffer.WriteInt8(NotNullValueFlag)
 	}
 	if writeTypeInfo {
 		c.WriteTypeId(MAP)
 	}
-	writeMapStringString(c.buffer, value)
+	writeMapStringString(c.buffer, value, false)
 }
 
 // WriteStringInt64Map writes map[string]int64 with ref/type info
 func (c *WriteContext) WriteStringInt64Map(value map[string]int64, refMode RefMode, writeTypeInfo bool) {
 	if refMode != RefModeNone {
+		if value == nil {
+			c.buffer.WriteInt8(NullFlag)
+			return
+		}
 		c.buffer.WriteInt8(NotNullValueFlag)
 	}
 	if writeTypeInfo {
 		c.WriteTypeId(MAP)
 	}
-	writeMapStringInt64(c.buffer, value)
+	writeMapStringInt64(c.buffer, value, false)
+}
+
+// WriteStringInt32Map writes map[string]int32 with ref/type info
+func (c *WriteContext) WriteStringInt32Map(value map[string]int32, refMode RefMode, writeTypeInfo bool) {
+	if refMode != RefModeNone {
+		if value == nil {
+			c.buffer.WriteInt8(NullFlag)
+			return
+		}
+		c.buffer.WriteInt8(NotNullValueFlag)
+	}
+	if writeTypeInfo {
+		c.WriteTypeId(MAP)
+	}
+	writeMapStringInt32(c.buffer, value, false)
 }
 
 // WriteStringIntMap writes map[string]int with ref/type info
 func (c *WriteContext) WriteStringIntMap(value map[string]int, refMode RefMode, writeTypeInfo bool) {
 	if refMode != RefModeNone {
+		if value == nil {
+			c.buffer.WriteInt8(NullFlag)
+			return
+		}
 		c.buffer.WriteInt8(NotNullValueFlag)
 	}
 	if writeTypeInfo {
 		c.WriteTypeId(MAP)
 	}
-	writeMapStringInt(c.buffer, value)
+	writeMapStringInt(c.buffer, value, false)
 }
 
 // WriteStringFloat64Map writes map[string]float64 with ref/type info
 func (c *WriteContext) WriteStringFloat64Map(value map[string]float64, refMode RefMode, writeTypeInfo bool) {
 	if refMode != RefModeNone {
+		if value == nil {
+			c.buffer.WriteInt8(NullFlag)
+			return
+		}
 		c.buffer.WriteInt8(NotNullValueFlag)
 	}
 	if writeTypeInfo {
 		c.WriteTypeId(MAP)
 	}
-	writeMapStringFloat64(c.buffer, value)
+	writeMapStringFloat64(c.buffer, value, false)
 }
 
 // WriteStringBoolMap writes map[string]bool with ref/type info
 func (c *WriteContext) WriteStringBoolMap(value map[string]bool, refMode RefMode, writeTypeInfo bool) {
 	if refMode != RefModeNone {
+		if value == nil {
+			c.buffer.WriteInt8(NullFlag)
+			return
+		}
 		c.buffer.WriteInt8(NotNullValueFlag)
 	}
 	if writeTypeInfo {
 		c.WriteTypeId(MAP)
 	}
-	writeMapStringBool(c.buffer, value)
+	writeMapStringBool(c.buffer, value, false)
 }
 
 // WriteInt32Int32Map writes map[int32]int32 with ref/type info
 func (c *WriteContext) WriteInt32Int32Map(value map[int32]int32, refMode RefMode, writeTypeInfo bool) {
 	if refMode != RefModeNone {
+		if value == nil {
+			c.buffer.WriteInt8(NullFlag)
+			return
+		}
 		c.buffer.WriteInt8(NotNullValueFlag)
 	}
 	if writeTypeInfo {
 		c.WriteTypeId(MAP)
 	}
-	writeMapInt32Int32(c.buffer, value)
+	writeMapInt32Int32(c.buffer, value, false)
 }
 
 // WriteInt64Int64Map writes map[int64]int64 with ref/type info
 func (c *WriteContext) WriteInt64Int64Map(value map[int64]int64, refMode RefMode, writeTypeInfo bool) {
 	if refMode != RefModeNone {
+		if value == nil {
+			c.buffer.WriteInt8(NullFlag)
+			return
+		}
 		c.buffer.WriteInt8(NotNullValueFlag)
 	}
 	if writeTypeInfo {
 		c.WriteTypeId(MAP)
 	}
-	writeMapInt64Int64(c.buffer, value)
+	writeMapInt64Int64(c.buffer, value, false)
 }
 
 // WriteIntIntMap writes map[int]int with ref/type info
 func (c *WriteContext) WriteIntIntMap(value map[int]int, refMode RefMode, writeTypeInfo bool) {
 	if refMode != RefModeNone {
+		if value == nil {
+			c.buffer.WriteInt8(NullFlag)
+			return
+		}
 		c.buffer.WriteInt8(NotNullValueFlag)
 	}
 	if writeTypeInfo {
 		c.WriteTypeId(MAP)
 	}
-	writeMapIntInt(c.buffer, value)
+	writeMapIntInt(c.buffer, value, false)
 }
 
 // WriteBufferObject writes a buffer object
@@ -486,5 +604,5 @@ func (c *WriteContext) WriteValue(value reflect.Value) {
 	}
 
 	// Use serializer's Write method which handles ref tracking and type info internally
-	typeInfo.Serializer.Write(c, RefModeTracking, true, value)
+	typeInfo.Serializer.Write(c, RefModeTracking, true, false, value)
 }

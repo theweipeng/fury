@@ -67,8 +67,15 @@ func (c *ReadContext) Reset() {
 }
 
 // SetData sets new input data (for buffer reuse)
+// Reuses existing buffer to avoid allocation
 func (c *ReadContext) SetData(data []byte) {
-	c.buffer = NewByteBuffer(data)
+	if c.buffer == nil {
+		c.buffer = NewByteBuffer(data)
+	} else {
+		c.buffer.data = data
+		c.buffer.readerIndex = 0
+		c.buffer.writerIndex = len(data)
+	}
 }
 
 // Buffer returns the underlying buffer
@@ -192,7 +199,7 @@ func (c *ReadContext) readFast(ptr unsafe.Pointer, ct StaticTypeId) {
 	case ConcreteTypeFloat64:
 		*(*float64)(ptr) = c.buffer.ReadFloat64(err)
 	case ConcreteTypeString:
-		*(*string)(ptr) = readStringE(c.buffer, err)
+		*(*string)(ptr) = readString(c.buffer, err)
 	}
 }
 
@@ -219,110 +226,142 @@ func (c *ReadContext) ReadLength() int {
 
 // ReadString reads a string value (caller handles nullable/type meta)
 func (c *ReadContext) ReadString() string {
-	return readStringE(c.buffer, c.Err())
+	return readString(c.buffer, c.Err())
 }
 
 // ReadBoolSlice reads []bool with ref/type info
 func (c *ReadContext) ReadBoolSlice(refMode RefMode, readType bool) []bool {
 	err := c.Err()
 	if refMode != RefModeNone {
-		_ = c.buffer.ReadInt8(err)
+		if c.buffer.ReadInt8(err) == NullFlag {
+			return nil
+		}
 	}
 	if readType {
 		_ = c.buffer.ReadVaruint32Small7(err)
 	}
-	return readBoolSlice(c.buffer, err)
+	return ReadBoolSlice(c.buffer, err)
 }
 
 // ReadInt8Slice reads []int8 with optional ref/type info
 func (c *ReadContext) ReadInt8Slice(refMode RefMode, readType bool) []int8 {
 	err := c.Err()
 	if refMode != RefModeNone {
-		_ = c.buffer.ReadInt8(err)
+		if c.buffer.ReadInt8(err) == NullFlag {
+			return nil
+		}
 	}
 	if readType {
 		_ = c.buffer.ReadVaruint32Small7(err)
 	}
-	return readInt8Slice(c.buffer, err)
+	return ReadInt8Slice(c.buffer, err)
 }
 
 // ReadInt16Slice reads []int16 with optional ref/type info
 func (c *ReadContext) ReadInt16Slice(refMode RefMode, readType bool) []int16 {
 	err := c.Err()
 	if refMode != RefModeNone {
-		_ = c.buffer.ReadInt8(err)
+		if c.buffer.ReadInt8(err) == NullFlag {
+			return nil
+		}
 	}
 	if readType {
 		_ = c.buffer.ReadVaruint32Small7(err)
 	}
-	return readInt16Slice(c.buffer, err)
+	return ReadInt16Slice(c.buffer, err)
 }
 
 // ReadInt32Slice reads []int32 with optional ref/type info
 func (c *ReadContext) ReadInt32Slice(refMode RefMode, readType bool) []int32 {
 	err := c.Err()
 	if refMode != RefModeNone {
-		_ = c.buffer.ReadInt8(err)
+		if c.buffer.ReadInt8(err) == NullFlag {
+			return nil
+		}
 	}
 	if readType {
 		_ = c.buffer.ReadVaruint32Small7(err)
 	}
-	return readInt32Slice(c.buffer, err)
+	return ReadInt32Slice(c.buffer, err)
 }
 
 // ReadInt64Slice reads []int64 with optional ref/type info
 func (c *ReadContext) ReadInt64Slice(refMode RefMode, readType bool) []int64 {
 	err := c.Err()
 	if refMode != RefModeNone {
-		_ = c.buffer.ReadInt8(err)
+		if c.buffer.ReadInt8(err) == NullFlag {
+			return nil
+		}
 	}
 	if readType {
 		_ = c.buffer.ReadVaruint32Small7(err)
 	}
-	return readInt64Slice(c.buffer, err)
+	return ReadInt64Slice(c.buffer, err)
 }
 
 // ReadIntSlice reads []int with optional ref/type info
 func (c *ReadContext) ReadIntSlice(refMode RefMode, readType bool) []int {
 	err := c.Err()
 	if refMode != RefModeNone {
-		_ = c.buffer.ReadInt8(err)
+		if c.buffer.ReadInt8(err) == NullFlag {
+			return nil
+		}
 	}
 	if readType {
 		_ = c.buffer.ReadVaruint32Small7(err)
 	}
-	return readIntSlice(c.buffer, err)
+	return ReadIntSlice(c.buffer, err)
+}
+
+// ReadUintSlice reads []uint with optional ref/type info
+func (c *ReadContext) ReadUintSlice(refMode RefMode, readType bool) []uint {
+	err := c.Err()
+	if refMode != RefModeNone {
+		if c.buffer.ReadInt8(err) == NullFlag {
+			return nil
+		}
+	}
+	if readType {
+		_ = c.buffer.ReadVaruint32Small7(err)
+	}
+	return ReadUintSlice(c.buffer, err)
 }
 
 // ReadFloat32Slice reads []float32 with optional ref/type info
 func (c *ReadContext) ReadFloat32Slice(refMode RefMode, readType bool) []float32 {
 	err := c.Err()
 	if refMode != RefModeNone {
-		_ = c.buffer.ReadInt8(err)
+		if c.buffer.ReadInt8(err) == NullFlag {
+			return nil
+		}
 	}
 	if readType {
 		_ = c.buffer.ReadVaruint32Small7(err)
 	}
-	return readFloat32Slice(c.buffer, err)
+	return ReadFloat32Slice(c.buffer, err)
 }
 
 // ReadFloat64Slice reads []float64 with optional ref/type info
 func (c *ReadContext) ReadFloat64Slice(refMode RefMode, readType bool) []float64 {
 	err := c.Err()
 	if refMode != RefModeNone {
-		_ = c.buffer.ReadInt8(err)
+		if c.buffer.ReadInt8(err) == NullFlag {
+			return nil
+		}
 	}
 	if readType {
 		_ = c.buffer.ReadVaruint32Small7(err)
 	}
-	return readFloat64Slice(c.buffer, err)
+	return ReadFloat64Slice(c.buffer, err)
 }
 
 // ReadByteSlice reads []byte with optional ref/type info
 func (c *ReadContext) ReadByteSlice(refMode RefMode, readType bool) []byte {
 	err := c.Err()
 	if refMode != RefModeNone {
-		_ = c.buffer.ReadInt8(err)
+		if c.buffer.ReadInt8(err) == NullFlag {
+			return nil
+		}
 	}
 	if readType {
 		_ = c.buffer.ReadVaruint32Small7(err)
@@ -336,11 +375,27 @@ func (c *ReadContext) ReadByteSlice(refMode RefMode, readType bool) []byte {
 	return c.buffer.ReadBinary(size, err)
 }
 
+// ReadStringSlice reads []string with optional ref/type info using LIST protocol
+func (c *ReadContext) ReadStringSlice(refMode RefMode, readType bool) []string {
+	err := c.Err()
+	if refMode != RefModeNone {
+		if c.buffer.ReadInt8(err) == NullFlag {
+			return nil
+		}
+	}
+	if readType {
+		_ = c.buffer.ReadVaruint32Small7(err)
+	}
+	return ReadStringSlice(c.buffer, err)
+}
+
 // ReadStringStringMap reads map[string]string with optional ref/type info
 func (c *ReadContext) ReadStringStringMap(refMode RefMode, readType bool) map[string]string {
 	err := c.Err()
 	if refMode != RefModeNone {
-		_ = c.buffer.ReadInt8(err)
+		if c.buffer.ReadInt8(err) == NullFlag {
+			return nil
+		}
 	}
 	if readType {
 		_ = c.buffer.ReadVaruint32Small7(err)
@@ -352,7 +407,9 @@ func (c *ReadContext) ReadStringStringMap(refMode RefMode, readType bool) map[st
 func (c *ReadContext) ReadStringInt64Map(refMode RefMode, readType bool) map[string]int64 {
 	err := c.Err()
 	if refMode != RefModeNone {
-		_ = c.buffer.ReadInt8(err)
+		if c.buffer.ReadInt8(err) == NullFlag {
+			return nil
+		}
 	}
 	if readType {
 		_ = c.buffer.ReadVaruint32Small7(err)
@@ -360,11 +417,27 @@ func (c *ReadContext) ReadStringInt64Map(refMode RefMode, readType bool) map[str
 	return readMapStringInt64(c.buffer, err)
 }
 
+// ReadStringInt32Map reads map[string]int32 with optional ref/type info
+func (c *ReadContext) ReadStringInt32Map(refMode RefMode, readType bool) map[string]int32 {
+	err := c.Err()
+	if refMode != RefModeNone {
+		if c.buffer.ReadInt8(err) == NullFlag {
+			return nil
+		}
+	}
+	if readType {
+		_ = c.buffer.ReadVaruint32Small7(err)
+	}
+	return readMapStringInt32(c.buffer, err)
+}
+
 // ReadStringIntMap reads map[string]int with optional ref/type info
 func (c *ReadContext) ReadStringIntMap(refMode RefMode, readType bool) map[string]int {
 	err := c.Err()
 	if refMode != RefModeNone {
-		_ = c.buffer.ReadInt8(err)
+		if c.buffer.ReadInt8(err) == NullFlag {
+			return nil
+		}
 	}
 	if readType {
 		_ = c.buffer.ReadVaruint32Small7(err)
@@ -376,7 +449,9 @@ func (c *ReadContext) ReadStringIntMap(refMode RefMode, readType bool) map[strin
 func (c *ReadContext) ReadStringFloat64Map(refMode RefMode, readType bool) map[string]float64 {
 	err := c.Err()
 	if refMode != RefModeNone {
-		_ = c.buffer.ReadInt8(err)
+		if c.buffer.ReadInt8(err) == NullFlag {
+			return nil
+		}
 	}
 	if readType {
 		_ = c.buffer.ReadVaruint32Small7(err)
@@ -388,7 +463,9 @@ func (c *ReadContext) ReadStringFloat64Map(refMode RefMode, readType bool) map[s
 func (c *ReadContext) ReadStringBoolMap(refMode RefMode, readType bool) map[string]bool {
 	err := c.Err()
 	if refMode != RefModeNone {
-		_ = c.buffer.ReadInt8(err)
+		if c.buffer.ReadInt8(err) == NullFlag {
+			return nil
+		}
 	}
 	if readType {
 		_ = c.buffer.ReadVaruint32Small7(err)
@@ -400,7 +477,9 @@ func (c *ReadContext) ReadStringBoolMap(refMode RefMode, readType bool) map[stri
 func (c *ReadContext) ReadInt32Int32Map(refMode RefMode, readType bool) map[int32]int32 {
 	err := c.Err()
 	if refMode != RefModeNone {
-		_ = c.buffer.ReadInt8(err)
+		if c.buffer.ReadInt8(err) == NullFlag {
+			return nil
+		}
 	}
 	if readType {
 		_ = c.buffer.ReadVaruint32Small7(err)
@@ -412,7 +491,9 @@ func (c *ReadContext) ReadInt32Int32Map(refMode RefMode, readType bool) map[int3
 func (c *ReadContext) ReadInt64Int64Map(refMode RefMode, readType bool) map[int64]int64 {
 	err := c.Err()
 	if refMode != RefModeNone {
-		_ = c.buffer.ReadInt8(err)
+		if c.buffer.ReadInt8(err) == NullFlag {
+			return nil
+		}
 	}
 	if readType {
 		_ = c.buffer.ReadVaruint32Small7(err)
@@ -424,7 +505,9 @@ func (c *ReadContext) ReadInt64Int64Map(refMode RefMode, readType bool) map[int6
 func (c *ReadContext) ReadIntIntMap(refMode RefMode, readType bool) map[int]int {
 	err := c.Err()
 	if refMode != RefModeNone {
-		_ = c.buffer.ReadInt8(err)
+		if c.buffer.ReadInt8(err) == NullFlag {
+			return nil
+		}
 	}
 	if readType {
 		_ = c.buffer.ReadVaruint32Small7(err)
@@ -496,9 +579,9 @@ func (c *ReadContext) ReadValue(value reflect.Value) {
 		}
 
 		// Read type info to determine the actual type
-		typeInfo, err := c.typeResolver.ReadTypeInfo(c.buffer, value)
-		if err != nil {
-			c.SetError(DeserializationErrorf("failed to read type info for interface: %v", err))
+		ctxErr := c.Err()
+		typeInfo := c.typeResolver.ReadTypeInfo(c.buffer, ctxErr)
+		if ctxErr.HasError() {
 			return
 		}
 
@@ -569,15 +652,100 @@ func (c *ReadContext) ReadValue(value reflect.Value) {
 		return
 	}
 
+	// For struct types, use optimized ReadStruct path
+	valueType := value.Type()
+	if valueType.Kind() == reflect.Struct {
+		c.ReadStruct(value)
+		return
+	}
+	if valueType.Kind() == reflect.Ptr && valueType.Elem().Kind() == reflect.Struct {
+		c.ReadStruct(value)
+		return
+	}
+
 	// Get serializer for the value's type
-	serializer, err := c.typeResolver.getSerializerByType(value.Type(), false)
+	serializer, err := c.typeResolver.getSerializerByType(valueType, false)
 	if err != nil {
-		c.SetError(DeserializationErrorf("failed to get serializer for type %v: %v", value.Type(), err))
+		c.SetError(DeserializationErrorf("failed to get serializer for type %v: %v", valueType, err))
 		return
 	}
 
 	// Read handles ref tracking and type info internally
-	serializer.Read(c, RefModeTracking, true, value)
+	serializer.Read(c, RefModeTracking, true, false, value)
+}
+
+// ReadStruct reads a struct value with optimized type resolution.
+// This method uses ReadTypeInfoForType to avoid expensive type resolution via map lookups
+// when the expected type is already known.
+func (c *ReadContext) ReadStruct(value reflect.Value) {
+	if !value.IsValid() {
+		c.SetError(DeserializationError("invalid reflect.Value"))
+		return
+	}
+
+	// Handle pointer to struct
+	valueType := value.Type()
+	isPtr := valueType.Kind() == reflect.Ptr
+	var structType reflect.Type
+	if isPtr {
+		structType = valueType.Elem()
+	} else {
+		structType = valueType
+	}
+
+	// Read ref flag
+	refID, err := c.RefResolver().TryPreserveRefId(c.buffer)
+	if err != nil {
+		c.SetError(FromError(err))
+		return
+	}
+
+	// Handle null
+	if int8(refID) == NullFlag {
+		if isPtr {
+			value.Set(reflect.Zero(valueType))
+		}
+		return
+	}
+
+	// Handle reference to existing object
+	if int8(refID) < NotNullValueFlag {
+		obj := c.RefResolver().GetReadObject(refID)
+		if obj.IsValid() {
+			value.Set(obj)
+		}
+		return
+	}
+
+	// Use ReadTypeInfoForType to get serializer directly by type - avoids map lookups
+	ctxErr := c.Err()
+	serializer := c.typeResolver.ReadTypeInfoForType(c.buffer, structType, ctxErr)
+	if ctxErr.HasError() || serializer == nil {
+		if !ctxErr.HasError() {
+			c.SetError(DeserializationErrorf("no serializer registered for struct %v", structType))
+		}
+		return
+	}
+
+	// Allocate pointer if needed
+	var readTarget reflect.Value
+	if isPtr {
+		if value.IsNil() {
+			value.Set(reflect.New(structType))
+		}
+		readTarget = value.Elem()
+		// Register reference before reading (for circular references)
+		c.RefResolver().SetReadObject(refID, value)
+	} else {
+		readTarget = value
+		// For non-pointer structs, register a pointer to enable circular ref resolution
+		if value.CanAddr() {
+			c.RefResolver().SetReadObject(refID, value.Addr())
+		}
+	}
+
+	// Read struct data directly
+	serializer.ReadData(c, structType, readTarget)
 }
 
 // ReadInto reads a value using a specific serializer with optional ref/type info
@@ -591,7 +759,7 @@ func (c *ReadContext) ReadInto(value reflect.Value, serializer Serializer, refMo
 		return
 	}
 
-	serializer.Read(c, refMode, readTypeInfo, value)
+	serializer.Read(c, refMode, readTypeInfo, false, value)
 }
 
 // readArrayValue handles array targets when stream contains slice data
