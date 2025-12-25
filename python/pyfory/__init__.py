@@ -63,6 +63,7 @@ from pyfory.serializer import (  # noqa: F401 # pylint: disable=unused-import
     StatefulSerializer,
 )
 from pyfory.struct import DataClassSerializer
+from pyfory.field import field  # noqa: F401 # pylint: disable=unused-import
 from pyfory.type import (  # noqa: F401 # pylint: disable=unused-import
     record_class_factory,
     get_qualified_classname,
@@ -94,6 +95,8 @@ __all__ = [
     "TypeInfo",
     "Buffer",
     "DeserializationPolicy",
+    # Field metadata
+    "field",
     # Language constants
     "PYTHON",
     "XLANG",
