@@ -610,6 +610,9 @@ pub(crate) fn gen_read_compatible_with_construction(
         .map(|(i, field)| {
             let var_name = create_private_field_name(field, i);
             let field_name = super::util::get_field_name(field, i);
+            // Use sorted index for matching. The assign_field_ids function assigns
+            // the sorted index to matched fields after lookup (by ID or name).
+            // Fields that don't match or have type mismatches get field_id = -1.
             let field_id = i as i16;
             let body = gen_read_compatible_match_arm_body(field, &var_name, &field_name);
             quote! {
