@@ -671,19 +671,3 @@ func skipValue(ctx *ReadContext, fieldDef FieldDef, readRefFlag bool, isField bo
 		ctx.SetError(DeserializationErrorf("unsupported type for skip: %d", typeIDNum))
 	}
 }
-
-// fieldNeedWriteRef determines if a field needs a ref flag based on its type and nullability
-func fieldNeedWriteRef(typeId TypeId, nullable bool) bool {
-	if nullable {
-		return true
-	}
-	// Non-nullable container types still need ref tracking
-	switch typeId {
-	case LIST, SET, MAP:
-		return true
-	case STRING, BINARY:
-		return true
-	default:
-		return false
-	}
-}

@@ -55,10 +55,12 @@ type FieldInfo struct {
 	HasGenerics bool    // whether element types are known from TypeDef (for container fields)
 
 	// Tag-based configuration (from fory struct tags)
-	TagID      int  // -1 = use field name, >=0 = use tag ID
-	HasForyTag bool // Whether field has explicit fory tag
-	TagRefSet  bool // Whether ref was explicitly set via fory tag
-	TagRef     bool // The ref value from fory tag (only valid if TagRefSet is true)
+	TagID          int  // -1 = use field name, >=0 = use tag ID
+	HasForyTag     bool // Whether field has explicit fory tag
+	TagRefSet      bool // Whether ref was explicitly set via fory tag
+	TagRef         bool // The ref value from fory tag (only valid if TagRefSet is true)
+	TagNullableSet bool // Whether nullable was explicitly set via fory tag
+	TagNullable    bool // The nullable value from fory tag (only valid if TagNullableSet is true)
 }
 
 // fieldHasNonPrimitiveSerializer returns true if the field has a serializer with a non-primitive type ID.
@@ -71,7 +73,9 @@ func fieldHasNonPrimitiveSerializer(field *FieldInfo) bool {
 	// ENUM (numeric ID), NAMED_ENUM (namespace/typename), NAMED_STRUCT, NAMED_COMPATIBLE_STRUCT, NAMED_EXT
 	// all require special serialization and should not use the primitive fast path
 	// Note: ENUM uses unsigned Varuint32Small7 for ordinals, not signed zigzag varint
-	switch field.TypeId {
+	// Use internal type ID (low 8 bits) since registered types have composite TypeIds like (userID << 8) | internalID
+	internalTypeId := TypeId(field.TypeId & 0xFF)
+	switch internalTypeId {
 	case ENUM, NAMED_ENUM, NAMED_STRUCT, NAMED_COMPATIBLE_STRUCT, NAMED_EXT:
 		return true
 	default:
@@ -88,52 +92,72 @@ func isEnumField(field *FieldInfo) bool {
 	return internalTypeId == ENUM || internalTypeId == NAMED_ENUM
 }
 
-// writeEnumField writes an enum field with null flag + ordinal.
-// Java always writes null flag for enum fields in struct (both compatible and non-compatible mode).
+// writeEnumField writes an enum field respecting the field's RefMode.
 // Java writes enum ordinals as unsigned Varuint32Small7, not signed zigzag.
+// RefMode determines whether null flag is written, regardless of whether the local type is a pointer.
+// This is important for compatible mode where remote TypeDef's nullable flag controls the wire format.
 func writeEnumField(ctx *WriteContext, field *FieldInfo, fieldValue reflect.Value) {
 	buf := ctx.Buffer()
-	// Handle pointer enum fields
-	if fieldValue.Kind() == reflect.Ptr {
-		if fieldValue.IsNil() {
+	isPointer := fieldValue.Kind() == reflect.Ptr
+
+	// Write null flag based on RefMode only (not based on whether local type is pointer)
+	if field.RefMode != RefModeNone {
+		if isPointer && fieldValue.IsNil() {
 			buf.WriteInt8(NullFlag)
 			return
 		}
 		buf.WriteInt8(NotNullValueFlag)
-		// For pointer enum fields, the serializer is ptrToValueSerializer wrapping enumSerializer.
-		// We need to call the inner enumSerializer directly with the dereferenced value.
-		if ptrSer, ok := field.Serializer.(*ptrToValueSerializer); ok {
-			ptrSer.valueSerializer.WriteData(ctx, fieldValue.Elem())
-			return
-		}
-		field.Serializer.WriteData(ctx, fieldValue.Elem())
-		return
 	}
-	// Non-pointer enum: always write null flag then value
-	buf.WriteInt8(NotNullValueFlag)
-	field.Serializer.WriteData(ctx, fieldValue)
+
+	// Get the actual value to serialize
+	targetValue := fieldValue
+	if isPointer {
+		if fieldValue.IsNil() {
+			// RefModeNone but nil pointer - this is a protocol error in schema-consistent mode
+			// Write zero value as fallback
+			targetValue = reflect.Zero(field.Type.Elem())
+		} else {
+			targetValue = fieldValue.Elem()
+		}
+	}
+
+	// For pointer enum fields, the serializer is ptrToValueSerializer wrapping enumSerializer.
+	// We need to call the inner enumSerializer directly with the dereferenced value.
+	if ptrSer, ok := field.Serializer.(*ptrToValueSerializer); ok {
+		ptrSer.valueSerializer.WriteData(ctx, targetValue)
+	} else {
+		field.Serializer.WriteData(ctx, targetValue)
+	}
 }
 
-// readEnumField reads an enum field with null flag + ordinal.
-// Java always writes null flag for enum fields in struct.
+// readEnumField reads an enum field respecting the field's RefMode.
+// RefMode determines whether null flag is read, regardless of whether the local type is a pointer.
+// This is important for compatible mode where remote TypeDef's nullable flag controls the wire format.
 // Uses context error state for deferred error checking.
 func readEnumField(ctx *ReadContext, field *FieldInfo, fieldValue reflect.Value) {
 	buf := ctx.Buffer()
-	nullFlag := buf.ReadInt8(ctx.Err())
-	if nullFlag == NullFlag {
-		// For pointer enum fields, leave as nil; for non-pointer, set to zero
-		if fieldValue.Kind() != reflect.Ptr {
-			fieldValue.SetInt(0)
+	isPointer := fieldValue.Kind() == reflect.Ptr
+
+	// Read null flag based on RefMode only (not based on whether local type is pointer)
+	if field.RefMode != RefModeNone {
+		nullFlag := buf.ReadInt8(ctx.Err())
+		if nullFlag == NullFlag {
+			// For pointer enum fields, leave as nil; for non-pointer, set to zero
+			if !isPointer {
+				fieldValue.SetInt(0)
+			}
+			return
 		}
-		return
 	}
+
 	// For pointer enum fields, allocate a new value
 	targetValue := fieldValue
-	if fieldValue.Kind() == reflect.Ptr {
+	if isPointer {
 		newVal := reflect.New(field.Type.Elem())
 		fieldValue.Set(newVal)
 		targetValue = newVal.Elem()
 	}
+
 	// For pointer enum fields, the serializer is ptrToValueSerializer wrapping enumSerializer.
 	// We need to call the inner enumSerializer directly with the dereferenced value.
 	if ptrSer, ok := field.Serializer.(*ptrToValueSerializer); ok {
@@ -265,9 +289,15 @@ func (s *structSerializer) WriteData(ctx *WriteContext, value reflect.Value) {
 
 	// Lazy initialization
 	if !s.initialized {
+		if DebugOutputEnabled() {
+			fmt.Printf("[fory-debug] structSerializer.WriteData: calling initialize for type=%v\n", s.type_)
+		}
 		if err := s.initialize(ctx.TypeResolver()); err != nil {
 			ctx.SetError(FromError(err))
 			return
+		}
+		if DebugOutputEnabled() {
+			fmt.Printf("[fory-debug] structSerializer.WriteData: after initialize, remainingFields=%d\n", len(s.remainingFields))
 		}
 	}
 
@@ -414,7 +444,10 @@ func (s *structSerializer) writeRemainingField(ctx *WriteContext, ptr unsafe.Poi
 			if field.RefMode == RefModeTracking {
 				break // Fall through to slow path
 			}
-			buf.WriteInt8(NotNullValueFlag)
+			// Only write null flag if RefMode requires it (nullable field)
+			if field.RefMode == RefModeNullOnly {
+				buf.WriteInt8(NotNullValueFlag)
+			}
 			ctx.WriteString(*(*string)(fieldPtr))
 			return
 		case ConcreteTypeEnum:
@@ -425,109 +458,109 @@ func (s *structSerializer) writeRemainingField(ctx *WriteContext, ptr unsafe.Poi
 			if field.RefMode == RefModeTracking {
 				break
 			}
-			ctx.WriteStringSlice(*(*[]string)(fieldPtr), RefModeNullOnly, false, true)
+			ctx.WriteStringSlice(*(*[]string)(fieldPtr), field.RefMode, false, true)
 			return
 		case ConcreteTypeBoolSlice:
 			if field.RefMode == RefModeTracking {
 				break
 			}
-			ctx.WriteBoolSlice(*(*[]bool)(fieldPtr), RefModeNullOnly, false)
+			ctx.WriteBoolSlice(*(*[]bool)(fieldPtr), field.RefMode, false)
 			return
 		case ConcreteTypeInt8Slice:
 			if field.RefMode == RefModeTracking {
 				break
 			}
-			ctx.WriteInt8Slice(*(*[]int8)(fieldPtr), RefModeNullOnly, false)
+			ctx.WriteInt8Slice(*(*[]int8)(fieldPtr), field.RefMode, false)
 			return
 		case ConcreteTypeByteSlice:
 			if field.RefMode == RefModeTracking {
 				break
 			}
-			ctx.WriteByteSlice(*(*[]byte)(fieldPtr), RefModeNullOnly, false)
+			ctx.WriteByteSlice(*(*[]byte)(fieldPtr), field.RefMode, false)
 			return
 		case ConcreteTypeInt16Slice:
 			if field.RefMode == RefModeTracking {
 				break
 			}
-			ctx.WriteInt16Slice(*(*[]int16)(fieldPtr), RefModeNullOnly, false)
+			ctx.WriteInt16Slice(*(*[]int16)(fieldPtr), field.RefMode, false)
 			return
 		case ConcreteTypeInt32Slice:
 			if field.RefMode == RefModeTracking {
 				break
 			}
-			ctx.WriteInt32Slice(*(*[]int32)(fieldPtr), RefModeNullOnly, false)
+			ctx.WriteInt32Slice(*(*[]int32)(fieldPtr), field.RefMode, false)
 			return
 		case ConcreteTypeInt64Slice:
 			if field.RefMode == RefModeTracking {
 				break
 			}
-			ctx.WriteInt64Slice(*(*[]int64)(fieldPtr), RefModeNullOnly, false)
+			ctx.WriteInt64Slice(*(*[]int64)(fieldPtr), field.RefMode, false)
 			return
 		case ConcreteTypeIntSlice:
 			if field.RefMode == RefModeTracking {
 				break
 			}
-			ctx.WriteIntSlice(*(*[]int)(fieldPtr), RefModeNullOnly, false)
+			ctx.WriteIntSlice(*(*[]int)(fieldPtr), field.RefMode, false)
 			return
 		case ConcreteTypeUintSlice:
 			if field.RefMode == RefModeTracking {
 				break
 			}
-			ctx.WriteUintSlice(*(*[]uint)(fieldPtr), RefModeNullOnly, false)
+			ctx.WriteUintSlice(*(*[]uint)(fieldPtr), field.RefMode, false)
 			return
 		case ConcreteTypeFloat32Slice:
 			if field.RefMode == RefModeTracking {
 				break
 			}
-			ctx.WriteFloat32Slice(*(*[]float32)(fieldPtr), RefModeNullOnly, false)
+			ctx.WriteFloat32Slice(*(*[]float32)(fieldPtr), field.RefMode, false)
 			return
 		case ConcreteTypeFloat64Slice:
 			if field.RefMode == RefModeTracking {
 				break
 			}
-			ctx.WriteFloat64Slice(*(*[]float64)(fieldPtr), RefModeNullOnly, false)
+			ctx.WriteFloat64Slice(*(*[]float64)(fieldPtr), field.RefMode, false)
 			return
 		case ConcreteTypeStringStringMap:
 			if field.RefMode == RefModeTracking {
 				break
 			}
-			ctx.WriteStringStringMap(*(*map[string]string)(fieldPtr), RefModeNullOnly, false)
+			ctx.WriteStringStringMap(*(*map[string]string)(fieldPtr), field.RefMode, false)
 			return
 		case ConcreteTypeStringInt64Map:
 			if field.RefMode == RefModeTracking {
 				break
 			}
-			ctx.WriteStringInt64Map(*(*map[string]int64)(fieldPtr), RefModeNullOnly, false)
+			ctx.WriteStringInt64Map(*(*map[string]int64)(fieldPtr), field.RefMode, false)
 			return
 		case ConcreteTypeStringInt32Map:
 			if field.RefMode == RefModeTracking {
 				break
 			}
-			ctx.WriteStringInt32Map(*(*map[string]int32)(fieldPtr), RefModeNullOnly, false)
+			ctx.WriteStringInt32Map(*(*map[string]int32)(fieldPtr), field.RefMode, false)
 			return
 		case ConcreteTypeStringIntMap:
 			if field.RefMode == RefModeTracking {
 				break
 			}
-			ctx.WriteStringIntMap(*(*map[string]int)(fieldPtr), RefModeNullOnly, false)
+			ctx.WriteStringIntMap(*(*map[string]int)(fieldPtr), field.RefMode, false)
 			return
 		case ConcreteTypeStringFloat64Map:
 			if field.RefMode == RefModeTracking {
 				break
 			}
-			ctx.WriteStringFloat64Map(*(*map[string]float64)(fieldPtr), RefModeNullOnly, false)
+			ctx.WriteStringFloat64Map(*(*map[string]float64)(fieldPtr), field.RefMode, false)
 			return
 		case ConcreteTypeStringBoolMap:
 			if field.RefMode == RefModeTracking {
 				break
 			}
-			ctx.WriteStringBoolMap(*(*map[string]bool)(fieldPtr), RefModeNullOnly, false)
+			ctx.WriteStringBoolMap(*(*map[string]bool)(fieldPtr), field.RefMode, false)
 			return
 		case ConcreteTypeIntIntMap:
 			if field.RefMode == RefModeTracking {
 				break
 			}
-			ctx.WriteIntIntMap(*(*map[int]int)(fieldPtr), RefModeNullOnly, false)
+			ctx.WriteIntIntMap(*(*map[int]int)(fieldPtr), field.RefMode, false)
 			return
 		}
 	}
@@ -724,10 +757,13 @@ func (s *structSerializer) readRemainingField(ctx *ReadContext, ptr unsafe.Point
 			if field.RefMode == RefModeTracking {
 				break // Fall through to slow path for ref tracking
 			}
-			refFlag := buf.ReadInt8(ctxErr)
-			if refFlag == NullFlag {
-				*(*string)(fieldPtr) = ""
-				return
+			// Only read null flag if RefMode requires it (nullable field)
+			if field.RefMode == RefModeNullOnly {
+				refFlag := buf.ReadInt8(ctxErr)
+				if refFlag == NullFlag {
+					*(*string)(fieldPtr) = ""
+					return
+				}
 			}
 			*(*string)(fieldPtr) = ctx.ReadString()
 			return
@@ -740,109 +776,109 @@ func (s *structSerializer) readRemainingField(ctx *ReadContext, ptr unsafe.Point
 			if field.RefMode == RefModeTracking {
 				break
 			}
-			*(*[]string)(fieldPtr) = ctx.ReadStringSlice(RefModeNullOnly, false)
+			*(*[]string)(fieldPtr) = ctx.ReadStringSlice(field.RefMode, false)
 			return
 		case ConcreteTypeBoolSlice:
 			if field.RefMode == RefModeTracking {
 				break
 			}
-			*(*[]bool)(fieldPtr) = ctx.ReadBoolSlice(RefModeNullOnly, false)
+			*(*[]bool)(fieldPtr) = ctx.ReadBoolSlice(field.RefMode, false)
 			return
 		case ConcreteTypeInt8Slice:
 			if field.RefMode == RefModeTracking {
 				break
 			}
-			*(*[]int8)(fieldPtr) = ctx.ReadInt8Slice(RefModeNullOnly, false)
+			*(*[]int8)(fieldPtr) = ctx.ReadInt8Slice(field.RefMode, false)
 			return
 		case ConcreteTypeByteSlice:
 			if field.RefMode == RefModeTracking {
 				break
 			}
-			*(*[]byte)(fieldPtr) = ctx.ReadByteSlice(RefModeNullOnly, false)
+			*(*[]byte)(fieldPtr) = ctx.ReadByteSlice(field.RefMode, false)
 			return
 		case ConcreteTypeInt16Slice:
 			if field.RefMode == RefModeTracking {
 				break
 			}
-			*(*[]int16)(fieldPtr) = ctx.ReadInt16Slice(RefModeNullOnly, false)
+			*(*[]int16)(fieldPtr) = ctx.ReadInt16Slice(field.RefMode, false)
 			return
 		case ConcreteTypeInt32Slice:
 			if field.RefMode == RefModeTracking {
 				break
 			}
-			*(*[]int32)(fieldPtr) = ctx.ReadInt32Slice(RefModeNullOnly, false)
+			*(*[]int32)(fieldPtr) = ctx.ReadInt32Slice(field.RefMode, false)
 			return
 		case ConcreteTypeInt64Slice:
 			if field.RefMode == RefModeTracking {
 				break
 			}
-			*(*[]int64)(fieldPtr) = ctx.ReadInt64Slice(RefModeNullOnly, false)
+			*(*[]int64)(fieldPtr) = ctx.ReadInt64Slice(field.RefMode, false)
 			return
 		case ConcreteTypeIntSlice:
 			if field.RefMode == RefModeTracking {
 				break
 			}
-			*(*[]int)(fieldPtr) = ctx.ReadIntSlice(RefModeNullOnly, false)
+			*(*[]int)(fieldPtr) = ctx.ReadIntSlice(field.RefMode, false)
 			return
 		case ConcreteTypeUintSlice:
 			if field.RefMode == RefModeTracking {
 				break
 			}
-			*(*[]uint)(fieldPtr) = ctx.ReadUintSlice(RefModeNullOnly, false)
+			*(*[]uint)(fieldPtr) = ctx.ReadUintSlice(field.RefMode, false)
 			return
 		case ConcreteTypeFloat32Slice:
 			if field.RefMode == RefModeTracking {
 				break
 			}
-			*(*[]float32)(fieldPtr) = ctx.ReadFloat32Slice(RefModeNullOnly, false)
+			*(*[]float32)(fieldPtr) = ctx.ReadFloat32Slice(field.RefMode, false)
 			return
 		case ConcreteTypeFloat64Slice:
 			if field.RefMode == RefModeTracking {
 				break
 			}
-			*(*[]float64)(fieldPtr) = ctx.ReadFloat64Slice(RefModeNullOnly, false)
+			*(*[]float64)(fieldPtr) = ctx.ReadFloat64Slice(field.RefMode, false)
 			return
 		case ConcreteTypeStringStringMap:
 			if field.RefMode == RefModeTracking {
 				break
 			}
-			*(*map[string]string)(fieldPtr) = ctx.ReadStringStringMap(RefModeNullOnly, false)
+			*(*map[string]string)(fieldPtr) = ctx.ReadStringStringMap(field.RefMode, false)
 			return
 		case ConcreteTypeStringInt64Map:
 			if field.RefMode == RefModeTracking {
 				break
 			}
-			*(*map[string]int64)(fieldPtr) = ctx.ReadStringInt64Map(RefModeNullOnly, false)
+			*(*map[string]int64)(fieldPtr) = ctx.ReadStringInt64Map(field.RefMode, false)
 			return
 		case ConcreteTypeStringInt32Map:
 			if field.RefMode == RefModeTracking {
 				break
 			}
-			*(*map[string]int32)(fieldPtr) = ctx.ReadStringInt32Map(RefModeNullOnly, false)
+			*(*map[string]int32)(fieldPtr) = ctx.ReadStringInt32Map(field.RefMode, false)
 			return
 		case ConcreteTypeStringIntMap:
 			if field.RefMode == RefModeTracking {
 				break
 			}
-			*(*map[string]int)(fieldPtr) = ctx.ReadStringIntMap(RefModeNullOnly, false)
+			*(*map[string]int)(fieldPtr) = ctx.ReadStringIntMap(field.RefMode, false)
 			return
 		case ConcreteTypeStringFloat64Map:
 			if field.RefMode == RefModeTracking {
 				break
 			}
-			*(*map[string]float64)(fieldPtr) = ctx.ReadStringFloat64Map(RefModeNullOnly, false)
+			*(*map[string]float64)(fieldPtr) = ctx.ReadStringFloat64Map(field.RefMode, false)
 			return
 		case ConcreteTypeStringBoolMap:
 			if field.RefMode == RefModeTracking {
 				break
 			}
-			*(*map[string]bool)(fieldPtr) = ctx.ReadStringBoolMap(RefModeNullOnly, false)
+			*(*map[string]bool)(fieldPtr) = ctx.ReadStringBoolMap(field.RefMode, false)
 			return
 		case ConcreteTypeIntIntMap:
 			if field.RefMode == RefModeTracking {
 				break
 			}
-			*(*map[int]int)(fieldPtr) = ctx.ReadIntIntMap(RefModeNullOnly, false)
+			*(*map[int]int)(fieldPtr) = ctx.ReadIntIntMap(field.RefMode, false)
 			return
 		}
 	}
@@ -1041,16 +1077,28 @@ func (s *structSerializer) initFieldsFromTypeResolver(typeResolver *TypeResolver
 		if fieldTypeId == 0 {
 			fieldTypeId = typeIdFromKind(fieldType)
 		}
-		// Calculate nullable flag to match buildFieldDefs logic in type_def.go
-		// This ensures writer and reader use the same field ordering and ref mode
-		nullableFlag := nullable(fieldType)
+		// Calculate nullable flag for serialization:
+		// - Pointer types (*T): can hold nil → nullable=true by default
+		// - Slices, maps, interfaces: can hold nil → nullable=true by default
+		// - Primitives (int32, bool, etc.): cannot be nil → nullable=false
+		// - Can be overridden by explicit fory tag
+		// This ensures writer and reader use the same field ordering and ref mode,
+		// and is consistent with computeHash fingerprint calculation.
 		internalId := TypeId(fieldTypeId & 0xFF)
-		if isUserDefinedType(int16(internalId)) || internalId == ENUM || internalId == NAMED_ENUM {
-			nullableFlag = true
-		}
-		// Override nullable flag if explicitly set in fory tag
+		isEnum := internalId == ENUM || internalId == NAMED_ENUM
+		// Default nullable based on whether Go type can be nil
+		// Pointer types, slices, maps, interfaces can hold nil → nullable=true by default
+		nullableFlag := fieldType.Kind() == reflect.Ptr ||
+			fieldType.Kind() == reflect.Slice ||
+			fieldType.Kind() == reflect.Map ||
+			fieldType.Kind() == reflect.Interface
 		if foryTag.NullableSet {
+			// Override nullable flag if explicitly set in fory tag
 			nullableFlag = foryTag.Nullable
+		}
+		// Primitives are never nullable, regardless of tag
+		if isNonNullablePrimitiveKind(fieldType.Kind()) && !isEnum {
+			nullableFlag = false
 		}
 
 		// Calculate ref tracking - use tag override if explicitly set
@@ -1060,8 +1108,11 @@ func (s *structSerializer) initFieldsFromTypeResolver(typeResolver *TypeResolver
 		}
 
 		// Pre-compute RefMode based on (possibly overridden) trackRef and nullable
+		// For pointer-to-struct fields, enable ref tracking when trackRef is enabled,
+		// regardless of nullable flag. This is necessary to detect circular references.
 		refMode := RefModeNone
-		if trackRef && nullableFlag {
+		isStructPointer := fieldType.Kind() == reflect.Ptr && fieldType.Elem().Kind() == reflect.Struct
+		if trackRef && (nullableFlag || isStructPointer) {
 			refMode = RefModeTracking
 		} else if nullableFlag {
 			refMode = RefModeNullOnly
@@ -1080,23 +1131,29 @@ func (s *structSerializer) initFieldsFromTypeResolver(typeResolver *TypeResolver
 				}
 			}
 		}
+		if DebugOutputEnabled() {
+			fmt.Printf("[fory-debug] initFieldsFromTypeResolver: field=%s type=%v staticId=%d refMode=%v nullableFlag=%v serializer=%T\n",
+				SnakeCase(field.Name), fieldType, staticId, refMode, nullableFlag, fieldSerializer)
+		}
 
 		fieldInfo := &FieldInfo{
-			Name:         SnakeCase(field.Name),
-			Offset:       field.Offset,
-			Type:         fieldType,
-			StaticId:     staticId,
-			TypeId:       fieldTypeId,
-			Serializer:   fieldSerializer,
-			Referencable: nullableFlag, // Use same logic as TypeDef's nullable flag for consistent ref handling
-			FieldIndex:   i,
-			RefMode:      refMode,
-			WriteType:    writeType,
-			HasGenerics:  isCollectionType(fieldTypeId), // Container fields have declared element types
-			TagID:        foryTag.ID,
-			HasForyTag:   foryTag.HasTag,
-			TagRefSet:    foryTag.RefSet,
-			TagRef:       foryTag.Ref,
+			Name:           SnakeCase(field.Name),
+			Offset:         field.Offset,
+			Type:           fieldType,
+			StaticId:       staticId,
+			TypeId:         fieldTypeId,
+			Serializer:     fieldSerializer,
+			Referencable:   nullableFlag, // Use same logic as TypeDef's nullable flag for consistent ref handling
+			FieldIndex:     i,
+			RefMode:        refMode,
+			WriteType:      writeType,
+			HasGenerics:    isCollectionType(fieldTypeId), // Container fields have declared element types
+			TagID:          foryTag.ID,
+			HasForyTag:     foryTag.HasTag,
+			TagRefSet:      foryTag.RefSet,
+			TagRef:         foryTag.Ref,
+			TagNullableSet: foryTag.NullableSet,
+			TagNullable:    foryTag.Nullable,
 		}
 		fields = append(fields, fieldInfo)
 		fieldNames = append(fieldNames, fieldInfo.Name)
@@ -1145,7 +1202,12 @@ func (s *structSerializer) groupFields() {
 	for _, field := range s.fields {
 		// Fields with non-primitive serializers (NAMED_ENUM, NAMED_STRUCT, etc.)
 		// must go to remainingFields to use their serializer's type info writing
-		if fieldHasNonPrimitiveSerializer(field) {
+		hasNonPrimitive := fieldHasNonPrimitiveSerializer(field)
+		if DebugOutputEnabled() {
+			fmt.Printf("[fory-debug] groupFields: field=%s TypeId=%d internalId=%d hasNonPrimitive=%v\n",
+				field.Name, field.TypeId, field.TypeId&0xFF, hasNonPrimitive)
+		}
+		if hasNonPrimitive {
 			s.remainingFields = append(s.remainingFields, field)
 		} else if isFixedSizePrimitive(field.StaticId, field.Referencable) {
 			// Compute FixedSize and WriteOffset for this field
@@ -1179,12 +1241,11 @@ func (s *structSerializer) initFieldsFromDefsWithResolver(typeResolver *TypeReso
 			}
 			// Get TypeId from FieldType's TypeId method
 			fieldTypeId := def.fieldType.TypeId()
-			referencable := fieldNeedWriteRef(def.fieldType.TypeId(), def.nullable)
 			// Pre-compute RefMode based on trackRef and FieldDef flags
 			refMode := RefModeNone
 			if def.trackingRef {
 				refMode = RefModeTracking
-			} else if referencable || def.nullable {
+			} else if def.nullable {
 				refMode = RefModeNullOnly
 			}
 			// Pre-compute WriteType: true for struct fields in compatible mode
@@ -1209,7 +1270,7 @@ func (s *structSerializer) initFieldsFromDefsWithResolver(typeResolver *TypeReso
 				StaticId:     staticId,
 				TypeId:       fieldTypeId,
 				Serializer:   fieldSerializer,
-				Referencable: referencable, // Use remote nullable flag
+				Referencable: def.nullable, // Use remote nullable flag
 				FieldIndex:   -1,           // Mark as non-existent field to discard data
 				FieldDef:     def,          // Save original FieldDef for skipping
 				RefMode:      refMode,
@@ -1454,12 +1515,11 @@ func (s *structSerializer) initFieldsFromDefsWithResolver(typeResolver *TypeReso
 
 		// Get TypeId from FieldType's TypeId method
 		fieldTypeId := def.fieldType.TypeId()
-		referencable := fieldNeedWriteRef(def.fieldType.TypeId(), def.nullable)
 		// Pre-compute RefMode based on FieldDef flags (trackingRef and nullable)
 		refMode := RefModeNone
 		if def.trackingRef {
 			refMode = RefModeTracking
-		} else if referencable || def.nullable {
+		} else if def.nullable {
 			refMode = RefModeNullOnly
 		}
 		// Pre-compute WriteType: true for struct fields in compatible mode
@@ -1490,7 +1550,7 @@ func (s *structSerializer) initFieldsFromDefsWithResolver(typeResolver *TypeReso
 			StaticId:     staticId,
 			TypeId:       fieldTypeId,
 			Serializer:   fieldSerializer,
-			Referencable: referencable, // Use remote nullable flag
+			Referencable: def.nullable, // Use remote nullable flag
 			FieldIndex:   fieldIndex,
 			FieldDef:     def, // Save original FieldDef for skipping
 			RefMode:      refMode,
@@ -1730,9 +1790,16 @@ func (s *structSerializer) computeHash() int32 {
 			}
 		}
 
-		// Determine nullable flag based on field type
-		// Use the same logic as codegen for consistency
-		nullable := true
+		// Determine nullable flag for xlang compatibility:
+		// - Default: false for ALL fields (xlang default - aligned with all languages)
+		// - Primitives are always non-nullable
+		// - Can be overridden by explicit fory tag
+		nullable := false // Default to nullable=false for xlang mode
+		if field.TagNullableSet {
+			// Use explicit tag value if set
+			nullable = field.TagNullable
+		}
+		// Primitives are never nullable, regardless of tag
 		if isNonNullablePrimitiveKind(field.Type.Kind()) && !isEnumField {
 			nullable = false
 		}

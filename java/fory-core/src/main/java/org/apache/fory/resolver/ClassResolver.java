@@ -35,8 +35,6 @@ import java.io.Externalizable;
 import java.io.IOException;
 import java.io.Serializable;
 import java.lang.invoke.SerializedLambda;
-import java.lang.reflect.Field;
-import java.lang.reflect.Member;
 import java.lang.reflect.Type;
 import java.math.BigDecimal;
 import java.math.BigInteger;
@@ -64,7 +62,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
-import java.util.SortedMap;
 import java.util.TimeZone;
 import java.util.TreeMap;
 import java.util.TreeSet;
@@ -146,7 +143,6 @@ import org.apache.fory.serializer.scala.SingletonObjectSerializer;
 import org.apache.fory.serializer.shim.ProtobufDispatcher;
 import org.apache.fory.serializer.shim.ShimDispatcher;
 import org.apache.fory.type.Descriptor;
-import org.apache.fory.type.DescriptorBuilder;
 import org.apache.fory.type.DescriptorGrouper;
 import org.apache.fory.type.GenericType;
 import org.apache.fory.type.TypeUtils;
@@ -1213,63 +1209,15 @@ public class ClassResolver extends TypeResolver {
     }
   }
 
+  // Invoked by fory JIT.
   @Override
-  public List<Descriptor> getFieldDescriptors(Class<?> clz, boolean searchParent) {
-    SortedMap<Member, Descriptor> allDescriptors = getAllDescriptorsMap(clz, searchParent);
-    List<Descriptor> result = new ArrayList<>(allDescriptors.size());
-
-    Map<Member, Descriptor>[] newDescriptors = new Map[] {null};
-
-    allDescriptors.forEach(
-        (member, descriptor) -> {
-          if (!(member instanceof Field)) {
-            return;
-          }
-
-          boolean globalRefTracking = fory.trackingRef();
-          boolean hasForyField = descriptor.getForyField() != null;
-          // Compute the final isTrackingRef value:
-          // 1. If global ref tracking is enabled and no @ForyField, use global setting
-          // 2. If @ForyField(ref=true) is set, use that (but can be overridden if global is off)
-          // 3. Additionally, check if the type actually supports ref tracking
-          boolean wantsRefTracking =
-              (globalRefTracking && !hasForyField)
-                  || (hasForyField && descriptor.isTrackingRef() && globalRefTracking);
-          // Compute the final tracking: type must support refs AND user/global wants tracking
-          boolean finalTrackingRef = wantsRefTracking && needToWriteRef(descriptor.getTypeRef());
-          boolean needsUpdate = finalTrackingRef != descriptor.isTrackingRef();
-
-          if (needsUpdate) {
-            if (newDescriptors[0] == null) {
-              newDescriptors[0] = new HashMap<>();
-            }
-            Descriptor newDescriptor =
-                new DescriptorBuilder(descriptor).trackingRef(finalTrackingRef).build();
-            result.add(newDescriptor);
-            newDescriptors[0].put(member, newDescriptor);
-          } else {
-            result.add(descriptor);
-          }
-        });
-
-    if (newDescriptors[0] != null) {
-      SortedMap<Member, Descriptor> allDescriptorsCopy = new TreeMap<>(allDescriptors);
-      allDescriptorsCopy.putAll(newDescriptors[0]);
-      extRegistry.descriptorsCache.put(Tuple2.of(clz, searchParent), allDescriptorsCopy);
+  public ClassInfo getClassInfo(Class<?> cls) {
+    ClassInfo classInfo = classInfoMap.get(cls);
+    if (classInfo == null || classInfo.serializer == null) {
+      addSerializer(cls, createSerializer(cls));
+      classInfo = classInfoMap.get(cls);
     }
-    return result;
-  }
-
-  // thread safe
-  public SortedMap<Member, Descriptor> getAllDescriptorsMap(Class<?> clz, boolean searchParent) {
-    // when jit thread query this, it is already built by serialization main thread.
-    return extRegistry.descriptorsCache.computeIfAbsent(
-        Tuple2.of(clz, searchParent), t -> Descriptor.getAllDescriptorsMap(clz, searchParent));
-  }
-
-  public void updateDescriptorsCache(
-      Class<?> clz, boolean searchParent, SortedMap<Member, Descriptor> descriptors) {
-    extRegistry.descriptorsCache.put(Tuple2.of(clz, searchParent), descriptors);
+    return classInfo;
   }
 
   public ClassInfo getClassInfo(short classId) {
@@ -1278,17 +1226,6 @@ public class ClassResolver extends TypeResolver {
     if (classInfo.serializer == null) {
       addSerializer(classInfo.cls, createSerializer(classInfo.cls));
       classInfo = classInfoMap.get(classInfo.cls);
-    }
-    return classInfo;
-  }
-
-  // Invoked by fory JIT.
-  @Override
-  public ClassInfo getClassInfo(Class<?> cls) {
-    ClassInfo classInfo = classInfoMap.get(cls);
-    if (classInfo == null || classInfo.serializer == null) {
-      addSerializer(cls, createSerializer(cls));
-      classInfo = classInfoMap.get(cls);
     }
     return classInfo;
   }
@@ -1934,6 +1871,53 @@ public class ClassResolver extends TypeResolver {
     extRegistry.codeGeneratorMap.put(Arrays.asList(loaders), codeGenerator);
   }
 
+  /**
+   * Normalize type name for consistent ordering between serialization and deserialization.
+   * Collection subtypes (List, Set, etc.) are normalized to "java.util.Collection". Map subtypes
+   * are normalized to "java.util.Map". This ensures fields have the same order regardless of
+   * whether the peer has the field locally.
+   */
+  private String getNormalizedTypeName(Descriptor d) {
+    Class<?> rawType = d.getRawType();
+    if (rawType != null) {
+      if (isCollection(rawType)) {
+        return "java.util.Collection";
+      }
+      if (isMap(rawType)) {
+        return "java.util.Map";
+      }
+    }
+    return d.getTypeName();
+  }
+
+  /**
+   * Creates a comparator for sorting descriptors by normalized type name and field name/id. This
+   * comparator normalizes Collection/Map types to ensure consistent field ordering between
+   * serialization and deserialization, even when peers have different Collection/Map subtypes.
+   */
+  public Comparator<Descriptor> createTypeAndNameComparator() {
+    return (d1, d2) -> {
+      // sort by type so that we can hit class info cache more possibly.
+      // sort by field id/name to fix order if type is same.
+      // Use normalized type name so that Collection/Map subtypes have consistent order
+      // between processes even if the field doesn't exist in peer (e.g., List vs Collection).
+      int c = getNormalizedTypeName(d1).compareTo(getNormalizedTypeName(d2));
+      if (c == 0) {
+        c = DescriptorGrouper.getFieldSortKey(d1).compareTo(DescriptorGrouper.getFieldSortKey(d2));
+        if (c == 0) {
+          // Field name duplicate in super/child classes.
+          c = d1.getDeclaringClass().compareTo(d2.getDeclaringClass());
+          if (c == 0) {
+            // Final tie-breaker: use actual field name to distinguish fields with same tag ID.
+            // This ensures TreeSet never treats different fields as duplicates.
+            c = d1.getName().compareTo(d2.getName());
+          }
+        }
+      }
+      return c;
+    };
+  }
+
   @Override
   public DescriptorGrouper createDescriptorGrouper(
       Collection<Descriptor> descriptors,
@@ -1946,7 +1930,7 @@ public class ClassResolver extends TypeResolver {
             descriptorUpdator,
             fory.compressInt(),
             fory.compressLong(),
-            DescriptorGrouper.COMPARATOR_BY_TYPE_AND_NAME)
+            createTypeAndNameComparator())
         .sort();
   }
 

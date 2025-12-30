@@ -54,6 +54,8 @@ import org.apache.fory.codegen.Expression.Reference;
 import org.apache.fory.codegen.Expression.ReplaceStub;
 import org.apache.fory.codegen.Expression.StaticInvoke;
 import org.apache.fory.codegen.ExpressionVisitor;
+import org.apache.fory.logging.Logger;
+import org.apache.fory.logging.LoggerFactory;
 import org.apache.fory.memory.Platform;
 import org.apache.fory.reflect.ObjectCreators;
 import org.apache.fory.reflect.TypeRef;
@@ -62,6 +64,7 @@ import org.apache.fory.serializer.PrimitiveSerializers.LongSerializer;
 import org.apache.fory.serializer.SerializationUtils;
 import org.apache.fory.type.Descriptor;
 import org.apache.fory.type.DescriptorGrouper;
+import org.apache.fory.type.TypeUtils;
 import org.apache.fory.util.Preconditions;
 import org.apache.fory.util.function.SerializableSupplier;
 import org.apache.fory.util.record.RecordUtils;
@@ -81,6 +84,8 @@ import org.apache.fory.util.record.RecordUtils;
  * @see ObjectCodecOptimizer for code stats and split heuristics.
  */
 public class ObjectCodecBuilder extends BaseObjectCodecBuilder {
+  private static final Logger LOG = LoggerFactory.getLogger(ObjectCodecBuilder.class);
+
   private final Literal classVersionHash;
   protected ObjectCodecOptimizer objectCodecOptimizer;
   protected Map<String, Integer> recordReversedMapping;
@@ -101,6 +106,19 @@ public class ObjectCodecBuilder extends BaseObjectCodecBuilder {
     }
     Collection<Descriptor> p = descriptors;
     DescriptorGrouper grouper = typeResolver(r -> r.createDescriptorGrouper(p, false));
+    if (org.apache.fory.util.Utils.debugOutputEnabled()) {
+      LOG.info("========== sorted descriptors for {} ==========", beanClass.getSimpleName());
+      List<Descriptor> sortedDescriptors = grouper.getSortedDescriptors();
+      for (Descriptor d : sortedDescriptors) {
+        LOG.info(
+            "  {} -> {}, ref {}, nullable {}, morphic {}",
+            d.getName(),
+            d.getTypeName(),
+            d.isTrackingRef(),
+            d.isNullable(),
+            d.isFinalField());
+      }
+    }
     classVersionHash =
         fory.checkClassVersion()
             ? new Literal(ObjectSerializer.computeStructHash(fory, grouper), PRIMITIVE_INT_TYPE)
@@ -340,7 +358,7 @@ public class ObjectCodecBuilder extends BaseObjectCodecBuilder {
       int acc = 0;
       boolean compressStarted = false;
       for (Descriptor descriptor : group) {
-        Class<?> clz = descriptor.getRawType();
+        Class<?> clz = TypeUtils.unwrap(descriptor.getRawType());
         Preconditions.checkArgument(isPrimitive(clz));
         // `bean` will be replaced by `Reference` to cut-off expr dependency.
         Expression fieldValue = getFieldValue(bean, descriptor);
@@ -419,7 +437,7 @@ public class ObjectCodecBuilder extends BaseObjectCodecBuilder {
   private int getTotalSizeOfPrimitives(List<List<Descriptor>> primitiveGroups) {
     return primitiveGroups.stream()
         .flatMap(Collection::stream)
-        .mapToInt(d -> getSizeOfPrimitiveType(d.getRawType()))
+        .mapToInt(d -> getSizeOfPrimitiveType(TypeUtils.unwrap(d.getRawType())))
         .sum();
   }
 
@@ -700,7 +718,7 @@ public class ObjectCodecBuilder extends BaseObjectCodecBuilder {
       boolean compressStarted = false;
       for (Descriptor descriptor : group) {
         TypeRef<?> type = descriptor.getTypeRef();
-        Class<?> clz = getRawType(type);
+        Class<?> clz = TypeUtils.unwrap(getRawType(type));
         Preconditions.checkArgument(isPrimitive(clz));
         Expression fieldValue;
         if (clz == byte.class) {

@@ -19,8 +19,6 @@
 
 package org.apache.fory.serializer;
 
-import static org.apache.fory.type.TypeUtils.getRawType;
-
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
@@ -49,6 +47,8 @@ import org.apache.fory.type.DescriptorGrouper;
 import org.apache.fory.type.FinalObjectTypeStub;
 import org.apache.fory.type.GenericType;
 import org.apache.fory.type.Generics;
+import org.apache.fory.type.TypeUtils;
+import org.apache.fory.util.StringUtils;
 import org.apache.fory.util.record.RecordComponent;
 import org.apache.fory.util.record.RecordInfo;
 import org.apache.fory.util.record.RecordUtils;
@@ -127,11 +127,11 @@ public abstract class AbstractObjectSerializer<T> extends Serializer<T> {
     Object fieldValue;
     boolean nullable = fieldInfo.nullable;
     if (fieldInfo.genericType.getCls().isEnum()) {
-      if (buffer.readByte() == Fory.NULL_FLAG) {
+      // Only read null flag when the field is nullable (for xlang compatibility)
+      if (nullable && buffer.readByte() == Fory.NULL_FLAG) {
         return null;
-      } else {
-        return fieldInfo.genericType.getSerializer(binding.typeResolver).read(buffer);
       }
+      return fieldInfo.genericType.getSerializer(binding.typeResolver).read(buffer);
     } else if (fieldInfo.trackingRef) {
       fieldValue = binding.readRef(buffer, fieldInfo);
     } else {
@@ -272,6 +272,11 @@ public abstract class AbstractObjectSerializer<T> extends Serializer<T> {
    */
   static boolean writeBasicObjectFieldValueFailed(
       Fory fory, MemoryBuffer buffer, Object fieldValue, short classId) {
+    if (fieldValue == null) {
+      throw new IllegalArgumentException(
+          "Non-nullable field has null value. In xlang mode, fields are non-nullable by default. "
+              + "Use @ForyField(nullable=true) to allow null values.");
+    }
     if (!fory.isBasicTypesRefIgnored()) {
       return true; // let common path handle this.
     }
@@ -517,6 +522,18 @@ public abstract class AbstractObjectSerializer<T> extends Serializer<T> {
       default:
         return true;
     }
+  }
+
+  static boolean readPrimitiveNullableFieldValueFailed(
+      Fory fory,
+      MemoryBuffer buffer,
+      Object targetObject,
+      FieldAccessor fieldAccessor,
+      short classId) {
+    if (buffer.readByte() == Fory.NULL_FLAG) {
+      return false;
+    }
+    return readPrimitiveFieldValueFailed(fory, buffer, targetObject, fieldAccessor, classId);
   }
 
   /**
@@ -988,12 +1005,19 @@ public abstract class AbstractObjectSerializer<T> extends Serializer<T> {
     protected final FieldConverter<?> fieldConverter;
     protected boolean nullable;
     protected boolean trackingRef;
+    protected final boolean isPrimitive;
 
     private InternalFieldInfo(Fory fory, Descriptor d, short classId) {
       this.typeRef = d.getTypeRef();
       this.classId = classId;
       this.qualifiedFieldName = d.getDeclaringClass() + "." + d.getName();
-      this.fieldAccessor = d.getField() != null ? FieldAccessor.createAccessor(d.getField()) : null;
+      if (d.getField() != null) {
+        this.fieldAccessor = FieldAccessor.createAccessor(d.getField());
+        isPrimitive = d.getField().getType().isPrimitive();
+      } else {
+        this.fieldAccessor = null;
+        isPrimitive = d.getTypeRef().getRawType().isPrimitive();
+      }
       fieldConverter = d.getFieldConverter();
       nullable = d.isNullable();
       // descriptor.isTrackingRef() already includes the needToWriteRef check
@@ -1002,13 +1026,14 @@ public abstract class AbstractObjectSerializer<T> extends Serializer<T> {
 
     @Override
     public String toString() {
+      String[] rsplit = StringUtils.rsplit(qualifiedFieldName, ".", 1);
       return "InternalFieldInfo{"
-          + "typeRef="
+          + "fieldName='"
+          + rsplit[1]
+          + ", typeRef="
           + typeRef
           + ", classId="
           + classId
-          + ", qualifiedFieldName='"
-          + qualifiedFieldName
           + ", fieldAccessor="
           + fieldAccessor
           + ", nullable="
@@ -1021,7 +1046,7 @@ public abstract class AbstractObjectSerializer<T> extends Serializer<T> {
     final ClassInfo classInfo;
 
     private FinalTypeField(Fory fory, Descriptor d) {
-      super(fory, d, getRegisteredClassId(fory, d.getTypeRef().getRawType()));
+      super(fory, d, getRegisteredClassId(fory, d));
       // invoke `copy` to avoid ObjectSerializer construct clear serializer by `clearSerializer`.
       if (typeRef.getRawType() == FinalObjectTypeStub.class) {
         // `FinalObjectTypeStub` has no fields, using its `classInfo`
@@ -1046,7 +1071,7 @@ public abstract class AbstractObjectSerializer<T> extends Serializer<T> {
     final ClassInfo containerClassInfo;
 
     private GenericTypeField(Fory fory, Descriptor d) {
-      super(fory, d, getRegisteredClassId(fory, getRawType(d.getTypeRef())));
+      super(fory, d, getRegisteredClassId(fory, d));
       // TODO support generics <T> in Pojo<T>, see ComplexObjectSerializer.getGenericTypes
       ClassResolver classResolver = fory.getClassResolver();
       GenericType t = classResolver.buildGenericType(typeRef);
@@ -1076,8 +1101,11 @@ public abstract class AbstractObjectSerializer<T> extends Serializer<T> {
 
     @Override
     public String toString() {
+      String[] rsplit = StringUtils.rsplit(qualifiedFieldName, ".", 1);
       return "GenericTypeField{"
-          + "genericType="
+          + "fieldName="
+          + rsplit[1]
+          + ", genericType="
           + genericType
           + ", classInfoHolder="
           + classInfoHolder
@@ -1087,17 +1115,18 @@ public abstract class AbstractObjectSerializer<T> extends Serializer<T> {
           + typeRef
           + ", classId="
           + classId
-          + ", qualifiedFieldName='"
-          + qualifiedFieldName
-          + ", fieldAccessor="
-          + fieldAccessor
           + ", nullable="
           + nullable
           + '}';
     }
   }
 
-  private static short getRegisteredClassId(Fory fory, Class<?> cls) {
+  private static short getRegisteredClassId(Fory fory, Descriptor d) {
+    Field field = d.getField();
+    Class<?> cls = d.getTypeRef().getRawType();
+    if (TypeUtils.unwrap(cls).isPrimitive() && field != null) {
+      return fory.getClassResolver().getRegisteredClassId(field.getType());
+    }
     Short classId = fory.getClassResolver().getRegisteredClassId(cls);
     return classId == null ? ClassResolver.NO_CLASS_ID : classId;
   }

@@ -24,18 +24,24 @@ import os
 import typing
 
 import pyfory
-import pytest
+
+try:
+    import pytest
+except ImportError:
+    pytest = None
 from dataclasses import dataclass
 from pyfory.util import lazy_import
 from typing import List, Dict, Any
 
+
+import numpy as np
 
 pa = lazy_import("pyarrow")
 
 
 def debug_print(*params):
     """print params if debug is needed."""
-    # print(*params)
+    print(*params)
 
 
 def to_dict(obj):
@@ -52,10 +58,11 @@ def to_dict(obj):
 
 def cross_language_test(test_func):
     env_key = "ENABLE_CROSS_LANGUAGE_TESTS"
-    test_func = pytest.mark.skipif(
-        env_key not in os.environ,
-        reason=f"Pass {env_key} to enable cross-language tests",
-    )(test_func)
+    if pytest is not None:
+        test_func = pytest.mark.skipif(
+            env_key not in os.environ,
+            reason=f"Pass {env_key} to enable cross-language tests",
+        )(test_func)
     return test_func
 
 
@@ -325,8 +332,6 @@ def test_cross_language_serializer(data_file_path):
         assert _deserialize_and_append(fory, buffer, objects) == set_
 
         # test primitive arrays
-        import numpy as np
-
         np.testing.assert_array_equal(
             _deserialize_and_append(fory, buffer, objects),
             np.array([True, False], dtype=np.bool_),
@@ -549,6 +554,7 @@ def struct_round_back(data_file_path, fory, obj1):
     with open(data_file_path, "rb") as f:
         data_bytes = f.read()
     debug_print(f"len {len(data_bytes)}")
+    debug_print(f"first 100 bytes: {data_bytes[:100].hex()}")
     new_obj = fory.deserialize(data_bytes)
     debug_print(new_obj)
     assert new_obj == obj1, f"new_obj {new_obj}\n expected {obj1}"

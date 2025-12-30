@@ -42,8 +42,7 @@ import org.apache.fory.annotation.Internal;
 import org.apache.fory.collection.Tuple2;
 import org.apache.fory.memory.MemoryBuffer;
 import org.apache.fory.memory.MemoryUtils;
-import org.apache.fory.meta.ClassDef.FieldInfo;
-import org.apache.fory.meta.ClassDef.FieldType;
+import org.apache.fory.meta.FieldTypes.FieldType;
 import org.apache.fory.reflect.ReflectionUtils;
 import org.apache.fory.resolver.ClassResolver;
 import org.apache.fory.resolver.TypeResolver;
@@ -97,7 +96,7 @@ public class ClassDefEncoder {
     for (Field field : fields) {
       // Check for @ForyField annotation to extract tag ID
       ForyField foryField = field.getAnnotation(ForyField.class);
-      FieldType fieldType = ClassDef.buildFieldType(resolver, field);
+      FieldType fieldType = FieldTypes.buildFieldType(resolver, field);
 
       FieldInfo fieldInfo;
       if (foryField != null) {
@@ -140,7 +139,7 @@ public class ClassDefEncoder {
   static ClassDef buildClassDefWithFieldInfos(
       ClassResolver classResolver,
       Class<?> type,
-      List<ClassDef.FieldInfo> fieldInfos,
+      List<FieldInfo> fieldInfos,
       boolean hasFieldsMeta) {
     Map<String, List<FieldInfo>> classLayers = getClassFields(type, fieldInfos);
     fieldInfos = new ArrayList<>(fieldInfos.size());
@@ -284,6 +283,7 @@ public class ClassDefEncoder {
       // `3 bits size + 2 bits field name encoding + polymorphism flag + nullability flag + ref
       // tracking flag`
       int header = ((fieldType.isMonomorphic() ? 1 : 0) << 2);
+      header |= ((fieldType.nullable() ? 1 : 0) << 1);
       header |= ((fieldType.trackingRef() ? 1 : 0));
       // Encoding `UTF8/ALL_TO_LOWER_SPECIAL/LOWER_UPPER_DIGIT_SPECIAL/TAG_ID`
       MetaString metaString = Encoders.encodeFieldName(fieldInfo.getFieldName());

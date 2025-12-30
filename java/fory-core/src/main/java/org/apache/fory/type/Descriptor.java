@@ -87,16 +87,19 @@ public class Descriptor {
   private final Field field;
   private final Method readMethod;
   private final Method writeMethod;
-  private ForyField foryField;
+  private final ForyField foryField;
   private boolean nullable;
   // trackingRef should only be true if explicitly set to true via @ForyField(ref=true)
   // If no annotation or ref not specified, trackingRef stays false and type-based tracking applies
-  private boolean trackingRef;
+  private final boolean trackingRef;
   private FieldConverter<?> fieldConverter;
 
   public Descriptor(Field field, TypeRef<?> typeRef, Method readMethod, Method writeMethod) {
     this.field = field;
-    this.typeName = field.getType().getName();
+    // Use typeRef.getType().getTypeName() to include generic type info (e.g., Collection<Object>)
+    // This ensures consistent typeName between serialization and deserialization.
+    // For raw collections/maps, typeRef will have Object as element type.
+    this.typeName = typeRef.getType().getTypeName();
     this.name = field.getName();
     this.modifier = field.getModifiers();
     this.declaringClass = field.getDeclaringClass().getName();
@@ -111,9 +114,15 @@ public class Descriptor {
   }
 
   public Descriptor(
-      TypeRef<?> typeRef, String name, int modifier, String declaringClass, boolean trackingRef) {
+      TypeRef<?> typeRef,
+      String typeName,
+      String name,
+      int modifier,
+      String declaringClass,
+      boolean trackingRef,
+      boolean nullable) {
     this.field = null;
-    this.typeName = typeRef.getRawType().getName();
+    this.typeName = typeName;
     this.name = name;
     this.modifier = modifier;
     this.declaringClass = declaringClass;
@@ -121,19 +130,22 @@ public class Descriptor {
     this.readMethod = null;
     this.writeMethod = null;
     this.foryField = null;
-    this.nullable = !typeRef.isPrimitive();
+    this.nullable = nullable;
     this.trackingRef = trackingRef;
   }
 
   private Descriptor(Field field, Method readMethod) {
     this.field = field;
-    this.typeName = field.getType().getName();
+    // Compute typeRef from field's generic type to include generic info
+    this.typeRef = TypeRef.of(field.getGenericType());
+    // Use typeRef.getType().getTypeName() to include generic type info (e.g., Collection<Object>)
+    // This ensures consistent typeName between serialization and deserialization.
+    this.typeName = typeRef.getType().getTypeName();
     this.name = field.getName();
     this.modifier = field.getModifiers();
     this.declaringClass = field.getDeclaringClass().getName();
     this.readMethod = readMethod;
     this.writeMethod = null;
-    this.typeRef = null;
     this.foryField = this.field.getAnnotation(ForyField.class);
     if (!field.getType().isPrimitive()) {
       this.nullable = foryField == null || foryField.nullable();
@@ -143,13 +155,15 @@ public class Descriptor {
 
   private Descriptor(Method readMethod) {
     this.field = null;
-    this.typeName = readMethod.getReturnType().getName();
+    // Compute typeRef first to include generic info
+    this.typeRef = TypeRef.of(readMethod.getGenericReturnType());
+    // Use typeRef.getType().getTypeName() for consistent type name with generics
+    this.typeName = typeRef.getType().getTypeName();
     this.name = readMethod.getName();
     this.modifier = readMethod.getModifiers();
     this.declaringClass = readMethod.getDeclaringClass().getName();
     this.readMethod = readMethod;
     this.writeMethod = null;
-    this.typeRef = TypeRef.of(readMethod.getGenericReturnType());
     this.foryField = readMethod.getAnnotation(ForyField.class);
     if (!readMethod.getReturnType().isPrimitive()) {
       this.nullable = foryField == null || foryField.nullable();
@@ -168,9 +182,10 @@ public class Descriptor {
     this.writeMethod = builder.writeMethod;
     this.trackingRef = builder.trackingRef;
     this.foryField = this.field == null ? null : this.field.getAnnotation(ForyField.class);
-    if (!typeRef.isPrimitive()) {
-      this.nullable = foryField == null || foryField.nullable();
-    }
+    // Use builder.nullable directly - this is set by DescriptorBuilder.nullable()
+    // and should be respected, especially for xlang compatible mode where remote
+    // TypeDef's nullable flag may differ from local field's nullable
+    this.nullable = builder.nullable;
     this.type = builder.type;
     this.fieldConverter = builder.fieldConverter;
   }
@@ -250,11 +265,7 @@ public class Descriptor {
   public Class<?> getRawType() {
     Class<?> type = this.type;
     if (type == null) {
-      if (field != null) {
-        return this.type = field.getType();
-      } else {
-        return this.type = TypeUtils.getRawType(getTypeRef());
-      }
+      return this.type = TypeUtils.getRawType(getTypeRef());
     }
     return Objects.requireNonNull(type);
   }
@@ -271,15 +282,11 @@ public class Descriptor {
     return fieldConverter;
   }
 
-  public void setFieldConverter(FieldConverter<?> fieldConverter) {
-    this.fieldConverter = fieldConverter;
-  }
-
   @Override
   public String toString() {
     final StringBuilder sb = new StringBuilder("Descriptor{");
-    sb.append("typeName=").append(typeName);
-    sb.append(", name=").append(name);
+    sb.append("name=").append(name);
+    sb.append(", typeName=").append(typeName);
     sb.append(", modifier=").append(modifier);
     if (field != null) {
       sb.append(", declaringClass=").append(field.getDeclaringClass().getSimpleName());
@@ -380,10 +387,6 @@ public class Descriptor {
 
   public static Map<String, List<Member>> getSortedDuplicatedMembers(Class<?> cls) {
     return sortedDuplicatedMembers.get(cls);
-  }
-
-  public static boolean hasDuplicateNameFields(Class<?> clz) {
-    return !getSortedDuplicatedMembers(clz).isEmpty();
   }
 
   /**

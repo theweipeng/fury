@@ -431,16 +431,27 @@ func buildFieldDefs(fory *Fory, value reflect.Value) ([]FieldDef, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to build field type for field %s: %w", fieldName, err)
 		}
-		// Treat object/enum fields as nullable to match Java's xlang TypeDef encoding.
-		nullableFlag := nullable(field.Type)
+		// Determine nullable based on Go type capability:
+		// - Pointer types (*T): can hold nil → nullable=true by default
+		// - Slices, maps, interfaces: can hold nil → nullable=true by default
+		// - Primitive types (int32, bool, etc.): cannot be nil → nullable=false
+		// Can be overridden by explicit fory tag
 		typeId := ft.TypeId()
 		internalId := TypeId(typeId & 0xFF)
-		if isUserDefinedType(int16(internalId)) || internalId == ENUM || internalId == NAMED_ENUM {
-			nullableFlag = true
-		}
+		isEnumField := internalId == ENUM || internalId == NAMED_ENUM
+		// Default nullable based on whether Go type can be nil
+		// Pointer types, slices, maps, interfaces can hold nil → nullable=true by default
+		nullableFlag := field.Type.Kind() == reflect.Ptr ||
+			field.Type.Kind() == reflect.Slice ||
+			field.Type.Kind() == reflect.Map ||
+			field.Type.Kind() == reflect.Interface
 		// Override nullable flag if explicitly set in fory tag
 		if foryTag.NullableSet {
 			nullableFlag = foryTag.Nullable
+		}
+		// Primitives are never nullable, regardless of tag
+		if isNonNullablePrimitiveKind(field.Type.Kind()) && !isEnumField {
+			nullableFlag = false
 		}
 
 		// Calculate ref tracking - use tag override if explicitly set

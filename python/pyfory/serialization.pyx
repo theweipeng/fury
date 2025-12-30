@@ -1464,9 +1464,8 @@ cdef class Fory:
             ref_id = ref_resolver.try_preserve_ref_id(buffer)
             # indicates that the object is first read.
             if ref_id >= NOT_NULL_VALUE_FLAG:
-                o = self.xread_no_ref(
-                    buffer, serializer=serializer
-                )
+                # Don't push -1 here - try_preserve_ref_id already pushed ref_id
+                o = self._xread_no_ref_internal(buffer, serializer)
                 ref_resolver.set_read_object(ref_id, o)
                 return o
             else:
@@ -1480,6 +1479,17 @@ cdef class Fory:
 
     cpdef inline xread_no_ref(
             self, Buffer buffer, Serializer serializer=None):
+        if serializer is None:
+            serializer = self.type_resolver.read_typeinfo(buffer).serializer
+        # Push -1 to read_ref_ids so reference() can pop it and skip reference tracking
+        # This handles the case where xread_no_ref is called directly without xread_ref
+        if self.ref_resolver.ref_tracking:
+            self.ref_resolver.read_ref_ids.push_back(-1)
+        return self._xread_no_ref_internal(buffer, serializer)
+
+    cdef inline _xread_no_ref_internal(
+            self, Buffer buffer, Serializer serializer):
+        """Internal method to read without pushing to read_ref_ids."""
         if serializer is None:
             serializer = self.type_resolver.read_typeinfo(buffer).serializer
         self.inc_depth()
