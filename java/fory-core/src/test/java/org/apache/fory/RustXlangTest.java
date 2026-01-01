@@ -232,6 +232,28 @@ public class RustXlangTest extends XlangTestBase {
   }
 
   @Test
+  public void testNullableFieldSchemaConsistentNotNull() throws java.io.IOException {
+    super.testNullableFieldSchemaConsistentNotNull();
+  }
+
+  @Test
+  public void testNullableFieldSchemaConsistentNull() throws java.io.IOException {
+    super.testNullableFieldSchemaConsistentNull();
+  }
+
+  @Override
+  @Test
+  public void testNullableFieldCompatibleNotNull() throws java.io.IOException {
+    super.testNullableFieldCompatibleNotNull();
+  }
+
+  @Override
+  @Test
+  public void testNullableFieldCompatibleNull() throws java.io.IOException {
+    super.testNullableFieldCompatibleNull();
+  }
+
+  @Test
   public void testUnionXlang() throws java.io.IOException {
     super.testUnionXlang();
   }
