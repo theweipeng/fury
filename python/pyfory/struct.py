@@ -27,9 +27,7 @@ import typing
 from typing import List, Dict
 
 from pyfory.lib.mmh3 import hash_buffer
-from pyfory.type import (
-    TypeVisitor,
-    infer_field,
+from pyfory.types import (
     TypeId,
     int8,
     int16,
@@ -43,6 +41,10 @@ from pyfory.type import (
     get_primitive_type_size,
     is_polymorphic_type,
     is_primitive_type,
+)
+from pyfory.type_util import (
+    TypeVisitor,
+    infer_field,
     is_subclass,
     unwrap_optional,
 )
@@ -371,7 +373,7 @@ class DataClassSerializer(Serializer):
 
     def _compute_unwrapped_hints(self):
         """Compute unwrapped type hints once and cache."""
-        from pyfory.type import unwrap_optional
+        from pyfory.type_util import unwrap_optional
 
         return {field_name: unwrap_optional(hint)[0] for field_name, hint in self._type_hints.items()}
 
@@ -1130,8 +1132,8 @@ def group_fields(type_resolver, field_names, serializers, nullable_map=None):
         compress = id_ in {
             TypeId.INT32,
             TypeId.INT64,
-            TypeId.VAR_INT32,
-            TypeId.VAR_INT64,
+            TypeId.VAR32,
+            TypeId.VAR64,
         }
         # Sort by: compress flag, -size (largest first), -type_id (higher type ID first), field_name
         # Java sorts by size (largest first), then by primitive type ID (descending)
