@@ -154,8 +154,8 @@ func writeMapStringInt64(buf *ByteBuffer, m map[string]int64, hasGenerics bool) 
 		} else {
 			buf.WriteUint8(0)
 			buf.WriteUint8(uint8(chunkSize))
-			buf.WriteVaruint32Small7(uint32(STRING))    // key type
-			buf.WriteVaruint32Small7(uint32(VAR64)) // value type
+			buf.WriteVaruint32Small7(uint32(STRING))   // key type
+			buf.WriteVaruint32Small7(uint32(VARINT64)) // value type
 		}
 
 		count := 0
@@ -228,8 +228,8 @@ func writeMapStringInt32(buf *ByteBuffer, m map[string]int32, hasGenerics bool) 
 		} else {
 			buf.WriteUint8(0)
 			buf.WriteUint8(uint8(chunkSize))
-			buf.WriteVaruint32Small7(uint32(STRING))    // key type
-			buf.WriteVaruint32Small7(uint32(VAR32)) // value type
+			buf.WriteVaruint32Small7(uint32(STRING))   // key type
+			buf.WriteVaruint32Small7(uint32(VARINT32)) // value type
 		}
 
 		count := 0
@@ -302,8 +302,8 @@ func writeMapStringInt(buf *ByteBuffer, m map[string]int, hasGenerics bool) {
 		} else {
 			buf.WriteUint8(0)
 			buf.WriteUint8(uint8(chunkSize))
-			buf.WriteVaruint32Small7(uint32(STRING))    // key type
-			buf.WriteVaruint32Small7(uint32(VAR64)) // value type (int serialized as varint64)
+			buf.WriteVaruint32Small7(uint32(STRING))   // key type
+			buf.WriteVaruint32Small7(uint32(VARINT64)) // value type (int serialized as varint64)
 		}
 
 		count := 0
@@ -376,7 +376,7 @@ func writeMapStringFloat64(buf *ByteBuffer, m map[string]float64, hasGenerics bo
 		} else {
 			buf.WriteUint8(0)
 			buf.WriteUint8(uint8(chunkSize))
-			buf.WriteVaruint32Small7(uint32(STRING)) // key type
+			buf.WriteVaruint32Small7(uint32(STRING))  // key type
 			buf.WriteVaruint32Small7(uint32(FLOAT64)) // value type
 		}
 
@@ -529,8 +529,8 @@ func writeMapInt32Int32(buf *ByteBuffer, m map[int32]int32, hasGenerics bool) {
 		} else {
 			buf.WriteUint8(0)
 			buf.WriteUint8(uint8(chunkSize))
-			buf.WriteVaruint32Small7(uint32(VAR32)) // key type
-			buf.WriteVaruint32Small7(uint32(VAR32)) // value type
+			buf.WriteVaruint32Small7(uint32(VARINT32)) // key type
+			buf.WriteVaruint32Small7(uint32(VARINT32)) // value type
 		}
 
 		count := 0
@@ -603,8 +603,8 @@ func writeMapInt64Int64(buf *ByteBuffer, m map[int64]int64, hasGenerics bool) {
 		} else {
 			buf.WriteUint8(0)
 			buf.WriteUint8(uint8(chunkSize))
-			buf.WriteVaruint32Small7(uint32(VAR64)) // key type
-			buf.WriteVaruint32Small7(uint32(VAR64)) // value type
+			buf.WriteVaruint32Small7(uint32(VARINT64)) // key type
+			buf.WriteVaruint32Small7(uint32(VARINT64)) // value type
 		}
 
 		count := 0
@@ -677,8 +677,8 @@ func writeMapIntInt(buf *ByteBuffer, m map[int]int, hasGenerics bool) {
 		} else {
 			buf.WriteUint8(0)
 			buf.WriteUint8(uint8(chunkSize))
-			buf.WriteVaruint32Small7(uint32(VAR64)) // key type (int serialized as varint64)
-			buf.WriteVaruint32Small7(uint32(VAR64)) // value type
+			buf.WriteVaruint32Small7(uint32(VARINT64)) // key type (int serialized as varint64)
+			buf.WriteVaruint32Small7(uint32(VARINT64)) // value type
 		}
 
 		count := 0

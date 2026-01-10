@@ -32,28 +32,28 @@ const (
 	INT16 = 3
 	// INT32 Signed 32-bit little-endian integer
 	INT32 = 4
-	// VAR32 a 32-bit signed integer which uses fory var_int32 encoding
-	VAR32 = 5
+	// VARINT32 a 32-bit signed integer which uses fory var_int32 encoding
+	VARINT32 = 5
 	// INT64 Signed 64-bit little-endian integer
 	INT64 = 6
-	// VAR64 a 64-bit signed integer which uses fory PVL encoding
-	VAR64 = 7
-	// H64 a 64-bit signed integer which uses fory hybrid encoding
-	H64 = 8
+	// VARINT64 a 64-bit signed integer which uses fory PVL encoding
+	VARINT64 = 7
+	// TAGGED_INT64 a 64-bit signed integer which uses fory hybrid encoding
+	TAGGED_INT64 = 8
 	// UINT8 Unsigned 8-bit little-endian integer
 	UINT8 = 9
 	// UINT16 Unsigned 16-bit little-endian integer
 	UINT16 = 10
 	// UINT32 Unsigned 32-bit little-endian integer
 	UINT32 = 11
-	// VARU32 a 32-bit unsigned integer which uses fory var_uint32 encoding
-	VARU32 = 12
+	// VAR_UINT32 a 32-bit unsigned integer which uses fory var_uint32 encoding
+	VAR_UINT32 = 12
 	// UINT64 Unsigned 64-bit little-endian integer
 	UINT64 = 13
-	// VARU64 a 64-bit unsigned integer which uses fory var_uint64 encoding
-	VARU64 = 14
-	// HU64 a 64-bit unsigned integer which uses fory hybrid encoding
-	HU64 = 15
+	// VAR_UINT64 a 64-bit unsigned integer which uses fory var_uint64 encoding
+	VAR_UINT64 = 14
+	// TAGGED_UINT64 a 64-bit unsigned integer which uses fory hybrid encoding
+	TAGGED_UINT64 = 15
 	// FLOAT16 2-byte floating point value
 	FLOAT16 = 16
 	// FLOAT32 4-byte floating point value
@@ -154,7 +154,18 @@ func isPrimitiveType(typeID int16) bool {
 		INT8,
 		INT16,
 		INT32,
+		VARINT32,
 		INT64,
+		VARINT64,
+		TAGGED_INT64,
+		UINT8,
+		UINT16,
+		UINT32,
+		VAR_UINT32,
+		UINT64,
+		VAR_UINT64,
+		TAGGED_UINT64,
+		FLOAT16,
 		FLOAT32,
 		FLOAT64:
 		return true
@@ -168,7 +179,7 @@ func isPrimitiveType(typeID int16) bool {
 // Collections, structs, and other complex types need reference tracking.
 func NeedWriteRef(typeID TypeId) bool {
 	switch typeID {
-	case BOOL, INT8, INT16, INT32, INT64, VAR32, VAR64, H64,
+	case BOOL, INT8, INT16, INT32, INT64, VARINT32, VARINT64, TAGGED_INT64,
 		FLOAT32, FLOAT64, FLOAT16,
 		STRING, TIMESTAMP, LOCAL_DATE, DURATION:
 		return false
@@ -209,16 +220,34 @@ func isPrimitiveArrayType(typeID int16) bool {
 }
 
 var primitiveTypeSizes = map[int16]int{
-	BOOL:    1,
-	INT8:    1,
-	INT16:   2,
-	INT32:   4,
-	VAR32:   4,
-	INT64:   8,
-	VAR64:   8,
-	FLOAT32: 4,
-	FLOAT64: 8,
+	BOOL:          1,
+	INT8:          1,
+	UINT8:         1,
+	INT16:         2,
+	UINT16:        2,
+	FLOAT16:       2,
+	INT32:         4,
+	VARINT32:      4,
+	UINT32:        4,
+	VAR_UINT32:    4,
+	FLOAT32:       4,
+	INT64:         8,
+	VARINT64:      8,
+	TAGGED_INT64:  8,
+	UINT64:        8,
+	VAR_UINT64:    8,
+	TAGGED_UINT64: 8,
+	FLOAT64:       8,
 }
+
+// MaxInt31 is the maximum value that fits in 31 bits (used for TAGGED_UINT64 encoding)
+const MaxInt31 uint64 = 0x7FFFFFFF // 2^31 - 1
+
+// MinInt31 is the minimum value that fits in 31 bits (used for TAGGED_INT64 encoding)
+const MinInt31 int64 = -0x40000000 // -2^30
+
+// MaxInt31Signed is MaxInt31 as a signed int64 for TAGGED_INT64 encoding
+const MaxInt31Signed int64 = 0x3FFFFFFF // 2^30 - 1
 
 func getPrimitiveTypeSize(typeID int16) int {
 	if sz, ok := primitiveTypeSizes[typeID]; ok {
@@ -240,188 +269,309 @@ func isUserDefinedType(typeID int16) bool {
 }
 
 // ============================================================================
-// StaticTypeId for switch-based fast path (avoids interface virtual method cost)
+// DispatchId for switch-based fast path (avoids interface virtual method cost)
 // ============================================================================
 
-// StaticTypeId identifies concrete Go types for optimized serialization dispatch
-type StaticTypeId uint8
+// DispatchId identifies concrete Go types for optimized serialization dispatch.
+// Following Java's pattern with separate IDs for primitive (non-nullable) and boxed (nullable) types.
+type DispatchId uint8
 
 const (
-	ConcreteTypeOther StaticTypeId = iota
-	ConcreteTypeBool
-	ConcreteTypeInt8
-	ConcreteTypeInt16
-	ConcreteTypeInt32
-	ConcreteTypeInt64
-	ConcreteTypeInt
-	ConcreteTypeFloat32
-	ConcreteTypeFloat64
-	ConcreteTypeString
-	ConcreteTypeByteSlice
-	ConcreteTypeInt8Slice
-	ConcreteTypeInt16Slice
-	ConcreteTypeInt32Slice
-	ConcreteTypeInt64Slice
-	ConcreteTypeIntSlice
-	ConcreteTypeUintSlice
-	ConcreteTypeFloat32Slice
-	ConcreteTypeFloat64Slice
-	ConcreteTypeBoolSlice
-	ConcreteTypeStringSlice
-	ConcreteTypeStringStringMap
-	ConcreteTypeStringInt32Map
-	ConcreteTypeStringInt64Map
-	ConcreteTypeStringIntMap
-	ConcreteTypeStringFloat64Map
-	ConcreteTypeStringBoolMap
-	ConcreteTypeInt32Int32Map
-	ConcreteTypeInt64Int64Map
-	ConcreteTypeIntIntMap
-	ConcreteTypeEnum // Enum types (both ENUM and NAMED_ENUM)
+	UnknownDispatchId DispatchId = iota
+
+	// Primitive (non-nullable) dispatch IDs - match Java's PRIMITIVE_* constants
+	PrimitiveBoolDispatchId
+	PrimitiveInt8DispatchId
+	PrimitiveInt16DispatchId
+	PrimitiveInt32DispatchId
+	PrimitiveVarint32DispatchId
+	PrimitiveInt64DispatchId
+	PrimitiveVarint64DispatchId
+	PrimitiveTaggedInt64DispatchId
+	PrimitiveFloat32DispatchId
+	PrimitiveFloat64DispatchId
+	PrimitiveUint8DispatchId
+	PrimitiveUint16DispatchId
+	PrimitiveUint32DispatchId
+	PrimitiveVarUint32DispatchId
+	PrimitiveUint64DispatchId
+	PrimitiveVarUint64DispatchId
+	PrimitiveTaggedUint64DispatchId
+	PrimitiveIntDispatchId  // Go-specific: native int
+	PrimitiveUintDispatchId // Go-specific: native uint
+
+	// Nullable dispatch IDs - match Java's non-PRIMITIVE_* constants
+	NullableBoolDispatchId
+	NullableInt8DispatchId
+	NullableInt16DispatchId
+	NullableInt32DispatchId
+	NullableVarint32DispatchId
+	NullableInt64DispatchId
+	NullableVarint64DispatchId
+	NullableTaggedInt64DispatchId
+	NullableFloat32DispatchId
+	NullableFloat64DispatchId
+	NullableUint8DispatchId
+	NullableUint16DispatchId
+	NullableUint32DispatchId
+	NullableVarUint32DispatchId
+	NullableUint64DispatchId
+	NullableVarUint64DispatchId
+	NullableTaggedUint64DispatchId
+	NullableIntDispatchId  // Go-specific: *int
+	NullableUintDispatchId // Go-specific: *uint
+
+	// Notnull pointer dispatch IDs - pointer types with nullable=false
+	// Write without null flag; on read, create default value if remote sends null
+	NotnullBoolPtrDispatchId
+	NotnullInt8PtrDispatchId
+	NotnullInt16PtrDispatchId
+	NotnullInt32PtrDispatchId
+	NotnullVarint32PtrDispatchId
+	NotnullInt64PtrDispatchId
+	NotnullVarint64PtrDispatchId
+	NotnullTaggedInt64PtrDispatchId
+	NotnullFloat32PtrDispatchId
+	NotnullFloat64PtrDispatchId
+	NotnullUint8PtrDispatchId
+	NotnullUint16PtrDispatchId
+	NotnullUint32PtrDispatchId
+	NotnullVarUint32PtrDispatchId
+	NotnullUint64PtrDispatchId
+	NotnullVarUint64PtrDispatchId
+	NotnullTaggedUint64PtrDispatchId
+	NotnullIntPtrDispatchId
+	NotnullUintPtrDispatchId
+
+	// String dispatch ID
+	StringDispatchId
+
+	// Slice dispatch IDs
+	ByteSliceDispatchId
+	Int8SliceDispatchId
+	Int16SliceDispatchId
+	Int32SliceDispatchId
+	Int64SliceDispatchId
+	IntSliceDispatchId
+	UintSliceDispatchId
+	Float32SliceDispatchId
+	Float64SliceDispatchId
+	BoolSliceDispatchId
+	StringSliceDispatchId
+
+	// Map dispatch IDs
+	StringStringMapDispatchId
+	StringInt32MapDispatchId
+	StringInt64MapDispatchId
+	StringIntMapDispatchId
+	StringFloat64MapDispatchId
+	StringBoolMapDispatchId
+	Int32Int32MapDispatchId
+	Int64Int64MapDispatchId
+	IntIntMapDispatchId
+
+	// Enum dispatch ID
+	EnumDispatchId // Enum types (both ENUM and NAMED_ENUM)
 )
 
-// GetStaticTypeId returns the StaticTypeId for a reflect.Type
-func GetStaticTypeId(t reflect.Type) StaticTypeId {
+// GetDispatchId returns the DispatchId for a reflect.Type.
+// For int32/int64/uint32/uint64, returns varint dispatch IDs by default since that's
+// the default encoding in xlang serialization (VARINT32, VARINT64, VAR_UINT32, VAR_UINT64).
+func GetDispatchId(t reflect.Type) DispatchId {
 	switch t.Kind() {
 	case reflect.Bool:
-		return ConcreteTypeBool
+		return PrimitiveBoolDispatchId
 	case reflect.Int8:
-		return ConcreteTypeInt8
+		return PrimitiveInt8DispatchId
 	case reflect.Int16:
-		return ConcreteTypeInt16
+		return PrimitiveInt16DispatchId
 	case reflect.Int32:
-		return ConcreteTypeInt32
+		// Default to varint encoding (VARINT32) for xlang compatibility
+		return PrimitiveVarint32DispatchId
 	case reflect.Int64:
-		return ConcreteTypeInt64
+		// Default to varint encoding (VARINT64) for xlang compatibility
+		return PrimitiveVarint64DispatchId
 	case reflect.Int:
-		return ConcreteTypeInt
+		return PrimitiveIntDispatchId
+	case reflect.Uint8:
+		return PrimitiveUint8DispatchId
+	case reflect.Uint16:
+		return PrimitiveUint16DispatchId
+	case reflect.Uint32:
+		// Default to varint encoding (VAR_UINT32) for xlang compatibility
+		return PrimitiveVarUint32DispatchId
+	case reflect.Uint64:
+		// Default to varint encoding (VAR_UINT64) for xlang compatibility
+		return PrimitiveVarUint64DispatchId
+	case reflect.Uint:
+		return PrimitiveUintDispatchId
 	case reflect.Float32:
-		return ConcreteTypeFloat32
+		return PrimitiveFloat32DispatchId
 	case reflect.Float64:
-		return ConcreteTypeFloat64
+		return PrimitiveFloat64DispatchId
 	case reflect.String:
-		return ConcreteTypeString
+		return StringDispatchId
 	case reflect.Slice:
 		// Check for specific slice types
 		switch t.Elem().Kind() {
 		case reflect.Uint8:
-			return ConcreteTypeByteSlice
+			return ByteSliceDispatchId
 		case reflect.Int8:
-			return ConcreteTypeInt8Slice
+			return Int8SliceDispatchId
 		case reflect.Int16:
-			return ConcreteTypeInt16Slice
+			return Int16SliceDispatchId
 		case reflect.Int32:
-			return ConcreteTypeInt32Slice
+			return Int32SliceDispatchId
 		case reflect.Int64:
-			return ConcreteTypeInt64Slice
+			return Int64SliceDispatchId
 		case reflect.Int:
-			return ConcreteTypeIntSlice
+			return IntSliceDispatchId
 		case reflect.Uint:
-			return ConcreteTypeUintSlice
+			return UintSliceDispatchId
 		case reflect.Float32:
-			return ConcreteTypeFloat32Slice
+			return Float32SliceDispatchId
 		case reflect.Float64:
-			return ConcreteTypeFloat64Slice
+			return Float64SliceDispatchId
 		case reflect.Bool:
-			return ConcreteTypeBoolSlice
+			return BoolSliceDispatchId
 		case reflect.String:
-			return ConcreteTypeStringSlice
+			return StringSliceDispatchId
 		}
-		return ConcreteTypeOther
+		return UnknownDispatchId
 	case reflect.Map:
 		// Check for specific common map types
 		if t.Key().Kind() == reflect.String {
 			switch t.Elem().Kind() {
 			case reflect.String:
-				return ConcreteTypeStringStringMap
+				return StringStringMapDispatchId
 			case reflect.Int64:
-				return ConcreteTypeStringInt64Map
+				return StringInt64MapDispatchId
 			case reflect.Int:
-				return ConcreteTypeStringIntMap
+				return StringIntMapDispatchId
 			case reflect.Float64:
-				return ConcreteTypeStringFloat64Map
+				return StringFloat64MapDispatchId
 			case reflect.Bool:
-				return ConcreteTypeStringBoolMap
+				return StringBoolMapDispatchId
 			}
 		} else if t.Key().Kind() == reflect.Int32 && t.Elem().Kind() == reflect.Int32 {
-			return ConcreteTypeInt32Int32Map
+			return Int32Int32MapDispatchId
 		} else if t.Key().Kind() == reflect.Int64 && t.Elem().Kind() == reflect.Int64 {
-			return ConcreteTypeInt64Int64Map
+			return Int64Int64MapDispatchId
 		} else if t.Key().Kind() == reflect.Int && t.Elem().Kind() == reflect.Int {
-			return ConcreteTypeIntIntMap
+			return IntIntMapDispatchId
 		}
-		return ConcreteTypeOther
+		return UnknownDispatchId
 	default:
-		return ConcreteTypeOther
-	}
-}
-
-// GetConcreteTypeIdAndTypeId returns both StaticTypeId and TypeId for a reflect.Type
-func GetConcreteTypeIdAndTypeId(t reflect.Type) (StaticTypeId, TypeId) {
-	switch t.Kind() {
-	case reflect.Bool:
-		return ConcreteTypeBool, BOOL
-	case reflect.Int8:
-		return ConcreteTypeInt8, INT8
-	case reflect.Int16:
-		return ConcreteTypeInt16, INT16
-	case reflect.Int32:
-		return ConcreteTypeInt32, INT32
-	case reflect.Int64:
-		return ConcreteTypeInt64, INT64
-	case reflect.Float32:
-		return ConcreteTypeFloat32, FLOAT32
-	case reflect.Float64:
-		return ConcreteTypeFloat64, FLOAT64
-	case reflect.String:
-		return ConcreteTypeString, STRING
-	default:
-		return ConcreteTypeOther, 0
+		return UnknownDispatchId
 	}
 }
 
 // IsPrimitiveTypeId checks if a type ID is a primitive type
 func IsPrimitiveTypeId(typeId TypeId) bool {
 	switch typeId {
-	case BOOL, INT8, INT16, INT32, INT64, FLOAT32, FLOAT64, STRING:
+	case BOOL, INT8, INT16, INT32, VARINT32, INT64, VARINT64, TAGGED_INT64,
+		UINT8, UINT16, UINT32, VAR_UINT32, UINT64, VAR_UINT64, TAGGED_UINT64,
+		FLOAT16, FLOAT32, FLOAT64, STRING:
 		return true
 	default:
 		return false
 	}
 }
 
-// isFixedSizePrimitive returns true for non-nullable fixed-size primitives
-func isFixedSizePrimitive(staticId StaticTypeId, referencable bool) bool {
-	if referencable {
-		return false
-	}
-	switch staticId {
-	case ConcreteTypeBool, ConcreteTypeInt8, ConcreteTypeInt16,
-		ConcreteTypeFloat32, ConcreteTypeFloat64:
+// isFixedSizePrimitive returns true for fixed-size primitives and notnull pointer types.
+// Includes INT32/UINT32/INT64/UINT64 (fixed encoding), NOT VARINT32/VAR_UINT32 etc.
+func isFixedSizePrimitive(dispatchId DispatchId, referencable bool) bool {
+	switch dispatchId {
+	case PrimitiveBoolDispatchId, PrimitiveInt8DispatchId, PrimitiveUint8DispatchId,
+		PrimitiveInt16DispatchId, PrimitiveUint16DispatchId,
+		PrimitiveInt32DispatchId, PrimitiveUint32DispatchId,
+		PrimitiveInt64DispatchId, PrimitiveUint64DispatchId,
+		PrimitiveFloat32DispatchId, PrimitiveFloat64DispatchId:
+		return !referencable
+	case NotnullBoolPtrDispatchId, NotnullInt8PtrDispatchId, NotnullUint8PtrDispatchId,
+		NotnullInt16PtrDispatchId, NotnullUint16PtrDispatchId,
+		NotnullInt32PtrDispatchId, NotnullUint32PtrDispatchId,
+		NotnullInt64PtrDispatchId, NotnullUint64PtrDispatchId,
+		NotnullFloat32PtrDispatchId, NotnullFloat64PtrDispatchId:
 		return true
 	default:
 		return false
 	}
 }
 
-// isVarintPrimitive returns true for non-nullable varint primitives
-func isVarintPrimitive(staticId StaticTypeId, referencable bool) bool {
-	if referencable {
-		return false
-	}
-	switch staticId {
-	case ConcreteTypeInt32, ConcreteTypeInt64, ConcreteTypeInt:
+// isNullableFixedSizePrimitive returns true for nullable fixed-size primitive dispatch IDs.
+// These are pointer types that use fixed encoding and have a ref flag.
+func isNullableFixedSizePrimitive(dispatchId DispatchId) bool {
+	switch dispatchId {
+	case NullableBoolDispatchId, NullableInt8DispatchId, NullableUint8DispatchId,
+		NullableInt16DispatchId, NullableUint16DispatchId,
+		NullableInt32DispatchId, NullableUint32DispatchId,
+		NullableInt64DispatchId, NullableUint64DispatchId,
+		NullableFloat32DispatchId, NullableFloat64DispatchId:
 		return true
 	default:
 		return false
 	}
 }
 
-// isPrimitiveStaticId returns true if the staticId represents a primitive type
-func isPrimitiveStaticId(staticId StaticTypeId) bool {
-	switch staticId {
-	case ConcreteTypeBool, ConcreteTypeInt8, ConcreteTypeInt16, ConcreteTypeInt32,
-		ConcreteTypeInt64, ConcreteTypeInt, ConcreteTypeFloat32, ConcreteTypeFloat64:
+// isNullableVarintPrimitive returns true for nullable varint primitive dispatch IDs.
+// These are pointer types that use varint encoding and have a ref flag.
+func isNullableVarintPrimitive(dispatchId DispatchId) bool {
+	switch dispatchId {
+	case NullableVarint32DispatchId, NullableVarint64DispatchId,
+		NullableVarUint32DispatchId, NullableVarUint64DispatchId,
+		NullableTaggedInt64DispatchId, NullableTaggedUint64DispatchId,
+		NullableIntDispatchId, NullableUintDispatchId:
+		return true
+	default:
+		return false
+	}
+}
+
+// isVarintPrimitive returns true for varint primitives and notnull pointer types.
+// Includes VARINT32/VAR_UINT32/VARINT64/VAR_UINT64 (variable encoding), NOT INT32/UINT32 etc.
+func isVarintPrimitive(dispatchId DispatchId, referencable bool) bool {
+	switch dispatchId {
+	case PrimitiveVarint32DispatchId, PrimitiveVarint64DispatchId,
+		PrimitiveVarUint32DispatchId, PrimitiveVarUint64DispatchId,
+		PrimitiveTaggedInt64DispatchId, PrimitiveTaggedUint64DispatchId,
+		PrimitiveIntDispatchId, PrimitiveUintDispatchId:
+		return !referencable
+	case NotnullVarint32PtrDispatchId, NotnullVarint64PtrDispatchId,
+		NotnullVarUint32PtrDispatchId, NotnullVarUint64PtrDispatchId,
+		NotnullTaggedInt64PtrDispatchId, NotnullTaggedUint64PtrDispatchId,
+		NotnullIntPtrDispatchId, NotnullUintPtrDispatchId:
+		return true
+	default:
+		return false
+	}
+}
+
+// isPrimitiveDispatchId returns true if the dispatchId represents a primitive type
+func isPrimitiveDispatchId(dispatchId DispatchId) bool {
+	switch dispatchId {
+	case PrimitiveBoolDispatchId, PrimitiveInt8DispatchId, PrimitiveInt16DispatchId, PrimitiveInt32DispatchId,
+		PrimitiveInt64DispatchId, PrimitiveIntDispatchId, PrimitiveUint8DispatchId, PrimitiveUint16DispatchId,
+		PrimitiveUint32DispatchId, PrimitiveUint64DispatchId, PrimitiveUintDispatchId,
+		PrimitiveFloat32DispatchId, PrimitiveFloat64DispatchId:
+		return true
+	default:
+		return false
+	}
+}
+
+// isNotnullPtrDispatchId returns true if the dispatchId represents a notnull pointer type
+func isNotnullPtrDispatchId(dispatchId DispatchId) bool {
+	switch dispatchId {
+	case NotnullBoolPtrDispatchId, NotnullInt8PtrDispatchId, NotnullUint8PtrDispatchId,
+		NotnullInt16PtrDispatchId, NotnullUint16PtrDispatchId,
+		NotnullInt32PtrDispatchId, NotnullUint32PtrDispatchId,
+		NotnullInt64PtrDispatchId, NotnullUint64PtrDispatchId,
+		NotnullFloat32PtrDispatchId, NotnullFloat64PtrDispatchId,
+		NotnullVarint32PtrDispatchId, NotnullVarint64PtrDispatchId,
+		NotnullVarUint32PtrDispatchId, NotnullVarUint64PtrDispatchId,
+		NotnullTaggedInt64PtrDispatchId, NotnullTaggedUint64PtrDispatchId,
+		NotnullIntPtrDispatchId, NotnullUintPtrDispatchId:
 		return true
 	default:
 		return false
@@ -439,29 +589,265 @@ func isNumericKind(kind reflect.Kind) bool {
 	}
 }
 
-// getFixedSizeByStaticId returns byte size for fixed primitives (0 if not fixed)
-func getFixedSizeByStaticId(staticId StaticTypeId) int {
-	switch staticId {
-	case ConcreteTypeBool, ConcreteTypeInt8:
+// getDispatchIdFromTypeId converts a TypeId to a DispatchId based on nullability.
+// This follows Java's DispatchId.xlangTypeIdToDispatchId pattern.
+func getDispatchIdFromTypeId(typeId TypeId, nullable bool) DispatchId {
+	if nullable {
+		// Nullable (nullable) types
+		switch typeId {
+		case BOOL:
+			return NullableBoolDispatchId
+		case INT8:
+			return NullableInt8DispatchId
+		case INT16:
+			return NullableInt16DispatchId
+		case INT32:
+			return NullableInt32DispatchId
+		case VARINT32:
+			return NullableVarint32DispatchId
+		case INT64:
+			return NullableInt64DispatchId
+		case VARINT64:
+			return NullableVarint64DispatchId
+		case TAGGED_INT64:
+			return NullableTaggedInt64DispatchId
+		case FLOAT32:
+			return NullableFloat32DispatchId
+		case FLOAT64:
+			return NullableFloat64DispatchId
+		case UINT8:
+			return NullableUint8DispatchId
+		case UINT16:
+			return NullableUint16DispatchId
+		case UINT32:
+			return NullableUint32DispatchId
+		case VAR_UINT32:
+			return NullableVarUint32DispatchId
+		case UINT64:
+			return NullableUint64DispatchId
+		case VAR_UINT64:
+			return NullableVarUint64DispatchId
+		case TAGGED_UINT64:
+			return NullableTaggedUint64DispatchId
+		case STRING:
+			return StringDispatchId
+		default:
+			return UnknownDispatchId
+		}
+	} else {
+		// Primitive (non-nullable) types
+		switch typeId {
+		case BOOL:
+			return PrimitiveBoolDispatchId
+		case INT8:
+			return PrimitiveInt8DispatchId
+		case INT16:
+			return PrimitiveInt16DispatchId
+		case INT32:
+			return PrimitiveInt32DispatchId
+		case VARINT32:
+			return PrimitiveVarint32DispatchId
+		case INT64:
+			return PrimitiveInt64DispatchId
+		case VARINT64:
+			return PrimitiveVarint64DispatchId
+		case TAGGED_INT64:
+			return PrimitiveTaggedInt64DispatchId
+		case FLOAT32:
+			return PrimitiveFloat32DispatchId
+		case FLOAT64:
+			return PrimitiveFloat64DispatchId
+		case UINT8:
+			return PrimitiveUint8DispatchId
+		case UINT16:
+			return PrimitiveUint16DispatchId
+		case UINT32:
+			return PrimitiveUint32DispatchId
+		case VAR_UINT32:
+			return PrimitiveVarUint32DispatchId
+		case UINT64:
+			return PrimitiveUint64DispatchId
+		case VAR_UINT64:
+			return PrimitiveVarUint64DispatchId
+		case TAGGED_UINT64:
+			return PrimitiveTaggedUint64DispatchId
+		case STRING:
+			return StringDispatchId
+		default:
+			return UnknownDispatchId
+		}
+	}
+}
+
+// IsPrimitiveDispatchId returns true if the dispatch ID is for a primitive (non-nullable) type
+func IsPrimitiveDispatchId(id DispatchId) bool {
+	return id >= PrimitiveBoolDispatchId && id <= PrimitiveUintDispatchId
+}
+
+// IsNullablePrimitiveDispatchId returns true if the dispatch ID is for a nullable primitive type
+func IsNullablePrimitiveDispatchId(id DispatchId) bool {
+	return id >= NullableBoolDispatchId && id <= NullableUintDispatchId
+}
+
+// getFixedSizeByDispatchId returns byte size for fixed primitives (0 if not fixed)
+func getFixedSizeByDispatchId(dispatchId DispatchId) int {
+	switch dispatchId {
+	case PrimitiveBoolDispatchId, PrimitiveInt8DispatchId, PrimitiveUint8DispatchId,
+		NotnullBoolPtrDispatchId, NotnullInt8PtrDispatchId, NotnullUint8PtrDispatchId:
 		return 1
-	case ConcreteTypeInt16:
+	case PrimitiveInt16DispatchId, PrimitiveUint16DispatchId,
+		NotnullInt16PtrDispatchId, NotnullUint16PtrDispatchId:
 		return 2
-	case ConcreteTypeFloat32:
+	case PrimitiveInt32DispatchId, PrimitiveUint32DispatchId, PrimitiveFloat32DispatchId,
+		NotnullInt32PtrDispatchId, NotnullUint32PtrDispatchId, NotnullFloat32PtrDispatchId:
 		return 4
-	case ConcreteTypeFloat64:
+	case PrimitiveInt64DispatchId, PrimitiveUint64DispatchId, PrimitiveFloat64DispatchId,
+		NotnullInt64PtrDispatchId, NotnullUint64PtrDispatchId, NotnullFloat64PtrDispatchId:
 		return 8
 	default:
 		return 0
 	}
 }
 
-// getVarintMaxSizeByStaticId returns max byte size for varint primitives (0 if not varint)
-func getVarintMaxSizeByStaticId(staticId StaticTypeId) int {
-	switch staticId {
-	case ConcreteTypeInt32:
+// getVarintMaxSizeByDispatchId returns max byte size for varint primitives (0 if not varint)
+func getVarintMaxSizeByDispatchId(dispatchId DispatchId) int {
+	switch dispatchId {
+	case PrimitiveVarint32DispatchId, PrimitiveVarUint32DispatchId,
+		NotnullVarint32PtrDispatchId, NotnullVarUint32PtrDispatchId:
 		return 5
-	case ConcreteTypeInt64, ConcreteTypeInt:
+	case PrimitiveVarint64DispatchId, PrimitiveVarUint64DispatchId, PrimitiveIntDispatchId, PrimitiveUintDispatchId,
+		NotnullVarint64PtrDispatchId, NotnullVarUint64PtrDispatchId, NotnullIntPtrDispatchId, NotnullUintPtrDispatchId:
 		return 10
+	case PrimitiveTaggedInt64DispatchId, PrimitiveTaggedUint64DispatchId,
+		NotnullTaggedInt64PtrDispatchId, NotnullTaggedUint64PtrDispatchId:
+		return 9
+	default:
+		return 0
+	}
+}
+
+// getEncodingFromTypeId returns the encoding string ("fixed", "varint", "tagged") from a TypeId.
+func getEncodingFromTypeId(typeId TypeId) string {
+	internalId := typeId & 0xFF
+	switch TypeId(internalId) {
+	case INT32, INT64, UINT32, UINT64:
+		return "fixed"
+	case VARINT32, VARINT64, VAR_UINT32, VAR_UINT64:
+		return "varint"
+	case TAGGED_INT64, TAGGED_UINT64:
+		return "tagged"
+	default:
+		return "varint" // default encoding
+	}
+}
+
+// getNotnullPtrDispatchId returns the NotnullXxxPtrDispatchId for a pointer-to-numeric type.
+// elemKind is the kind of the element type (e.g., reflect.Uint8 for *uint8).
+// encoding specifies the encoding type (fixed, varint, tagged) for int32/int64/uint32/uint64.
+func getNotnullPtrDispatchId(elemKind reflect.Kind, encoding string) DispatchId {
+	switch elemKind {
+	case reflect.Bool:
+		return NotnullBoolPtrDispatchId
+	case reflect.Int8:
+		return NotnullInt8PtrDispatchId
+	case reflect.Int16:
+		return NotnullInt16PtrDispatchId
+	case reflect.Int32:
+		if encoding == "fixed" {
+			return NotnullInt32PtrDispatchId
+		}
+		return NotnullVarint32PtrDispatchId
+	case reflect.Int64:
+		if encoding == "fixed" {
+			return NotnullInt64PtrDispatchId
+		} else if encoding == "tagged" {
+			return NotnullTaggedInt64PtrDispatchId
+		}
+		return NotnullVarint64PtrDispatchId
+	case reflect.Int:
+		return NotnullIntPtrDispatchId
+	case reflect.Uint8:
+		return NotnullUint8PtrDispatchId
+	case reflect.Uint16:
+		return NotnullUint16PtrDispatchId
+	case reflect.Uint32:
+		if encoding == "fixed" {
+			return NotnullUint32PtrDispatchId
+		}
+		return NotnullVarUint32PtrDispatchId
+	case reflect.Uint64:
+		if encoding == "fixed" {
+			return NotnullUint64PtrDispatchId
+		} else if encoding == "tagged" {
+			return NotnullTaggedUint64PtrDispatchId
+		}
+		return NotnullVarUint64PtrDispatchId
+	case reflect.Uint:
+		return NotnullUintPtrDispatchId
+	case reflect.Float32:
+		return NotnullFloat32PtrDispatchId
+	case reflect.Float64:
+		return NotnullFloat64PtrDispatchId
+	default:
+		return UnknownDispatchId
+	}
+}
+
+// isPrimitiveFixedDispatchId returns true if the dispatch ID is for a non-nullable fixed-size primitive.
+// Note: int32/int64/uint32/uint64 are NOT included here because they default to varint encoding.
+// Only types that are always fixed-size are included (bool, int8/uint8, int16/uint16, float32/float64).
+// Fixed int32/int64/uint32/uint64 encodings (INT32, INT64, UINT32, UINT64) use their specific dispatch IDs.
+func isPrimitiveFixedDispatchId(id DispatchId) bool {
+	switch id {
+	case PrimitiveBoolDispatchId, PrimitiveInt8DispatchId, PrimitiveUint8DispatchId,
+		PrimitiveInt16DispatchId, PrimitiveUint16DispatchId,
+		// Fixed-size int32/int64/uint32/uint64 - only when explicitly specified via TypeId
+		PrimitiveInt32DispatchId, PrimitiveUint32DispatchId,
+		PrimitiveInt64DispatchId, PrimitiveUint64DispatchId,
+		PrimitiveFloat32DispatchId, PrimitiveFloat64DispatchId:
+		return true
+	default:
+		return false
+	}
+}
+
+// getFixedSizeByPrimitiveDispatchId returns byte size for fixed primitives based on dispatch ID
+func getFixedSizeByPrimitiveDispatchId(id DispatchId) int {
+	switch id {
+	case PrimitiveBoolDispatchId, PrimitiveInt8DispatchId, PrimitiveUint8DispatchId:
+		return 1
+	case PrimitiveInt16DispatchId, PrimitiveUint16DispatchId:
+		return 2
+	case PrimitiveInt32DispatchId, PrimitiveUint32DispatchId, PrimitiveFloat32DispatchId:
+		return 4
+	case PrimitiveInt64DispatchId, PrimitiveUint64DispatchId, PrimitiveFloat64DispatchId:
+		return 8
+	default:
+		return 0
+	}
+}
+
+// isPrimitiveVarintDispatchId returns true if the dispatch ID is for a non-nullable varint primitive
+func isPrimitiveVarintDispatchId(id DispatchId) bool {
+	switch id {
+	case PrimitiveVarint32DispatchId, PrimitiveVarint64DispatchId, PrimitiveTaggedInt64DispatchId,
+		PrimitiveVarUint32DispatchId, PrimitiveVarUint64DispatchId, PrimitiveTaggedUint64DispatchId,
+		PrimitiveIntDispatchId, PrimitiveUintDispatchId:
+		return true
+	default:
+		return false
+	}
+}
+
+// getVarintMaxSizeByPrimitiveDispatchId returns max byte size for varint primitives based on dispatch ID
+func getVarintMaxSizeByPrimitiveDispatchId(id DispatchId) int {
+	switch id {
+	case PrimitiveVarint32DispatchId, PrimitiveVarUint32DispatchId:
+		return 5
+	case PrimitiveVarint64DispatchId, PrimitiveVarUint64DispatchId, PrimitiveIntDispatchId, PrimitiveUintDispatchId:
+		return 10
+	case PrimitiveTaggedInt64DispatchId, PrimitiveTaggedUint64DispatchId:
+		return 12 // 4 byte tag + 8 byte value
 	default:
 		return 0
 	}
