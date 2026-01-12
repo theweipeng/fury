@@ -1602,7 +1602,7 @@ public final class Fory implements BaseFory {
 
   @Override
   public void ensureSerializersCompiled() {
-    classResolver.ensureSerializersCompiled();
+    _getTypeResolver().ensureSerializersCompiled();
   }
 
   public JITContext getJITContext() {

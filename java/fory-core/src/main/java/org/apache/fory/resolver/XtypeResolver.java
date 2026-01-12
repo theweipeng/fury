@@ -265,6 +265,13 @@ public class XtypeResolver extends TypeResolver {
     if (serializer == null) {
       if (type.isEnum()) {
         classInfo.serializer = new EnumSerializer(fory, (Class<Enum>) type);
+      } else if (GraalvmSupport.isGraalBuildtime()) {
+        // For GraalVM build time, directly create the serializer to avoid
+        // issues with DeferedLazySerializer persistence in native image
+        Class<? extends Serializer> c =
+            classResolver.getObjectSerializerClass(
+                type, shareMeta, fory.getConfig().isCodeGenEnabled(), null);
+        classInfo.serializer = Serializers.newSerializer(fory, type, c);
       } else {
         AtomicBoolean updated = new AtomicBoolean(false);
         AtomicReference<Serializer> ref = new AtomicReference(null);
@@ -1027,5 +1034,34 @@ public class XtypeResolver extends TypeResolver {
 
   private boolean isEnum(int internalTypeId) {
     return internalTypeId == Types.ENUM || internalTypeId == Types.NAMED_ENUM;
+  }
+
+  /**
+   * Ensure all serializers for registered classes are compiled at GraalVM build time. This method
+   * should be called after all classes are registered.
+   */
+  @Override
+  public void ensureSerializersCompiled() {
+    classInfoMap.forEach(
+        (cls, classInfo) -> {
+          GraalvmSupport.registerClass(cls, fory.getConfig().getConfigHash());
+          if (classInfo.serializer != null) {
+            // Trigger serializer initialization and resolution for deferred serializers
+            if (classInfo.serializer instanceof DeferedLazyObjectSerializer) {
+              ((DeferedLazyObjectSerializer) classInfo.serializer).resolveSerializer();
+            } else {
+              classInfo.serializer.getClass();
+            }
+          }
+          // For enums at GraalVM build time, also handle anonymous enum value classes
+          if (cls.isEnum() && GraalvmSupport.isGraalBuildtime()) {
+            for (Object enumConstant : cls.getEnumConstants()) {
+              Class<?> enumValueClass = enumConstant.getClass();
+              if (enumValueClass != cls) {
+                getSerializer(enumValueClass);
+              }
+            }
+          }
+        });
   }
 }
