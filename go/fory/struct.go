@@ -584,6 +584,10 @@ func (s *structSerializer) initFieldsFromTypeDef(typeResolver *TypeResolver) err
 					shouldRead = true
 					fieldType = localType
 				}
+			} else if defTypeId == SET && isSetReflectType(localType) {
+				// Both remote and local are Set types, allow reading
+				shouldRead = true
+				fieldType = localType
 			} else if !typeLookupFailed && typesCompatible(localType, remoteType) {
 				shouldRead = true
 				fieldType = localType
@@ -601,6 +605,10 @@ func (s *structSerializer) initFieldsFromTypeDef(typeResolver *TypeResolver) err
 					if localType.Kind() == reflect.Slice && localType.Elem().Kind() == reflect.Interface {
 						fieldSerializer = mustNewSliceDynSerializer(localType.Elem())
 					}
+				}
+				// For Set fields (fory.Set[T] = map[T]struct{}), get the setSerializer
+				if defTypeId == SET && isSetReflectType(localType) && fieldSerializer == nil {
+					fieldSerializer, _ = typeResolver.getSerializerByType(localType, true)
 				}
 				// If local type is *T and remote type is T, we need the serializer for *T
 				// This handles Java's Integer/Long (nullable boxed types) mapping to Go's *int32/*int64
@@ -829,8 +837,8 @@ func (s *structSerializer) computeHash() int32 {
 			} else if field.Meta.Type.Kind() == reflect.Slice {
 				typeId = LIST
 			} else if field.Meta.Type.Kind() == reflect.Map {
-				// map[T]bool is used to represent a Set in Go
-				if field.Meta.Type.Elem().Kind() == reflect.Bool {
+				// fory.Set[T] is defined as map[T]struct{} - check for struct{} elem type
+				if isSetReflectType(field.Meta.Type) {
 					typeId = SET
 				} else {
 					typeId = MAP
@@ -1367,11 +1375,13 @@ func (s *structSerializer) writeRemainingField(ctx *WriteContext, ptr unsafe.Poi
 			ctx.WriteStringFloat64Map(*(*map[string]float64)(fieldPtr), field.RefMode, false)
 			return
 		case StringBoolMapDispatchId:
-			// NOTE: map[string]bool is used to represent SETs in Go xlang mode.
-			// We CANNOT use the fast path here because it writes MAP format,
-			// but the data should be written in SET format. Fall through to slow path
-			// which uses setSerializer to correctly write the SET format.
-			break
+			// map[string]bool is a regular map in Go - use MAP format
+			// Note: fory.Set[T] uses struct{} values and has its own setSerializer
+			if field.RefMode == RefModeTracking {
+				break
+			}
+			ctx.WriteStringBoolMap(*(*map[string]bool)(fieldPtr), field.RefMode, false)
+			return
 		case IntIntMapDispatchId:
 			if field.RefMode == RefModeTracking {
 				break
@@ -1723,12 +1733,12 @@ func (s *structSerializer) Read(ctx *ReadContext, refMode RefMode, readType bool
 			typeInfo := ctx.TypeResolver().readTypeInfoWithTypeID(buf, typeID, ctxErr)
 			// Use the serializer from TypeInfo which has the remote field definitions
 			if structSer, ok := typeInfo.Serializer.(*structSerializer); ok && len(structSer.fieldDefs) > 0 {
-				structSer.ReadData(ctx, value.Type(), value)
+				structSer.ReadData(ctx, value)
 				return
 			}
 		}
 	}
-	s.ReadData(ctx, value.Type(), value)
+	s.ReadData(ctx, value)
 }
 
 func (s *structSerializer) ReadWithTypeInfo(ctx *ReadContext, refMode RefMode, typeInfo *TypeInfo, value reflect.Value) {
@@ -1736,7 +1746,7 @@ func (s *structSerializer) ReadWithTypeInfo(ctx *ReadContext, refMode RefMode, t
 	s.Read(ctx, refMode, false, false, value)
 }
 
-func (s *structSerializer) ReadData(ctx *ReadContext, type_ reflect.Type, value reflect.Value) {
+func (s *structSerializer) ReadData(ctx *ReadContext, value reflect.Value) {
 	// Early error check - skip all intermediate checks for normal path performance
 	if ctx.HasError() {
 		return
@@ -1753,10 +1763,9 @@ func (s *structSerializer) ReadData(ctx *ReadContext, type_ reflect.Type, value 
 	buf := ctx.Buffer()
 	if value.Kind() == reflect.Ptr {
 		if value.IsNil() {
-			value.Set(reflect.New(type_.Elem()))
+			value.Set(reflect.New(value.Type().Elem()))
 		}
 		value = value.Elem()
-		type_ = type_.Elem()
 	}
 
 	// In compatible mode with meta share, struct hash is not written
@@ -2148,11 +2157,13 @@ func (s *structSerializer) readRemainingField(ctx *ReadContext, ptr unsafe.Point
 			*(*map[string]float64)(fieldPtr) = ctx.ReadStringFloat64Map(field.RefMode, false)
 			return
 		case StringBoolMapDispatchId:
-			// NOTE: map[string]bool is used to represent SETs in Go xlang mode.
-			// We CANNOT use the fast path here because it reads MAP format,
-			// but the data is actually in SET format. Fall through to slow path
-			// which uses setSerializer to correctly read the SET format.
-			break
+			// map[string]bool is a regular map in Go - use MAP format
+			// Note: fory.Set[T] uses struct{} values and has its own setSerializer
+			if field.RefMode == RefModeTracking {
+				break
+			}
+			*(*map[string]bool)(fieldPtr) = ctx.ReadStringBoolMap(field.RefMode, false)
+			return
 		case IntIntMapDispatchId:
 			if field.RefMode == RefModeTracking {
 				break
@@ -2756,9 +2767,9 @@ func readEnumField(ctx *ReadContext, field *FieldInfo, fieldValue reflect.Value)
 	// For pointer enum fields, the serializer is ptrToValueSerializer wrapping enumSerializer.
 	// We need to call the inner enumSerializer directly with the dereferenced value.
 	if ptrSer, ok := field.Serializer.(*ptrToValueSerializer); ok {
-		ptrSer.valueSerializer.ReadData(ctx, field.Meta.Type.Elem(), targetValue)
+		ptrSer.valueSerializer.ReadData(ctx, targetValue)
 	} else {
-		field.Serializer.ReadData(ctx, field.Meta.Type, targetValue)
+		field.Serializer.ReadData(ctx, targetValue)
 	}
 }
 
@@ -2776,7 +2787,7 @@ func (s *skipStructSerializer) Write(ctx *WriteContext, refMode RefMode, writeTy
 	ctx.SetError(SerializationError("skipStructSerializer does not support Write - unknown struct type"))
 }
 
-func (s *skipStructSerializer) ReadData(ctx *ReadContext, type_ reflect.Type, value reflect.Value) {
+func (s *skipStructSerializer) ReadData(ctx *ReadContext, value reflect.Value) {
 	// Skip all fields based on fieldDefs from remote TypeDef
 	for _, fieldDef := range s.fieldDefs {
 		isStructType := isStructFieldType(fieldDef.fieldType)
@@ -2811,7 +2822,7 @@ func (s *skipStructSerializer) Read(ctx *ReadContext, refMode RefMode, readType 
 	if ctx.HasError() {
 		return
 	}
-	s.ReadData(ctx, nil, value)
+	s.ReadData(ctx, value)
 }
 
 func (s *skipStructSerializer) ReadWithTypeInfo(ctx *ReadContext, refMode RefMode, typeInfo *TypeInfo, value reflect.Value) {

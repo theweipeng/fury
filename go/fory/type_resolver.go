@@ -78,6 +78,7 @@ var (
 	int32Int32MapType    = reflect.TypeOf((*map[int32]int32)(nil)).Elem()
 	int64Int64MapType    = reflect.TypeOf((*map[int64]int64)(nil)).Elem()
 	intIntMapType        = reflect.TypeOf((*map[int]int)(nil)).Elem()
+	emptyStructType      = reflect.TypeOf((*struct{})(nil)).Elem()
 	boolType             = reflect.TypeOf((*bool)(nil)).Elem()
 	byteType             = reflect.TypeOf((*byte)(nil)).Elem()
 	uint8Type            = reflect.TypeOf((*uint8)(nil)).Elem()
@@ -93,7 +94,7 @@ var (
 	float64Type          = reflect.TypeOf((*float64)(nil)).Elem()
 	dateType             = reflect.TypeOf((*Date)(nil)).Elem()
 	timestampType        = reflect.TypeOf((*time.Time)(nil)).Elem()
-	genericSetType       = reflect.TypeOf((*GenericSet)(nil)).Elem()
+	genericSetType       = reflect.TypeOf((*Set[any])(nil)).Elem()
 )
 
 // Global registry for generated serializer factories
@@ -241,7 +242,7 @@ func newTypeResolver(fory *Fory) *TypeResolver {
 		dateType,
 		timestampType,
 		interfaceType,
-		genericSetType, // FIXME set should be a generic type
+		genericSetType,
 	} {
 		r.typeInfoToType[t.String()] = t
 		r.typeToTypeInfo[t] = t.String()
@@ -338,7 +339,7 @@ func (r *TypeResolver) initialize() {
 		{stringInt64MapType, MAP, stringInt64MapSerializer{}},
 		{stringIntMapType, MAP, stringIntMapSerializer{}},
 		{stringFloat64MapType, MAP, stringFloat64MapSerializer{}},
-		{stringBoolMapType, SET, setSerializer{}}, // map[T]bool represents a Set in Go
+		{stringBoolMapType, MAP, stringBoolMapSerializer{}}, // map[string]bool is a regular map
 		{int32Int32MapType, MAP, int32Int32MapSerializer{}},
 		{int64Int64MapType, MAP, int64Int64MapSerializer{}},
 		{intIntMapType, MAP, intIntMapSerializer{}},
@@ -411,9 +412,9 @@ func (r *TypeResolver) registerSerializer(type_ reflect.Type, typeId TypeId, s S
 	return nil
 }
 
-// RegisterByID registers a type with a numeric type ID for cross-language serialization.
+// RegisterStruct registers a type with a numeric type ID for cross-language serialization.
 // This is used when the full type ID (user_id << 8 | internal_id) is already calculated.
-func (r *TypeResolver) RegisterByID(type_ reflect.Type, fullTypeID uint32) error {
+func (r *TypeResolver) RegisterStruct(type_ reflect.Type, fullTypeID uint32) error {
 	// Check if already registered
 	if info, ok := r.typeIDToTypeInfo[fullTypeID]; ok {
 		return fmt.Errorf("type %s with id %d has been registered", info.Type, fullTypeID)
@@ -456,14 +457,14 @@ func (r *TypeResolver) RegisterByID(type_ reflect.Type, fullTypeID uint32) error
 		}
 
 	default:
-		return fmt.Errorf("unsupported type for ID registration: %v (use RegisterEnumByID for enum types)", type_.Kind())
+		return fmt.Errorf("unsupported type for ID registration: %v (use RegisterEnum for enum types)", type_.Kind())
 	}
 
 	return nil
 }
 
-// RegisterEnumByID registers an enum type (numeric type in Go) with a full type ID
-func (r *TypeResolver) RegisterEnumByID(type_ reflect.Type, fullTypeID uint32) error {
+// RegisterEnum registers an enum type (numeric type in Go) with a full type ID
+func (r *TypeResolver) RegisterEnum(type_ reflect.Type, fullTypeID uint32) error {
 	// Check if already registered
 	if info, ok := r.typeIDToTypeInfo[fullTypeID]; ok {
 		return fmt.Errorf("type %s with id %d has been registered", info.Type, fullTypeID)
@@ -475,7 +476,7 @@ func (r *TypeResolver) RegisterEnumByID(type_ reflect.Type, fullTypeID uint32) e
 		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		// OK
 	default:
-		return fmt.Errorf("RegisterEnumByID only supports numeric types; got: %v", type_.Kind())
+		return fmt.Errorf("RegisterEnum only supports numeric types; got: %v", type_.Kind())
 	}
 
 	// Create enum serializer
@@ -501,8 +502,8 @@ func (r *TypeResolver) RegisterEnumByID(type_ reflect.Type, fullTypeID uint32) e
 	return nil
 }
 
-// RegisterEnumByName registers an enum type (numeric type in Go) with a namespace and type name
-func (r *TypeResolver) RegisterEnumByName(type_ reflect.Type, namespace, typeName string) error {
+// RegisterNamedEnum registers an enum type (numeric type in Go) with a namespace and type name
+func (r *TypeResolver) RegisterNamedEnum(type_ reflect.Type, namespace, typeName string) error {
 	// Check if already registered
 	if prev, ok := r.typeToSerializers[type_]; ok {
 		return fmt.Errorf("type %s already has a serializer %s registered", type_, prev)
@@ -514,7 +515,7 @@ func (r *TypeResolver) RegisterEnumByName(type_ reflect.Type, namespace, typeNam
 		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		// OK
 	default:
-		return fmt.Errorf("RegisterEnumByName only supports numeric types; got: %v", type_.Kind())
+		return fmt.Errorf("RegisterNamedEnum only supports numeric types; got: %v", type_.Kind())
 	}
 
 	// Parse namespace from typeName if not provided
@@ -551,7 +552,7 @@ func (r *TypeResolver) RegisterEnumByName(type_ reflect.Type, namespace, typeNam
 	return nil
 }
 
-func (r *TypeResolver) RegisterNamedType(
+func (r *TypeResolver) RegisterNamedStruct(
 	type_ reflect.Type,
 	typeId uint32,
 	namespace string,
@@ -629,10 +630,10 @@ func (r *TypeResolver) RegisterExt(extId int16, type_ reflect.Type) error {
 	panic("not supported")
 }
 
-// RegisterExtensionType registers a type as an extension type (NAMED_EXT).
+// RegisterNamedExtension registers a type as an extension type (NAMED_EXT).
 // Extension types use a user-provided serializer for custom serialization logic.
 // This is used for types with custom serializers in cross-language serialization.
-func (r *TypeResolver) RegisterExtensionType(
+func (r *TypeResolver) RegisterNamedExtension(
 	type_ reflect.Type,
 	namespace string,
 	typeName string,
@@ -689,8 +690,8 @@ func (r *TypeResolver) RegisterExtensionType(
 	return nil
 }
 
-// RegisterExtensionTypeByID registers a type as an extension type with a numeric ID.
-func (r *TypeResolver) RegisterExtensionTypeByID(
+// RegisterExtension registers a type as an extension type with a numeric ID.
+func (r *TypeResolver) RegisterExtension(
 	type_ reflect.Type,
 	userTypeID uint32,
 	userSerializer ExtensionSerializer,
@@ -879,7 +880,7 @@ func (r *TypeResolver) getTypeInfo(value reflect.Value, create bool) (*TypeInfo,
 			// First register the value type
 			elemPkgPath := elemType.PkgPath()
 			elemTypeName := elemType.Name()
-			if err := r.RegisterNamedType(elemType, 0, elemPkgPath, elemTypeName); err != nil {
+			if err := r.RegisterNamedStruct(elemType, 0, elemPkgPath, elemTypeName); err != nil {
 				// Might already be registered, that's okay
 				_ = err
 			}
@@ -926,7 +927,7 @@ func (r *TypeResolver) getTypeInfo(value reflect.Value, create bool) (*TypeInfo,
 		// Auto-assign IDs
 		typeID = 0
 	default:
-		fmt.Errorf("type %v must be registered explicitly", type_)
+		panic(fmt.Errorf("type %v must be registered explicitly", type_))
 	}
 
 	/*
@@ -1422,6 +1423,11 @@ func (r *TypeResolver) createSerializer(type_ reflect.Type, mapInStruct bool) (s
 			}, nil
 		}
 	case reflect.Map:
+		// Check if this is a Set type (map[T]struct{} where value is empty struct)
+		// This includes both fory.Set[T] and raw map[T]struct{}
+		if isSetReflectType(type_) {
+			return setSerializer{}, nil
+		}
 		hasKeySerializer, hasValueSerializer := !isDynamicType(type_.Key()), !isDynamicType(type_.Elem())
 		if hasKeySerializer || hasValueSerializer {
 			var keySerializer, valueSerializer Serializer
@@ -1468,7 +1474,7 @@ func (r *TypeResolver) createSerializer(type_ reflect.Type, mapInStruct bool) (s
 					return nil, fmt.Errorf("cannot auto-register anonymous struct type %s", type_.String())
 				}
 				// For auto-registered types, use package path as namespace and type name
-				if err := r.RegisterNamedType(type_, 0, pkgPath, typeName); err != nil {
+				if err := r.RegisterNamedStruct(type_, 0, pkgPath, typeName); err != nil {
 					return nil, fmt.Errorf("failed to auto-register struct %s: %w", type_.String(), err)
 				}
 				serializer = r.typeToSerializers[type_]
@@ -1522,13 +1528,11 @@ func (r *TypeResolver) GetSliceSerializer(sliceType reflect.Type) (Serializer, e
 	return newSliceSerializer(sliceType, elemSerializer, r.isXlang)
 }
 
-// GetSetSerializer returns the setSerializer for a map[T]bool type (used to represent sets in Go).
+// GetSetSerializer returns the setSerializer for a Set[T] type.
+// Accepts both fory.Set[T] and anonymous map[T]struct{} types.
 func (r *TypeResolver) GetSetSerializer(setType reflect.Type) (Serializer, error) {
-	if setType.Kind() != reflect.Map {
-		return nil, fmt.Errorf("expected map type but got %s", setType.Kind())
-	}
-	if setType.Elem().Kind() != reflect.Bool {
-		return nil, fmt.Errorf("expected map[T]bool for set but got map[%s]%s", setType.Key(), setType.Elem())
+	if !isSetReflectType(setType) {
+		return nil, fmt.Errorf("expected Set type (map[T]struct{}) but got %s", setType)
 	}
 	return setSerializer{}, nil
 }

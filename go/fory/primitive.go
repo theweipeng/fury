@@ -46,7 +46,7 @@ func (s boolSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool
 	s.WriteData(ctx, value)
 }
 
-func (s boolSerializer) ReadData(ctx *ReadContext, type_ reflect.Type, value reflect.Value) {
+func (s boolSerializer) ReadData(ctx *ReadContext, value reflect.Value) {
 	err := ctx.Err()
 	value.SetBool(ctx.buffer.ReadBool(err))
 }
@@ -65,7 +65,7 @@ func (s boolSerializer) Read(ctx *ReadContext, refMode RefMode, readType bool, h
 	if ctx.HasError() {
 		return
 	}
-	s.ReadData(ctx, value.Type(), value)
+	s.ReadData(ctx, value)
 }
 
 func (s boolSerializer) ReadWithTypeInfo(ctx *ReadContext, refMode RefMode, typeInfo *TypeInfo, value reflect.Value) {
@@ -93,7 +93,7 @@ func (s int8Serializer) Write(ctx *WriteContext, refMode RefMode, writeType bool
 	s.WriteData(ctx, value)
 }
 
-func (s int8Serializer) ReadData(ctx *ReadContext, type_ reflect.Type, value reflect.Value) {
+func (s int8Serializer) ReadData(ctx *ReadContext, value reflect.Value) {
 	err := ctx.Err()
 	value.SetInt(int64(ctx.buffer.ReadInt8(err)))
 }
@@ -112,7 +112,7 @@ func (s int8Serializer) Read(ctx *ReadContext, refMode RefMode, readType bool, h
 	if ctx.HasError() {
 		return
 	}
-	s.ReadData(ctx, value.Type(), value)
+	s.ReadData(ctx, value)
 }
 
 func (s int8Serializer) ReadWithTypeInfo(ctx *ReadContext, refMode RefMode, typeInfo *TypeInfo, value reflect.Value) {
@@ -139,7 +139,7 @@ func (s byteSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool
 	s.WriteData(ctx, value)
 }
 
-func (s byteSerializer) ReadData(ctx *ReadContext, type_ reflect.Type, value reflect.Value) {
+func (s byteSerializer) ReadData(ctx *ReadContext, value reflect.Value) {
 	err := ctx.Err()
 	value.SetUint(uint64(ctx.buffer.ReadUint8(err)))
 }
@@ -158,7 +158,7 @@ func (s byteSerializer) Read(ctx *ReadContext, refMode RefMode, readType bool, h
 	if ctx.HasError() {
 		return
 	}
-	s.ReadData(ctx, value.Type(), value)
+	s.ReadData(ctx, value)
 }
 
 func (s byteSerializer) ReadWithTypeInfo(ctx *ReadContext, refMode RefMode, typeInfo *TypeInfo, value reflect.Value) {
@@ -185,7 +185,7 @@ func (s uint16Serializer) Write(ctx *WriteContext, refMode RefMode, writeType bo
 	s.WriteData(ctx, value)
 }
 
-func (s uint16Serializer) ReadData(ctx *ReadContext, type_ reflect.Type, value reflect.Value) {
+func (s uint16Serializer) ReadData(ctx *ReadContext, value reflect.Value) {
 	err := ctx.Err()
 	value.SetUint(uint64(ctx.buffer.ReadUint16(err)))
 }
@@ -204,7 +204,7 @@ func (s uint16Serializer) Read(ctx *ReadContext, refMode RefMode, readType bool,
 	if ctx.HasError() {
 		return
 	}
-	s.ReadData(ctx, value.Type(), value)
+	s.ReadData(ctx, value)
 }
 
 func (s uint16Serializer) ReadWithTypeInfo(ctx *ReadContext, refMode RefMode, typeInfo *TypeInfo, value reflect.Value) {
@@ -231,7 +231,7 @@ func (s uint32Serializer) Write(ctx *WriteContext, refMode RefMode, writeType bo
 	s.WriteData(ctx, value)
 }
 
-func (s uint32Serializer) ReadData(ctx *ReadContext, type_ reflect.Type, value reflect.Value) {
+func (s uint32Serializer) ReadData(ctx *ReadContext, value reflect.Value) {
 	err := ctx.Err()
 	value.SetUint(uint64(ctx.buffer.ReadVaruint32(err)))
 }
@@ -250,7 +250,7 @@ func (s uint32Serializer) Read(ctx *ReadContext, refMode RefMode, readType bool,
 	if ctx.HasError() {
 		return
 	}
-	s.ReadData(ctx, value.Type(), value)
+	s.ReadData(ctx, value)
 }
 
 func (s uint32Serializer) ReadWithTypeInfo(ctx *ReadContext, refMode RefMode, typeInfo *TypeInfo, value reflect.Value) {
@@ -277,7 +277,7 @@ func (s uint64Serializer) Write(ctx *WriteContext, refMode RefMode, writeType bo
 	s.WriteData(ctx, value)
 }
 
-func (s uint64Serializer) ReadData(ctx *ReadContext, type_ reflect.Type, value reflect.Value) {
+func (s uint64Serializer) ReadData(ctx *ReadContext, value reflect.Value) {
 	err := ctx.Err()
 	value.SetUint(ctx.buffer.ReadVaruint64(err))
 }
@@ -296,7 +296,7 @@ func (s uint64Serializer) Read(ctx *ReadContext, refMode RefMode, readType bool,
 	if ctx.HasError() {
 		return
 	}
-	s.ReadData(ctx, value.Type(), value)
+	s.ReadData(ctx, value)
 }
 
 func (s uint64Serializer) ReadWithTypeInfo(ctx *ReadContext, refMode RefMode, typeInfo *TypeInfo, value reflect.Value) {
@@ -322,7 +322,7 @@ func (s int16Serializer) Write(ctx *WriteContext, refMode RefMode, writeType boo
 	s.WriteData(ctx, value)
 }
 
-func (s int16Serializer) ReadData(ctx *ReadContext, type_ reflect.Type, value reflect.Value) {
+func (s int16Serializer) ReadData(ctx *ReadContext, value reflect.Value) {
 	err := ctx.Err()
 	value.SetInt(int64(ctx.buffer.ReadInt16(err)))
 }
@@ -340,7 +340,7 @@ func (s int16Serializer) Read(ctx *ReadContext, refMode RefMode, readType bool, 
 	if ctx.HasError() {
 		return
 	}
-	s.ReadData(ctx, value.Type(), value)
+	s.ReadData(ctx, value)
 }
 
 func (s int16Serializer) ReadWithTypeInfo(ctx *ReadContext, refMode RefMode, typeInfo *TypeInfo, value reflect.Value) {
@@ -366,7 +366,7 @@ func (s int32Serializer) Write(ctx *WriteContext, refMode RefMode, writeType boo
 	s.WriteData(ctx, value)
 }
 
-func (s int32Serializer) ReadData(ctx *ReadContext, type_ reflect.Type, value reflect.Value) {
+func (s int32Serializer) ReadData(ctx *ReadContext, value reflect.Value) {
 	err := ctx.Err()
 	value.SetInt(int64(ctx.buffer.ReadVarint32(err)))
 }
@@ -384,7 +384,7 @@ func (s int32Serializer) Read(ctx *ReadContext, refMode RefMode, readType bool, 
 	if ctx.HasError() {
 		return
 	}
-	s.ReadData(ctx, value.Type(), value)
+	s.ReadData(ctx, value)
 }
 
 func (s int32Serializer) ReadWithTypeInfo(ctx *ReadContext, refMode RefMode, typeInfo *TypeInfo, value reflect.Value) {
@@ -410,7 +410,7 @@ func (s int64Serializer) Write(ctx *WriteContext, refMode RefMode, writeType boo
 	s.WriteData(ctx, value)
 }
 
-func (s int64Serializer) ReadData(ctx *ReadContext, type_ reflect.Type, value reflect.Value) {
+func (s int64Serializer) ReadData(ctx *ReadContext, value reflect.Value) {
 	err := ctx.Err()
 	value.SetInt(ctx.buffer.ReadVarint64(err))
 }
@@ -428,7 +428,7 @@ func (s int64Serializer) Read(ctx *ReadContext, refMode RefMode, readType bool, 
 	if ctx.HasError() {
 		return
 	}
-	s.ReadData(ctx, value.Type(), value)
+	s.ReadData(ctx, value)
 }
 
 func (s int64Serializer) ReadWithTypeInfo(ctx *ReadContext, refMode RefMode, typeInfo *TypeInfo, value reflect.Value) {
@@ -452,7 +452,7 @@ func (s intSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool,
 	s.WriteData(ctx, value)
 }
 
-func (s intSerializer) ReadData(ctx *ReadContext, type_ reflect.Type, value reflect.Value) {
+func (s intSerializer) ReadData(ctx *ReadContext, value reflect.Value) {
 	err := ctx.Err()
 	value.SetInt(ctx.buffer.ReadVarint64(err))
 }
@@ -470,7 +470,7 @@ func (s intSerializer) Read(ctx *ReadContext, refMode RefMode, readType bool, ha
 	if ctx.HasError() {
 		return
 	}
-	s.ReadData(ctx, value.Type(), value)
+	s.ReadData(ctx, value)
 }
 
 func (s intSerializer) ReadWithTypeInfo(ctx *ReadContext, refMode RefMode, typeInfo *TypeInfo, value reflect.Value) {
@@ -496,7 +496,7 @@ func (s float32Serializer) Write(ctx *WriteContext, refMode RefMode, writeType b
 	s.WriteData(ctx, value)
 }
 
-func (s float32Serializer) ReadData(ctx *ReadContext, type_ reflect.Type, value reflect.Value) {
+func (s float32Serializer) ReadData(ctx *ReadContext, value reflect.Value) {
 	err := ctx.Err()
 	value.SetFloat(float64(ctx.buffer.ReadFloat32(err)))
 }
@@ -514,7 +514,7 @@ func (s float32Serializer) Read(ctx *ReadContext, refMode RefMode, readType bool
 	if ctx.HasError() {
 		return
 	}
-	s.ReadData(ctx, value.Type(), value)
+	s.ReadData(ctx, value)
 }
 
 func (s float32Serializer) ReadWithTypeInfo(ctx *ReadContext, refMode RefMode, typeInfo *TypeInfo, value reflect.Value) {
@@ -540,7 +540,7 @@ func (s float64Serializer) Write(ctx *WriteContext, refMode RefMode, writeType b
 	s.WriteData(ctx, value)
 }
 
-func (s float64Serializer) ReadData(ctx *ReadContext, type_ reflect.Type, value reflect.Value) {
+func (s float64Serializer) ReadData(ctx *ReadContext, value reflect.Value) {
 	err := ctx.Err()
 	value.SetFloat(ctx.buffer.ReadFloat64(err))
 }
@@ -558,7 +558,7 @@ func (s float64Serializer) Read(ctx *ReadContext, refMode RefMode, readType bool
 	if ctx.HasError() {
 		return
 	}
-	s.ReadData(ctx, value.Type(), value)
+	s.ReadData(ctx, value)
 }
 
 func (s float64Serializer) ReadWithTypeInfo(ctx *ReadContext, refMode RefMode, typeInfo *TypeInfo, value reflect.Value) {
