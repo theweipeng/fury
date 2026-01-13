@@ -22,7 +22,6 @@ package org.apache.fory;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
-import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -99,11 +98,8 @@ public final class Fory implements BaseFory {
   public static final byte REF_VALUE_FLAG = 0;
   public static final byte NOT_SUPPORT_XLANG = 0;
   private static final byte isNilFlag = 1;
-  private static final byte isLittleEndianFlag = 1 << 1;
-  private static final byte isCrossLanguageFlag = 1 << 2;
-  private static final byte isOutOfBandFlag = 1 << 3;
-  private static final boolean isLittleEndian = ByteOrder.nativeOrder() == ByteOrder.LITTLE_ENDIAN;
-  private static final byte BITMAP = isLittleEndian ? isLittleEndianFlag : 0;
+  private static final byte isCrossLanguageFlag = 1 << 1;
+  private static final byte isOutOfBandFlag = 1 << 2;
 
   private final Config config;
   private final boolean refTracking;
@@ -297,7 +293,7 @@ public final class Fory implements BaseFory {
 
   @Override
   public MemoryBuffer serialize(MemoryBuffer buffer, Object obj, BufferCallback callback) {
-    byte bitmap = BITMAP;
+    byte bitmap = 0;
     if (crossLanguage) {
       bitmap |= isCrossLanguageFlag;
     }
@@ -831,9 +827,6 @@ public final class Fory implements BaseFory {
       if ((bitmap & isNilFlag) == isNilFlag) {
         return null;
       }
-      Preconditions.checkArgument(
-          Fory.isLittleEndian,
-          "Non-Little-Endian format detected. Only Little-Endian is supported.");
       boolean isTargetXLang = (bitmap & isCrossLanguageFlag) == isCrossLanguageFlag;
       if (isTargetXLang) {
         peerLanguage = Language.values()[buffer.readByte()];

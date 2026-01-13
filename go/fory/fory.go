@@ -18,7 +18,6 @@
 package fory
 
 import (
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"reflect"
@@ -49,10 +48,9 @@ const (
 
 // Bitmap flags for protocol header
 const (
-	IsNilFlag        = 1
-	LittleEndianFlag = 2
-	XLangFlag        = 4
-	OutOfBandFlag    = 8
+	IsNilFlag     = 1 << 0
+	XLangFlag     = 1 << 1
+	OutOfBandFlag = 1 << 2
 )
 
 // ============================================================================
@@ -847,9 +845,6 @@ func (f *Fory) serializeReflectValue(value reflect.Value) ([]byte, error) {
 // writeHeader writes the Fory protocol header
 func writeHeader(ctx *WriteContext, config Config) {
 	var bitmap byte = 0
-	if nativeEndian == binary.LittleEndian {
-		bitmap |= LittleEndianFlag
-	}
 	if config.IsXlang {
 		bitmap |= XLangFlag
 	}
