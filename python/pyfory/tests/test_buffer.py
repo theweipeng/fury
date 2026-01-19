@@ -17,7 +17,7 @@
 
 from pyfory.buffer import Buffer
 from pyfory.tests.core import require_pyarrow
-from pyfory.util import lazy_import
+from pyfory.utils import lazy_import
 
 pa = lazy_import("pyarrow")
 
@@ -138,6 +138,7 @@ def check_varint32(buf: Buffer, value: int):
 
 @require_pyarrow
 def test_buffer_protocol():
+    # test buffer protocol compatibility with pyarrow
     buffer = Buffer.allocate(32)
     binary = b"b" * 100
     buffer.write_bytes_and_size(binary)

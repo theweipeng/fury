@@ -21,13 +21,15 @@
 
 #include "fory/util/error.h"
 #include "fory/util/result.h"
+
+#include "absl/container/flat_hash_map.h"
+
 #include <any>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
 #include <typeinfo>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -76,6 +78,11 @@ public:
     return false;
   }
 
+  /// Reserve a ref_id slot without storing a pointer.
+  /// Used for types (like structs) that Java tracks but C++ doesn't reference.
+  /// This keeps ref ID numbering in sync across languages.
+  uint32_t reserve_ref_id() { return next_id_++; }
+
   /// Reset resolver for reuse in new serialization.
   /// Clears all tracked references.
   void reset() {
@@ -84,7 +91,7 @@ public:
   }
 
 private:
-  std::unordered_map<uintptr_t, uint32_t> ptr_to_id_;
+  absl::flat_hash_map<uintptr_t, uint32_t> ptr_to_id_;
   uint32_t next_id_;
 };
 
@@ -136,6 +143,19 @@ public:
         *target = ref_result.value();
       }
     });
+  }
+
+  /// Add a callback that will be invoked when references are resolved.
+  /// The callback receives a const reference to the RefReader and can
+  /// look up references by ID.
+  ///
+  /// This overload is useful for SharedWeak and other types that need
+  /// custom callback logic for forward reference resolution.
+  ///
+  /// @param ref_id The reference ID to wait for (for documentation only).
+  /// @param callback The callback to invoke during resolve_callbacks().
+  void add_update_callback(uint32_t /*ref_id*/, UpdateCallback callback) {
+    callbacks_.emplace_back(std::move(callback));
   }
 
   void resolve_callbacks() {

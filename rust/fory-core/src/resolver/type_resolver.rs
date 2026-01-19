@@ -22,7 +22,7 @@ use crate::meta::{
     TYPE_NAME_ENCODINGS,
 };
 use crate::serializer::{ForyDefault, Serializer, StructSerializer};
-use crate::util::get_ext_actual_type_id;
+use crate::types::{get_ext_actual_type_id, is_enum_type_id, RefMode};
 use crate::TypeId;
 use chrono::{NaiveDate, NaiveDateTime};
 use std::collections::{HashSet, LinkedList};
@@ -34,15 +34,16 @@ use std::{any::Any, collections::HashMap};
 type WriteFn = fn(
     &dyn Any,
     &mut WriteContext,
-    write_ref_info: bool,
+    ref_mode: RefMode,
     write_type_info: bool,
     has_enerics: bool,
 ) -> Result<(), Error>;
 type ReadFn =
-    fn(&mut ReadContext, read_ref_info: bool, read_type_info: bool) -> Result<Box<dyn Any>, Error>;
+    fn(&mut ReadContext, ref_mode: RefMode, read_type_info: bool) -> Result<Box<dyn Any>, Error>;
 
 type WriteDataFn = fn(&dyn Any, &mut WriteContext, has_generics: bool) -> Result<(), Error>;
 type ReadDataFn = fn(&mut ReadContext) -> Result<Box<dyn Any>, Error>;
+type ReadCompatibleFn = fn(&mut ReadContext, Rc<TypeInfo>) -> Result<Box<dyn Any>, Error>;
 type ToSerializerFn = fn(Box<dyn Any>) -> Result<Box<dyn Serializer>, Error>;
 type BuildTypeInfosFn = fn(&TypeResolver) -> Result<Vec<(std::any::TypeId, TypeInfo)>, Error>;
 const EMPTY_STRING: String = String::new();
@@ -53,6 +54,7 @@ pub struct Harness {
     read_fn: ReadFn,
     write_data_fn: WriteDataFn,
     read_data_fn: ReadDataFn,
+    read_compatible_fn: Option<ReadCompatibleFn>,
     to_serializer: ToSerializerFn,
     build_type_infos: BuildTypeInfosFn,
 }
@@ -63,6 +65,7 @@ impl Harness {
         read_fn: ReadFn,
         write_data_fn: WriteDataFn,
         read_data_fn: ReadDataFn,
+        read_compatible_fn: Option<ReadCompatibleFn>,
         to_serializer: ToSerializerFn,
         build_type_infos: BuildTypeInfosFn,
     ) -> Harness {
@@ -71,6 +74,7 @@ impl Harness {
             read_fn,
             write_data_fn,
             read_data_fn,
+            read_compatible_fn,
             to_serializer,
             build_type_infos,
         }
@@ -82,6 +86,7 @@ impl Harness {
             stub_read_fn,
             stub_write_data_fn,
             stub_read_data_fn,
+            None,
             stub_to_serializer_fn,
             stub_build_type_infos,
         )
@@ -108,8 +113,31 @@ impl Harness {
     }
 
     #[inline(always)]
+    pub fn get_read_compatible_fn(&self) -> Option<ReadCompatibleFn> {
+        self.read_compatible_fn
+    }
+
+    #[inline(always)]
     pub fn get_to_serializer(&self) -> ToSerializerFn {
         self.to_serializer
+    }
+
+    /// Reads polymorphic data using the appropriate function based on mode.
+    /// In compatible mode, uses read_compatible_fn if available to handle schema
+    /// evolution. Otherwise, uses read_data_fn for direct deserialization.
+    #[inline(always)]
+    pub fn read_polymorphic_data(
+        &self,
+        context: &mut ReadContext,
+        typeinfo: &Rc<TypeInfo>,
+    ) -> Result<Box<dyn Any>, Error> {
+        if context.is_compatible() {
+            if let Some(read_compatible_fn) = self.read_compatible_fn {
+                // Only clone when actually needed for compatible mode
+                return read_compatible_fn(context, typeinfo.clone());
+            }
+        }
+        (self.read_data_fn)(context)
     }
 }
 
@@ -138,7 +166,7 @@ impl TypeInfo {
             TYPE_NAME_ENCODER.encode_with_encodings(type_name, TYPE_NAME_ENCODINGS)?;
         Ok(TypeInfo {
             type_def: Rc::from(vec![]),
-            type_meta: Rc::new(TypeMeta::empty()),
+            type_meta: Rc::new(TypeMeta::empty()?),
             type_id,
             namespace: Rc::from(namespace_meta_string),
             type_name: Rc::from(type_name_meta_string),
@@ -152,7 +180,7 @@ impl TypeInfo {
         let namespace = type_meta.get_namespace();
         let type_name = type_meta.get_type_name();
         let register_by_name = !namespace.original.is_empty() || !type_name.original.is_empty();
-        let type_def_bytes = type_meta.to_bytes()?;
+        let type_def_bytes = type_meta.get_bytes().to_owned();
         Ok(TypeInfo {
             type_def: Rc::from(type_def_bytes),
             type_meta,
@@ -199,6 +227,20 @@ impl TypeInfo {
         &self.harness
     }
 
+    /// Creates a deep clone with new Rc instances.
+    /// This is safe for concurrent use from multiple threads.
+    pub fn deep_clone(&self) -> TypeInfo {
+        TypeInfo {
+            type_def: Rc::new((*self.type_def).clone()),
+            type_meta: Rc::new(self.type_meta.deep_clone()),
+            type_id: self.type_id,
+            namespace: Rc::new((*self.namespace).clone()),
+            type_name: Rc::new((*self.type_name).clone()),
+            register_by_name: self.register_by_name,
+            harness: self.harness.clone(),
+        }
+    }
+
     /// Create a TypeInfo from remote TypeMeta with a stub harness
     /// Used when the type doesn't exist locally during deserialization
     pub fn from_remote_meta(
@@ -208,7 +250,7 @@ impl TypeInfo {
         let type_id = remote_meta.get_type_id();
         let namespace = remote_meta.get_namespace();
         let type_name = remote_meta.get_type_name();
-        let type_def_bytes = remote_meta.to_bytes().unwrap_or_default();
+        let type_def_bytes = remote_meta.get_bytes().to_owned();
         let register_by_name = !namespace.original.is_empty() || !type_name.original.is_empty();
 
         let harness = if let Some(h) = local_harness {
@@ -220,6 +262,7 @@ impl TypeInfo {
                 stub_read_fn,
                 stub_write_data_fn,
                 stub_read_data_fn,
+                None,
                 stub_to_serializer_fn,
                 stub_build_type_infos,
             )
@@ -241,7 +284,7 @@ impl TypeInfo {
 fn stub_write_fn(
     _: &dyn Any,
     _: &mut WriteContext,
-    _: bool,
+    _: RefMode,
     _: bool,
     _: bool,
 ) -> Result<(), Error> {
@@ -250,7 +293,7 @@ fn stub_write_fn(
     ))
 }
 
-fn stub_read_fn(_: &mut ReadContext, _: bool, _: bool) -> Result<Box<dyn Any>, Error> {
+fn stub_read_fn(_: &mut ReadContext, _: RefMode, _: bool) -> Result<Box<dyn Any>, Error> {
     Err(Error::type_error(
         "Cannot deserialize unknown remote type - type not registered locally",
     ))
@@ -304,8 +347,8 @@ fn build_struct_type_infos<T: StructSerializer>(
         (*partial_info.type_name).clone(),
         partial_info.register_by_name,
         sorted_field_infos,
-    );
-    let type_def_bytes = type_meta.to_bytes()?;
+    )?;
+    let type_def_bytes = type_meta.get_bytes().to_owned();
     let main_type_info = TypeInfo {
         type_def: Rc::from(type_def_bytes),
         type_meta: Rc::new(type_meta),
@@ -319,7 +362,8 @@ fn build_struct_type_infos<T: StructSerializer>(
     let mut result = vec![(std::any::TypeId::of::<T>(), main_type_info)];
 
     // Handle enum variants in compatible mode
-    if type_resolver.compatible && T::fory_static_type_id() == TypeId::ENUM {
+    // Check for ENUM, NAMED_ENUM, and UNION (Union-compatible Rust enums return UNION TypeId)
+    if type_resolver.compatible && is_enum_type_id(T::fory_static_type_id()) {
         // Fields are already sorted with IDs assigned by the macro
         let variants_info = T::fory_variants_fields_info(type_resolver)?;
         for (idx, (variant_name, variant_type_id, fields_info)) in
@@ -343,7 +387,7 @@ fn build_struct_type_infos<T: StructSerializer>(
                     type_name_ms,
                     true,
                     fields_info.clone(),
-                )
+                )?
             } else {
                 // add a check to avoid collision with main enum type_id
                 // since internal id is big alealdy, `74<<8 = 18944` is big enough to avoid collision most of time
@@ -364,7 +408,7 @@ fn build_struct_type_infos<T: StructSerializer>(
                     MetaString::get_empty().clone(),
                     false,
                     fields_info,
-                )
+                )?
             };
 
             let variant_type_info =
@@ -390,8 +434,8 @@ fn build_serializer_type_infos(
         (*partial_info.type_name).clone(),
         partial_info.register_by_name,
         vec![],
-    );
-    let type_def_bytes = type_meta.to_bytes()?;
+    )?;
+    let type_def_bytes = type_meta.get_bytes().to_owned();
     let type_info = TypeInfo {
         type_def: Rc::from(type_def_bytes),
         type_meta: Rc::new(type_meta),
@@ -415,6 +459,7 @@ pub struct TypeResolver {
     // Fast lookup by numeric ID for common types
     type_id_index: Vec<u32>,
     compatible: bool,
+    xlang: bool,
 }
 
 // Safety: TypeResolver instances are only shared through higher-level synchronization that
@@ -435,6 +480,7 @@ impl Default for TypeResolver {
             type_id_index: Vec::new(),
             partial_type_infos: HashMap::new(),
             compatible: false,
+            xlang: false,
         };
         registry.register_builtin_types().unwrap();
         registry
@@ -544,14 +590,16 @@ impl TypeResolver {
         self.register_internal_serializer::<bool>(TypeId::BOOL)?;
         self.register_internal_serializer::<i8>(TypeId::INT8)?;
         self.register_internal_serializer::<i16>(TypeId::INT16)?;
-        self.register_internal_serializer::<i32>(TypeId::INT32)?;
-        self.register_internal_serializer::<i64>(TypeId::INT64)?;
+        self.register_internal_serializer::<i32>(TypeId::VARINT32)?;
+        self.register_internal_serializer::<i64>(TypeId::VARINT64)?;
+        self.register_internal_serializer::<isize>(TypeId::ISIZE)?;
+        self.register_internal_serializer::<i128>(TypeId::INT128)?;
         self.register_internal_serializer::<f32>(TypeId::FLOAT32)?;
         self.register_internal_serializer::<f64>(TypeId::FLOAT64)?;
-        self.register_internal_serializer::<u8>(TypeId::U8)?;
-        self.register_internal_serializer::<u16>(TypeId::U16)?;
-        self.register_internal_serializer::<u32>(TypeId::U32)?;
-        self.register_internal_serializer::<u64>(TypeId::U64)?;
+        self.register_internal_serializer::<u8>(TypeId::UINT8)?;
+        self.register_internal_serializer::<u16>(TypeId::UINT16)?;
+        self.register_internal_serializer::<u32>(TypeId::VAR_UINT32)?;
+        self.register_internal_serializer::<u64>(TypeId::VAR_UINT64)?;
         self.register_internal_serializer::<usize>(TypeId::USIZE)?;
         self.register_internal_serializer::<u128>(TypeId::U128)?;
         self.register_internal_serializer::<String>(TypeId::STRING)?;
@@ -566,11 +614,13 @@ impl TypeResolver {
         self.register_internal_serializer::<Vec<f32>>(TypeId::FLOAT32_ARRAY)?;
         self.register_internal_serializer::<Vec<f64>>(TypeId::FLOAT64_ARRAY)?;
         self.register_internal_serializer::<Vec<u8>>(TypeId::BINARY)?;
-        self.register_internal_serializer::<Vec<u16>>(TypeId::U16_ARRAY)?;
-        self.register_internal_serializer::<Vec<u32>>(TypeId::U32_ARRAY)?;
-        self.register_internal_serializer::<Vec<u64>>(TypeId::U64_ARRAY)?;
+        self.register_internal_serializer::<Vec<u16>>(TypeId::UINT16_ARRAY)?;
+        self.register_internal_serializer::<Vec<u32>>(TypeId::UINT32_ARRAY)?;
+        self.register_internal_serializer::<Vec<u64>>(TypeId::UINT64_ARRAY)?;
         self.register_internal_serializer::<Vec<usize>>(TypeId::USIZE_ARRAY)?;
         self.register_internal_serializer::<Vec<u128>>(TypeId::U128_ARRAY)?;
+        self.register_internal_serializer::<Vec<isize>>(TypeId::ISIZE_ARRAY)?;
+        self.register_internal_serializer::<Vec<i128>>(TypeId::INT128_ARRAY)?;
         self.register_generic_trait::<Vec<String>>()?;
         self.register_generic_trait::<LinkedList<i32>>()?;
         self.register_generic_trait::<LinkedList<String>>()?;
@@ -612,20 +662,19 @@ impl TypeResolver {
                 "Either id must be non-zero for ID registration, or type_name must be non-empty for name registration",
             ));
         }
-        let actual_type_id = T::fory_actual_type_id(id, register_by_name, self.compatible);
+        let actual_type_id =
+            T::fory_actual_type_id(id, register_by_name, self.compatible, self.xlang);
 
         fn write<T2: 'static + Serializer>(
             this: &dyn Any,
             context: &mut WriteContext,
-            write_ref_info: bool,
+            ref_mode: RefMode,
             write_type_info: bool,
             has_generics: bool,
         ) -> Result<(), Error> {
             let this = this.downcast_ref::<T2>();
             match this {
-                Some(v) => {
-                    T2::fory_write(v, context, write_ref_info, write_type_info, has_generics)
-                }
+                Some(v) => T2::fory_write(v, context, ref_mode, write_type_info, has_generics),
                 None => Err(Error::type_error(format!(
                     "Cast type to {:?} error when writing: {:?}",
                     std::any::type_name::<T2>(),
@@ -636,14 +685,10 @@ impl TypeResolver {
 
         fn read<T2: 'static + Serializer + ForyDefault>(
             context: &mut ReadContext,
-            read_ref_info: bool,
+            ref_mode: RefMode,
             read_type_info: bool,
         ) -> Result<Box<dyn Any>, Error> {
-            Ok(Box::new(T2::fory_read(
-                context,
-                read_ref_info,
-                read_type_info,
-            )?))
+            Ok(Box::new(T2::fory_read(context, ref_mode, read_type_info)?))
         }
 
         fn write_data<T2: 'static + Serializer>(
@@ -686,11 +731,19 @@ impl TypeResolver {
             build_struct_type_infos::<T>(type_resolver)
         }
 
+        fn read_compatible<T2: 'static + StructSerializer + ForyDefault>(
+            context: &mut ReadContext,
+            type_info: Rc<TypeInfo>,
+        ) -> Result<Box<dyn Any>, Error> {
+            Ok(Box::new(T2::fory_read_compatible(context, type_info)?))
+        }
+
         let harness = Harness::new(
             write::<T>,
             read::<T>,
             write_data::<T>,
             read_data::<T>,
+            Some(read_compatible::<T>),
             to_serializer::<T>,
             build_type_infos::<T>,
         );
@@ -712,10 +765,10 @@ impl TypeResolver {
 
         // Check if type_id conflicts with any already registered type
         // Skip check for:
-        // 1. Internal types (type_id <= TypeId::UNKNOWN) as they can be shared
+        // 1. Internal types (type_id < TypeId::BOUND) as they can be shared
         // 2. Types registered by name (they use shared type IDs like NAMED_STRUCT)
         if !register_by_name
-            && actual_type_id > TypeId::UNKNOWN as u32
+            && actual_type_id >= TypeId::BOUND as u32
             && self.type_info_map_by_id.contains_key(&actual_type_id)
         {
             return Err(Error::type_error(format!(
@@ -799,15 +852,13 @@ impl TypeResolver {
         fn write<T2: 'static + Serializer>(
             this: &dyn Any,
             context: &mut WriteContext,
-            write_ref_info: bool,
+            ref_mode: RefMode,
             write_type_info: bool,
             has_generics: bool,
         ) -> Result<(), Error> {
             let this = this.downcast_ref::<T2>();
             match this {
-                Some(v) => {
-                    Ok(v.fory_write(context, write_ref_info, write_type_info, has_generics)?)
-                }
+                Some(v) => v.fory_write(context, ref_mode, write_type_info, has_generics),
                 None => Err(Error::type_error(format!(
                     "Cast type to {:?} error when writing: {:?}",
                     std::any::type_name::<T2>(),
@@ -818,14 +869,10 @@ impl TypeResolver {
 
         fn read<T2: 'static + Serializer + ForyDefault>(
             context: &mut ReadContext,
-            read_ref_info: bool,
+            ref_mode: RefMode,
             read_type_info: bool,
         ) -> Result<Box<dyn Any>, Error> {
-            Ok(Box::new(T2::fory_read(
-                context,
-                read_ref_info,
-                read_type_info,
-            )?))
+            Ok(Box::new(T2::fory_read(context, ref_mode, read_type_info)?))
         }
 
         fn write_data<T2: 'static + Serializer>(
@@ -877,11 +924,13 @@ impl TypeResolver {
             build_serializer_type_infos(partial_info, std::any::TypeId::of::<T2>())
         }
 
+        // EXT types don't support fory_read_compatible
         let harness = Harness::new(
             write::<T>,
             read::<T>,
             write_data::<T>,
             read_data::<T>,
+            None,
             to_serializer::<T>,
             build_type_infos::<T>,
         );
@@ -903,8 +952,8 @@ impl TypeResolver {
         }
 
         // Check if type_id conflicts with any already registered type
-        // Skip check for internal types (type_id <= TypeId::UNKNOWN) as they can be shared
-        if actual_type_id > TypeId::UNKNOWN as u32
+        // Skip check for internal types (type_id < TypeId::BOUND) as they can be shared
+        if actual_type_id >= TypeId::BOUND as u32
             && self.type_info_map_by_id.contains_key(&actual_type_id)
         {
             return Err(Error::type_error(format!(
@@ -945,6 +994,14 @@ impl TypeResolver {
 
     pub(crate) fn set_compatible(&mut self, compatible: bool) {
         self.compatible = compatible;
+    }
+
+    pub(crate) fn set_xlang(&mut self, xlang: bool) {
+        self.xlang = xlang;
+    }
+
+    pub fn is_xlang(&self) -> bool {
+        self.xlang
     }
 
     /// Builds the final TypeResolver by completing all partial type infos created during registration.
@@ -1008,6 +1065,7 @@ impl TypeResolver {
             partial_type_infos: HashMap::new(),
             type_id_index,
             compatible: self.compatible,
+            xlang: self.xlang,
         })
     }
 
@@ -1026,20 +1084,70 @@ impl TypeResolver {
     ///
     /// # Returns
     ///
-    /// A shallow clone of the TypeResolver with all internal maps cloned.
+    /// A deep clone of the TypeResolver with all internal Rc instances recreated.
+    /// This ensures thread safety when cloning from multiple threads simultaneously.
     ///
     /// # See Also
     ///
     /// - [`build_final_type_resolver`](Self::build_final_type_resolver) - Builds a complete resolver
     pub(crate) fn clone(&self) -> TypeResolver {
+        // Build a mapping from old Rc<TypeInfo> pointers to new Rc<TypeInfo>
+        // to ensure we reuse the same new Rc for the same original TypeInfo
+        let mut type_info_mapping: HashMap<*const TypeInfo, Rc<TypeInfo>> = HashMap::new();
+
+        // Helper closure to get or create deep-cloned TypeInfo wrapped in new Rc
+        let mut get_or_clone_type_info = |rc: &Rc<TypeInfo>| -> Rc<TypeInfo> {
+            let ptr = Rc::as_ptr(rc);
+            if let Some(new_rc) = type_info_mapping.get(&ptr) {
+                new_rc.clone()
+            } else {
+                let new_rc = Rc::new(rc.deep_clone());
+                type_info_mapping.insert(ptr, new_rc.clone());
+                new_rc
+            }
+        };
+
+        // Clone all maps with deep-cloned TypeInfo in new Rc wrappers
+        let type_info_map_by_id: HashMap<u32, Rc<TypeInfo>> = self
+            .type_info_map_by_id
+            .iter()
+            .map(|(k, v)| (*k, get_or_clone_type_info(v)))
+            .collect();
+
+        let type_info_map: HashMap<std::any::TypeId, Rc<TypeInfo>> = self
+            .type_info_map
+            .iter()
+            .map(|(k, v)| (*k, get_or_clone_type_info(v)))
+            .collect();
+
+        let type_info_map_by_name: HashMap<(String, String), Rc<TypeInfo>> = self
+            .type_info_map_by_name
+            .iter()
+            .map(|(k, v)| (k.clone(), get_or_clone_type_info(v)))
+            .collect();
+
+        // Deep clone the MetaString keys as well
+        let type_info_map_by_meta_string_name: HashMap<
+            (Rc<MetaString>, Rc<MetaString>),
+            Rc<TypeInfo>,
+        > = self
+            .type_info_map_by_meta_string_name
+            .iter()
+            .map(|(k, v)| {
+                let new_key = (Rc::new((*k.0).clone()), Rc::new((*k.1).clone()));
+                (new_key, get_or_clone_type_info(v))
+            })
+            .collect();
+
         TypeResolver {
-            type_info_map_by_id: self.type_info_map_by_id.clone(),
-            type_info_map: self.type_info_map.clone(),
-            type_info_map_by_name: self.type_info_map_by_name.clone(),
-            type_info_map_by_meta_string_name: self.type_info_map_by_meta_string_name.clone(),
+            type_info_map_by_id,
+            type_info_map,
+            type_info_map_by_name,
+            type_info_map_by_meta_string_name,
             partial_type_infos: HashMap::new(),
             type_id_index: self.type_id_index.clone(),
             compatible: self.compatible,
+            xlang: self.xlang,
         }
     }
 }

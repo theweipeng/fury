@@ -27,7 +27,6 @@ import static org.apache.fory.meta.Encoders.TYPE_NAME_DECODER;
 import static org.apache.fory.meta.Encoders.encodePackage;
 import static org.apache.fory.meta.Encoders.encodeTypeName;
 import static org.apache.fory.serializer.CodegenSerializer.loadCodegenSerializer;
-import static org.apache.fory.serializer.CodegenSerializer.loadCompatibleCodegenSerializer;
 import static org.apache.fory.serializer.CodegenSerializer.supportCodegenForJavaSerialization;
 import static org.apache.fory.type.TypeUtils.OBJECT_TYPE;
 import static org.apache.fory.type.TypeUtils.getRawType;
@@ -36,8 +35,6 @@ import java.io.Externalizable;
 import java.io.IOException;
 import java.io.Serializable;
 import java.lang.invoke.SerializedLambda;
-import java.lang.reflect.Field;
-import java.lang.reflect.Member;
 import java.lang.reflect.Type;
 import java.math.BigDecimal;
 import java.math.BigInteger;
@@ -65,7 +62,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
-import java.util.SortedMap;
 import java.util.TimeZone;
 import java.util.TreeMap;
 import java.util.TreeSet;
@@ -82,6 +78,7 @@ import java.util.stream.Collectors;
 import org.apache.fory.Fory;
 import org.apache.fory.ForyCopyable;
 import org.apache.fory.annotation.CodegenInvoke;
+import org.apache.fory.annotation.ForyField;
 import org.apache.fory.annotation.Internal;
 import org.apache.fory.builder.JITContext;
 import org.apache.fory.codegen.CodeGenerator;
@@ -107,9 +104,9 @@ import org.apache.fory.reflect.TypeRef;
 import org.apache.fory.serializer.ArraySerializers;
 import org.apache.fory.serializer.BufferSerializers;
 import org.apache.fory.serializer.CodegenSerializer.LazyInitBeanSerializer;
-import org.apache.fory.serializer.CompatibleSerializer;
 import org.apache.fory.serializer.EnumSerializer;
 import org.apache.fory.serializer.ExternalizableSerializer;
+import org.apache.fory.serializer.FinalFieldReplaceResolveSerializer;
 import org.apache.fory.serializer.ForyCopyableSerializer;
 import org.apache.fory.serializer.JavaSerializer;
 import org.apache.fory.serializer.JdkProxySerializer;
@@ -150,6 +147,8 @@ import org.apache.fory.type.Descriptor;
 import org.apache.fory.type.DescriptorGrouper;
 import org.apache.fory.type.GenericType;
 import org.apache.fory.type.TypeUtils;
+import org.apache.fory.type.Types;
+import org.apache.fory.type.union.Union;
 import org.apache.fory.util.GraalvmSupport;
 import org.apache.fory.util.Preconditions;
 import org.apache.fory.util.StringUtils;
@@ -159,51 +158,78 @@ import org.apache.fory.util.record.RecordUtils;
 /**
  * Class registry for types of serializing objects, responsible for reading/writing types, setting
  * up relations between serializer and types.
+ *
+ * <h2>Class ID Space</h2>
+ *
+ * <p>Fory separates user class IDs from internal class IDs to provide a clean and intuitive API:
+ *
+ * <ul>
+ *   <li><b>User ID space</b>: IDs specified via {@link #register(Class, int)} start from 0. Valid
+ *       range is [0, {@value Short#MAX_VALUE} - {@value #USER_ID_BASE} - 1] (i.e., [0, 32510]).
+ *   <li><b>Internal ID space</b>: Reserved for Fory's built-in types (primitives, common
+ *       collections, etc.). These IDs are in the range [0, {@value #USER_ID_BASE} - 1] and are
+ *       completely hidden from users.
+ * </ul>
+ *
+ * <p>When users register a class with ID N, Fory internally stores it as (N + {@value
+ * #USER_ID_BASE}). This transformation is transparent to users - they only work with their own
+ * 0-based ID space.
+ *
+ * <h2>Registration Methods</h2>
+ *
+ * <ul>
+ *   <li>{@link #register(Class)} - Auto-assigns the next available user ID
+ *   <li>{@link #register(Class, int)} - Registers with a user-specified ID (0-based)
+ *   <li>{@link #register(Class, String, String)} - Registers with namespace and type name
+ * </ul>
+ *
+ * @see #register(Class)
+ * @see #register(Class, int)
  */
 @SuppressWarnings({"rawtypes", "unchecked"})
 public class ClassResolver extends TypeResolver {
   private static final Logger LOG = LoggerFactory.getLogger(ClassResolver.class);
 
-  // preserve 0 as flag for class id not set in ClassInfo`
+  /** Flag value indicating no class ID has been assigned. */
   public static final short NO_CLASS_ID = TypeResolver.NO_CLASS_ID;
-  public static final short LAMBDA_STUB_ID = 1;
-  public static final short JDK_PROXY_STUB_ID = 2;
-  public static final short REPLACE_STUB_ID = 3;
+
+  /**
+   * Base offset for user-registered class IDs. User IDs are internally stored as `userId +
+   * USER_ID_BASE`. 0 to `USER_ID_BASE` are reserved for Fory's internal types.
+   */
+  public static final short USER_ID_BASE = 256;
+
+  public static final int NATIVE_START_ID = Types.STRING + 1;
+  public static final int VOID_ID = NATIVE_START_ID;
+  public static final int CHAR_ID = NATIVE_START_ID + 1;
   // Note: following pre-defined class id should be continuous, since they may be used based range.
-  public static final short PRIMITIVE_VOID_CLASS_ID = (short) (REPLACE_STUB_ID + 1);
-  public static final short PRIMITIVE_BOOLEAN_CLASS_ID = (short) (PRIMITIVE_VOID_CLASS_ID + 1);
-  public static final short PRIMITIVE_BYTE_CLASS_ID = (short) (PRIMITIVE_VOID_CLASS_ID + 2);
-  public static final short PRIMITIVE_CHAR_CLASS_ID = (short) (PRIMITIVE_VOID_CLASS_ID + 3);
-  public static final short PRIMITIVE_SHORT_CLASS_ID = (short) (PRIMITIVE_VOID_CLASS_ID + 4);
-  public static final short PRIMITIVE_INT_CLASS_ID = (short) (PRIMITIVE_VOID_CLASS_ID + 5);
-  public static final short PRIMITIVE_FLOAT_CLASS_ID = (short) (PRIMITIVE_VOID_CLASS_ID + 6);
-  public static final short PRIMITIVE_LONG_CLASS_ID = (short) (PRIMITIVE_VOID_CLASS_ID + 7);
-  public static final short PRIMITIVE_DOUBLE_CLASS_ID = (short) (PRIMITIVE_VOID_CLASS_ID + 8);
-  public static final short VOID_CLASS_ID = (short) (PRIMITIVE_DOUBLE_CLASS_ID + 1);
-  public static final short BOOLEAN_CLASS_ID = (short) (VOID_CLASS_ID + 1);
-  public static final short BYTE_CLASS_ID = (short) (VOID_CLASS_ID + 2);
-  public static final short CHAR_CLASS_ID = (short) (VOID_CLASS_ID + 3);
-  public static final short SHORT_CLASS_ID = (short) (VOID_CLASS_ID + 4);
-  public static final short INTEGER_CLASS_ID = (short) (VOID_CLASS_ID + 5);
-  public static final short FLOAT_CLASS_ID = (short) (VOID_CLASS_ID + 6);
-  public static final short LONG_CLASS_ID = (short) (VOID_CLASS_ID + 7);
-  public static final short DOUBLE_CLASS_ID = (short) (VOID_CLASS_ID + 8);
-  public static final short STRING_CLASS_ID = (short) (VOID_CLASS_ID + 9);
-  public static final short PRIMITIVE_BOOLEAN_ARRAY_CLASS_ID = (short) (STRING_CLASS_ID + 1);
-  public static final short PRIMITIVE_BYTE_ARRAY_CLASS_ID = (short) (STRING_CLASS_ID + 2);
-  public static final short PRIMITIVE_CHAR_ARRAY_CLASS_ID = (short) (STRING_CLASS_ID + 3);
-  public static final short PRIMITIVE_SHORT_ARRAY_CLASS_ID = (short) (STRING_CLASS_ID + 4);
-  public static final short PRIMITIVE_INT_ARRAY_CLASS_ID = (short) (STRING_CLASS_ID + 5);
-  public static final short PRIMITIVE_FLOAT_ARRAY_CLASS_ID = (short) (STRING_CLASS_ID + 6);
-  public static final short PRIMITIVE_LONG_ARRAY_CLASS_ID = (short) (STRING_CLASS_ID + 7);
-  public static final short PRIMITIVE_DOUBLE_ARRAY_CLASS_ID = (short) (STRING_CLASS_ID + 8);
-  public static final short STRING_ARRAY_CLASS_ID = (short) (PRIMITIVE_DOUBLE_ARRAY_CLASS_ID + 1);
-  public static final short OBJECT_ARRAY_CLASS_ID = (short) (PRIMITIVE_DOUBLE_ARRAY_CLASS_ID + 2);
-  public static final short ARRAYLIST_CLASS_ID = (short) (PRIMITIVE_DOUBLE_ARRAY_CLASS_ID + 3);
-  public static final short HASHMAP_CLASS_ID = (short) (PRIMITIVE_DOUBLE_ARRAY_CLASS_ID + 4);
-  public static final short HASHSET_CLASS_ID = (short) (PRIMITIVE_DOUBLE_ARRAY_CLASS_ID + 5);
-  public static final short CLASS_CLASS_ID = (short) (PRIMITIVE_DOUBLE_ARRAY_CLASS_ID + 6);
-  public static final short EMPTY_OBJECT_ID = (short) (PRIMITIVE_DOUBLE_ARRAY_CLASS_ID + 7);
+  public static final int PRIMITIVE_VOID_ID = NATIVE_START_ID + 2;
+  public static final int PRIMITIVE_BOOL_ID = NATIVE_START_ID + 3;
+  public static final int PRIMITIVE_INT8_ID = NATIVE_START_ID + 4;
+  public static final int PRIMITIVE_CHAR_ID = NATIVE_START_ID + 5;
+  public static final int PRIMITIVE_INT16_ID = NATIVE_START_ID + 6;
+  public static final int PRIMITIVE_INT32_ID = NATIVE_START_ID + 7;
+  public static final int PRIMITIVE_FLOAT32_ID = NATIVE_START_ID + 8;
+  public static final int PRIMITIVE_INT64_ID = NATIVE_START_ID + 9;
+  public static final int PRIMITIVE_FLOAT64_ID = NATIVE_START_ID + 10;
+  public static final int PRIMITIVE_BOOLEAN_ARRAY_ID = NATIVE_START_ID + 11;
+  public static final int PRIMITIVE_BYTE_ARRAY_ID = NATIVE_START_ID + 12;
+  public static final int PRIMITIVE_CHAR_ARRAY_ID = NATIVE_START_ID + 13;
+  public static final int PRIMITIVE_SHORT_ARRAY_ID = NATIVE_START_ID + 14;
+  public static final int PRIMITIVE_INT_ARRAY_ID = NATIVE_START_ID + 15;
+  public static final int PRIMITIVE_FLOAT_ARRAY_ID = NATIVE_START_ID + 16;
+  public static final int PRIMITIVE_LONG_ARRAY_ID = NATIVE_START_ID + 17;
+  public static final int PRIMITIVE_DOUBLE_ARRAY_ID = NATIVE_START_ID + 18;
+  public static final int STRING_ARRAY_ID = NATIVE_START_ID + 19;
+  public static final int OBJECT_ARRAY_ID = NATIVE_START_ID + 20;
+  public static final int ARRAYLIST_ID = NATIVE_START_ID + 21;
+  public static final int HASHMAP_ID = NATIVE_START_ID + 22;
+  public static final int HASHSET_ID = NATIVE_START_ID + 23;
+  public static final int CLASS_ID = NATIVE_START_ID + 24;
+  public static final int EMPTY_OBJECT_ID = NATIVE_START_ID + 25;
+  public static final short LAMBDA_STUB_ID = NATIVE_START_ID + 26;
+  public static final short JDK_PROXY_STUB_ID = NATIVE_START_ID + 27;
+  public static final short REPLACE_STUB_ID = NATIVE_START_ID + 28;
 
   private final Fory fory;
   XtypeResolver xtypeResolver;
@@ -222,6 +248,7 @@ public class ClassResolver extends TypeResolver {
     super(fory);
     this.fory = fory;
     classInfoCache = NIL_CLASS_INFO;
+    extRegistry.classIdGenerator = REPLACE_STUB_ID + 1;
     shimDispatcher = new ShimDispatcher(fory);
     _addGraalvmClassRegistry(fory.getConfig().getConfigHash(), this);
   }
@@ -229,43 +256,43 @@ public class ClassResolver extends TypeResolver {
   @Override
   public void initialize() {
     extRegistry.objectGenericType = buildGenericType(OBJECT_TYPE);
-    register(LambdaSerializer.ReplaceStub.class, LAMBDA_STUB_ID);
-    register(JdkProxySerializer.ReplaceStub.class, JDK_PROXY_STUB_ID);
-    register(ReplaceResolveSerializer.ReplaceStub.class, REPLACE_STUB_ID);
-    register(void.class, PRIMITIVE_VOID_CLASS_ID);
-    register(boolean.class, PRIMITIVE_BOOLEAN_CLASS_ID);
-    register(byte.class, PRIMITIVE_BYTE_CLASS_ID);
-    register(char.class, PRIMITIVE_CHAR_CLASS_ID);
-    register(short.class, PRIMITIVE_SHORT_CLASS_ID);
-    register(int.class, PRIMITIVE_INT_CLASS_ID);
-    register(float.class, PRIMITIVE_FLOAT_CLASS_ID);
-    register(long.class, PRIMITIVE_LONG_CLASS_ID);
-    register(double.class, PRIMITIVE_DOUBLE_CLASS_ID);
-    register(Void.class, VOID_CLASS_ID);
-    register(Boolean.class, BOOLEAN_CLASS_ID);
-    register(Byte.class, BYTE_CLASS_ID);
-    register(Character.class, CHAR_CLASS_ID);
-    register(Short.class, SHORT_CLASS_ID);
-    register(Integer.class, INTEGER_CLASS_ID);
-    register(Float.class, FLOAT_CLASS_ID);
-    register(Long.class, LONG_CLASS_ID);
-    register(Double.class, DOUBLE_CLASS_ID);
-    register(String.class, STRING_CLASS_ID);
-    register(boolean[].class, PRIMITIVE_BOOLEAN_ARRAY_CLASS_ID);
-    register(byte[].class, PRIMITIVE_BYTE_ARRAY_CLASS_ID);
-    register(char[].class, PRIMITIVE_CHAR_ARRAY_CLASS_ID);
-    register(short[].class, PRIMITIVE_SHORT_ARRAY_CLASS_ID);
-    register(int[].class, PRIMITIVE_INT_ARRAY_CLASS_ID);
-    register(float[].class, PRIMITIVE_FLOAT_ARRAY_CLASS_ID);
-    register(long[].class, PRIMITIVE_LONG_ARRAY_CLASS_ID);
-    register(double[].class, PRIMITIVE_DOUBLE_ARRAY_CLASS_ID);
-    register(String[].class, STRING_ARRAY_CLASS_ID);
-    register(Object[].class, OBJECT_ARRAY_CLASS_ID);
-    register(ArrayList.class, ARRAYLIST_CLASS_ID);
-    register(HashMap.class, HASHMAP_CLASS_ID);
-    register(HashSet.class, HASHSET_CLASS_ID);
-    register(Class.class, CLASS_CLASS_ID);
-    register(Object.class, EMPTY_OBJECT_ID);
+    registerInternal(LambdaSerializer.ReplaceStub.class, LAMBDA_STUB_ID);
+    registerInternal(JdkProxySerializer.ReplaceStub.class, JDK_PROXY_STUB_ID);
+    registerInternal(ReplaceResolveSerializer.ReplaceStub.class, REPLACE_STUB_ID);
+    registerInternal(void.class, PRIMITIVE_VOID_ID);
+    registerInternal(boolean.class, PRIMITIVE_BOOL_ID);
+    registerInternal(byte.class, PRIMITIVE_INT8_ID);
+    registerInternal(char.class, PRIMITIVE_CHAR_ID);
+    registerInternal(short.class, PRIMITIVE_INT16_ID);
+    registerInternal(int.class, PRIMITIVE_INT32_ID);
+    registerInternal(float.class, PRIMITIVE_FLOAT32_ID);
+    registerInternal(long.class, PRIMITIVE_INT64_ID);
+    registerInternal(double.class, PRIMITIVE_FLOAT64_ID);
+    registerInternal(Void.class, VOID_ID);
+    registerInternal(Boolean.class, Types.BOOL);
+    registerInternal(Byte.class, Types.INT8);
+    registerInternal(Character.class, CHAR_ID);
+    registerInternal(Short.class, Types.INT16);
+    registerInternal(Integer.class, Types.INT32);
+    registerInternal(Float.class, Types.FLOAT32);
+    registerInternal(Long.class, Types.INT64);
+    registerInternal(Double.class, Types.FLOAT64);
+    registerInternal(String.class, Types.STRING);
+    registerInternal(boolean[].class, PRIMITIVE_BOOLEAN_ARRAY_ID);
+    registerInternal(byte[].class, PRIMITIVE_BYTE_ARRAY_ID);
+    registerInternal(char[].class, PRIMITIVE_CHAR_ARRAY_ID);
+    registerInternal(short[].class, PRIMITIVE_SHORT_ARRAY_ID);
+    registerInternal(int[].class, PRIMITIVE_INT_ARRAY_ID);
+    registerInternal(float[].class, PRIMITIVE_FLOAT_ARRAY_ID);
+    registerInternal(long[].class, PRIMITIVE_LONG_ARRAY_ID);
+    registerInternal(double[].class, PRIMITIVE_DOUBLE_ARRAY_ID);
+    registerInternal(String[].class, STRING_ARRAY_ID);
+    registerInternal(Object[].class, OBJECT_ARRAY_ID);
+    registerInternal(ArrayList.class, ARRAYLIST_ID);
+    registerInternal(HashMap.class, HASHMAP_ID);
+    registerInternal(HashSet.class, HASHSET_ID);
+    registerInternal(Class.class, CLASS_ID);
+    registerInternal(Object.class, EMPTY_OBJECT_ID);
     registerCommonUsedClasses();
     registerDefaultClasses();
     addDefaultSerializers();
@@ -320,7 +347,7 @@ public class ClassResolver extends TypeResolver {
             Objects.requireNonNull(classInfoMap.get(NonexistentMetaShared.class)).classId;
         Preconditions.checkArgument(classId > 63 && classId < 8192, classId);
       } else {
-        register(NonexistentSkip.class);
+        registerInternal(NonexistentSkip.class);
       }
     }
   }
@@ -330,121 +357,121 @@ public class ClassResolver extends TypeResolver {
   }
 
   private void addDefaultSerializer(Class type, Serializer serializer) {
-    registerSerializer(type, serializer);
-    register(type);
+    registerInternalSerializer(type, serializer);
+    registerInternal(type);
   }
 
   /** Register common class ahead to get smaller class id for serialization. */
   private void registerCommonUsedClasses() {
-    register(LinkedList.class, TreeSet.class);
-    register(LinkedHashMap.class, TreeMap.class);
-    register(Date.class, Timestamp.class, LocalDateTime.class, Instant.class);
-    register(BigInteger.class, BigDecimal.class);
-    register(Optional.class, OptionalInt.class);
-    register(Boolean[].class, Byte[].class, Short[].class, Character[].class);
-    register(Integer[].class, Float[].class, Long[].class, Double[].class);
+    registerInternal(LinkedList.class, TreeSet.class);
+    registerInternal(LinkedHashMap.class, TreeMap.class);
+    registerInternal(Date.class, Timestamp.class, LocalDateTime.class, Instant.class);
+    registerInternal(BigInteger.class, BigDecimal.class);
+    registerInternal(Optional.class, OptionalInt.class);
+    registerInternal(Boolean[].class, Byte[].class, Short[].class, Character[].class);
+    registerInternal(Integer[].class, Float[].class, Long[].class, Double[].class);
   }
 
   private void registerDefaultClasses() {
-    register(Platform.HEAP_BYTE_BUFFER_CLASS);
-    register(Platform.DIRECT_BYTE_BUFFER_CLASS);
-    register(Comparator.naturalOrder().getClass());
-    register(Comparator.reverseOrder().getClass());
-    register(ConcurrentHashMap.class);
-    register(ArrayBlockingQueue.class);
-    register(LinkedBlockingQueue.class);
-    register(AtomicBoolean.class);
-    register(AtomicInteger.class);
-    register(AtomicLong.class);
-    register(AtomicReference.class);
-    register(EnumSet.allOf(Language.class).getClass());
-    register(EnumSet.of(Language.JAVA).getClass());
-    register(SerializedLambda.class);
-    register(
+    registerInternal(Platform.HEAP_BYTE_BUFFER_CLASS);
+    registerInternal(Platform.DIRECT_BYTE_BUFFER_CLASS);
+    registerInternal(Comparator.naturalOrder().getClass());
+    registerInternal(Comparator.reverseOrder().getClass());
+    registerInternal(ConcurrentHashMap.class);
+    registerInternal(ArrayBlockingQueue.class);
+    registerInternal(LinkedBlockingQueue.class);
+    registerInternal(AtomicBoolean.class);
+    registerInternal(AtomicInteger.class);
+    registerInternal(AtomicLong.class);
+    registerInternal(AtomicReference.class);
+    registerInternal(EnumSet.allOf(Language.class).getClass());
+    registerInternal(EnumSet.of(Language.JAVA).getClass());
+    registerInternal(SerializedLambda.class);
+    registerInternal(
         Throwable.class,
         StackTraceElement.class,
         StackTraceElement[].class,
         Exception.class,
         RuntimeException.class);
-    register(NullPointerException.class);
-    register(IOException.class);
-    register(IllegalArgumentException.class);
-    register(IllegalStateException.class);
-    register(IndexOutOfBoundsException.class, ArrayIndexOutOfBoundsException.class);
+    registerInternal(NullPointerException.class);
+    registerInternal(IOException.class);
+    registerInternal(IllegalArgumentException.class);
+    registerInternal(IllegalStateException.class);
+    registerInternal(IndexOutOfBoundsException.class, ArrayIndexOutOfBoundsException.class);
   }
 
-  /** register class. */
+  /**
+   * Registers a class with an auto-assigned user ID.
+   *
+   * <p>The ID is automatically assigned starting from 0 in the user ID space. Each call assigns the
+   * next available ID. If the class is already registered, this method does nothing.
+   *
+   * <p>Example:
+   *
+   * <pre>{@code
+   * fory.register(MyClass.class);      // Gets user ID 0
+   * fory.register(AnotherClass.class); // Gets user ID 1
+   * }</pre>
+   *
+   * @param cls the class to register
+   */
+  @Override
   public void register(Class<?> cls) {
     if (!extRegistry.registeredClassIdMap.containsKey(cls)) {
-      while (extRegistry.classIdGenerator < registeredId2ClassInfo.length
-          && registeredId2ClassInfo[extRegistry.classIdGenerator] != null) {
-        extRegistry.classIdGenerator++;
+      while (extRegistry.userIdGenerator + USER_ID_BASE < registeredId2ClassInfo.length
+          && registeredId2ClassInfo[extRegistry.userIdGenerator + USER_ID_BASE] != null) {
+        extRegistry.userIdGenerator++;
       }
-      register(cls, extRegistry.classIdGenerator);
+      register(cls, extRegistry.userIdGenerator);
     }
   }
 
+  /**
+   * Registers a class by its fully qualified name with an auto-assigned user ID.
+   *
+   * @param className the fully qualified class name
+   * @see #register(Class)
+   */
+  @Override
   public void register(String className) {
     register(loadClass(className, false, 0, false));
   }
 
-  public void register(Class<?>... classes) {
-    for (Class<?> cls : classes) {
-      register(cls);
-    }
-  }
-
   /**
-   * This method has been deprecated, please use {@link #register(Class)} instead, and invoke {@link
-   * #ensureSerializersCompiled} after all classes has been registered.
+   * Registers a class by its fully qualified name with a specified user ID.
+   *
+   * @param className the fully qualified class name
+   * @param classId the user ID to assign (0-based, in user ID space)
+   * @see #register(Class, int)
    */
-  @Deprecated
-  public void register(Class<?> cls, boolean createSerializer) {
-    register(cls);
-  }
-
-  /**
-   * Register class with specified id. Currently class id must be `classId >= 0 && classId < 32767`.
-   * In the future this limitation may be relaxed.
-   */
-  public void register(Class<?> cls, int classId) {
-    checkRegisterAllowed();
-    // class id must be less than Integer.MAX_VALUE/2 since we use bit 0 as class id flag.
-    Preconditions.checkArgument(classId >= 0 && classId < Short.MAX_VALUE);
-    short id = (short) classId;
-    checkRegistration(cls, id, cls.getName());
-    extRegistry.registeredClassIdMap.put(cls, id);
-    if (registeredId2ClassInfo.length <= id) {
-      ClassInfo[] tmp = new ClassInfo[(id + 1) * 2];
-      System.arraycopy(registeredId2ClassInfo, 0, tmp, 0, registeredId2ClassInfo.length);
-      registeredId2ClassInfo = tmp;
-    }
-    ClassInfo classInfo = classInfoMap.get(cls);
-    if (classInfo != null) {
-      classInfo.classId = id;
-    } else {
-      classInfo = new ClassInfo(this, cls, null, id, NOT_SUPPORT_XLANG);
-      // make `extRegistry.registeredClassIdMap` and `classInfoMap` share same classInfo
-      // instances.
-      classInfoMap.put(cls, classInfo);
-    }
-    // serializer will be set lazily in `addSerializer` method if it's null.
-    registeredId2ClassInfo[id] = classInfo;
-    extRegistry.registeredClasses.put(cls.getName(), cls);
-    extRegistry.classIdGenerator++;
-  }
-
+  @Override
   public void register(String className, int classId) {
     register(loadClass(className, false, 0, false), classId);
   }
 
   /**
-   * This method has been deprecated, please use {@link #register(Class, int)} instead, and invoke
-   * {@link #ensureSerializersCompiled} after all classes has been registered.
+   * Registers a class with a user-specified ID.
+   *
+   * <p>The ID is in the user ID space, starting from 0. Fory internally transforms this to an
+   * internal ID by adding {@link #USER_ID_BASE}. This separation ensures user IDs never conflict
+   * with Fory's internal type IDs.
+   *
+   * <p>Valid user ID range: [0, 32510] (i.e., [0, Short.MAX_VALUE - USER_ID_BASE - 1])
+   *
+   * <p>Example:
+   *
+   * <pre>{@code
+   * fory.register(MyClass.class, 0);      // User ID 0 -> Internal ID 256
+   * fory.register(AnotherClass.class, 1); // User ID 1 -> Internal ID 257
+   * }</pre>
+   *
+   * @param cls the class to register
+   * @param id the user ID to assign (0-based)
+   * @throws IllegalArgumentException if the ID is out of valid range or already in use
    */
-  @Deprecated
-  public void register(Class<?> cls, int id, boolean createSerializer) {
-    register(cls, id);
+  @Override
+  public void register(Class<?> cls, int id) {
+    registerImpl(cls, id + USER_ID_BASE);
   }
 
   /**
@@ -478,6 +505,84 @@ public class ClassResolver extends TypeResolver {
     compositeNameBytes2ClassInfo.put(
         new TypeNameBytes(nsBytes.hashCode, nameBytes.hashCode), classInfo);
     extRegistry.registeredClasses.put(fullname, cls);
+    GraalvmSupport.registerClass(cls, fory.getConfig().getConfigHash());
+  }
+
+  /**
+   * Registers multiple classes for internal use with auto-assigned internal IDs.
+   *
+   * <p><b>Internal API</b>: This method is for Fory's internal use only. Users should use {@link
+   * #register(Class)} instead.
+   *
+   * @param classes the classes to register
+   */
+  public void registerInternal(Class<?>... classes) {
+    for (Class<?> cls : classes) {
+      registerInternal(cls);
+    }
+  }
+
+  /**
+   * Registers a class for internal use with an auto-assigned internal ID.
+   *
+   * <p><b>Internal API</b>: This method is for Fory's internal use only. Users should use {@link
+   * #register(Class)} instead. Internal IDs are in the range [0, {@link #USER_ID_BASE} - 1].
+   *
+   * @param cls the class to register
+   */
+  public void registerInternal(Class<?> cls) {
+    if (!extRegistry.registeredClassIdMap.containsKey(cls)) {
+      while (extRegistry.classIdGenerator < registeredId2ClassInfo.length
+          && registeredId2ClassInfo[extRegistry.classIdGenerator] != null) {
+        extRegistry.classIdGenerator++;
+      }
+      registerInternal(cls, extRegistry.classIdGenerator);
+    }
+  }
+
+  /**
+   * Registers a class for internal use with a specified internal ID.
+   *
+   * <p><b>Internal API</b>: This method is for Fory's internal use only. Users should use {@link
+   * #register(Class, int)} instead.
+   *
+   * <p>Internal IDs are reserved for Fory's built-in types and must be in the range [0, {@link
+   * #USER_ID_BASE} - 1] (i.e., [0, 255]). User IDs start from {@link #USER_ID_BASE} and above.
+   *
+   * @param cls the class to register
+   * @param classId the internal ID, must be in range [0, {@link #USER_ID_BASE} - 1]
+   * @throws IllegalArgumentException if the ID is out of range or already in use
+   */
+  public void registerInternal(Class<?> cls, int classId) {
+    Preconditions.checkArgument(classId >= 0 && classId < USER_ID_BASE);
+    registerImpl(cls, classId);
+  }
+
+  private void registerImpl(Class<?> cls, int classId) {
+    checkRegisterAllowed();
+    // class id must be less than Integer.MAX_VALUE/2 since we use bit 0 as class id flag.
+    Preconditions.checkArgument(classId >= 0 && classId < Short.MAX_VALUE);
+    short id = (short) classId;
+    checkRegistration(cls, id, cls.getName());
+    extRegistry.registeredClassIdMap.put(cls, id);
+    if (registeredId2ClassInfo.length <= id) {
+      ClassInfo[] tmp = new ClassInfo[(id + 1) * 2];
+      System.arraycopy(registeredId2ClassInfo, 0, tmp, 0, registeredId2ClassInfo.length);
+      registeredId2ClassInfo = tmp;
+    }
+    ClassInfo classInfo = classInfoMap.get(cls);
+    if (classInfo != null) {
+      classInfo.classId = id;
+    } else {
+      classInfo = new ClassInfo(this, cls, null, id, NOT_SUPPORT_XLANG);
+      // make `extRegistry.registeredClassIdMap` and `classInfoMap` share same classInfo
+      // instances.
+      classInfoMap.put(cls, classInfo);
+    }
+    // serializer will be set lazily in `addSerializer` method if it's null.
+    registeredId2ClassInfo[id] = classInfo;
+    extRegistry.registeredClasses.put(cls.getName(), cls);
+    GraalvmSupport.registerClass(cls, fory.getConfig().getConfigHash());
   }
 
   private void checkRegistration(Class<?> cls, short classId, String name) {
@@ -525,6 +630,7 @@ public class ClassResolver extends TypeResolver {
 
   public Tuple2<String, String> getRegisteredNameTuple(Class<?> cls) {
     String name = extRegistry.registeredClasses.inverse().get(cls);
+    Preconditions.checkNotNull(name);
     int index = name.lastIndexOf(".");
     if (index != -1) {
       return Tuple2.of(name.substring(0, index), name.substring(index + 1));
@@ -575,6 +681,22 @@ public class ClassResolver extends TypeResolver {
     return cls.getName();
   }
 
+  @Override
+  public boolean isMonomorphic(Descriptor descriptor) {
+    ForyField foryField = descriptor.getForyField();
+    if (foryField != null) {
+      switch (foryField.dynamic()) {
+        case TRUE:
+          return false;
+        case FALSE:
+          return true;
+        default:
+          return isMonomorphic(descriptor.getRawType());
+      }
+    }
+    return isMonomorphic(descriptor.getRawType());
+  }
+
   /**
    * Mark non-inner registered final types as non-final to write class def for those types. Note if
    * a class is registered but not an inner class with inner serializer, it will still be taken as
@@ -595,13 +717,26 @@ public class ClassResolver extends TypeResolver {
         Class<?> component = TypeUtils.getArrayComponent(clz);
         return isMonomorphic(component);
       }
-      return (isInnerClass(clz) || clz.isEnum());
+      // Union types (Union2~6) are final classes, treat them as monomorphic
+      // so they don't need to read/write type info
+      if (Union.class.isAssignableFrom(clz)) {
+        return true;
+      }
+      return (isInternalRegistered(clz) || clz.isEnum());
     }
     return ReflectionUtils.isMonomorphic(clz);
   }
 
+  public boolean isBuildIn(Descriptor descriptor) {
+    return isMonomorphic(descriptor);
+  }
+
+  public boolean isInternalRegistered(int classId) {
+    return classId != NO_CLASS_ID && classId < innerEndClassId;
+  }
+
   /** Returns true if <code>cls</code> is fory inner registered class. */
-  boolean isInnerClass(Class<?> cls) {
+  public boolean isInternalRegistered(Class<?> cls) {
     Short classId = extRegistry.registeredClassIdMap.get(cls);
     if (classId == null) {
       ClassInfo classInfo = getClassInfo(cls, false);
@@ -670,8 +805,19 @@ public class ClassResolver extends TypeResolver {
    * @param <T> type of class
    */
   public <T> void registerSerializer(Class<T> type, Class<? extends Serializer> serializerClass) {
-    checkRegisterAllowed();
     registerSerializer(type, Serializers.newSerializer(fory, type, serializerClass));
+  }
+
+  @Override
+  public void registerSerializer(Class<?> type, Serializer<?> serializer) {
+    checkRegisterAllowed();
+    if (!serializer.getClass().getPackage().getName().startsWith("org.apache.fory")) {
+      SerializationUtils.validate(type, serializer.getClass());
+    }
+    if (!extRegistry.registeredClassIdMap.containsKey(type) && !fory.isCrossLanguage()) {
+      register(type);
+    }
+    registerSerializerImpl(type, serializer);
   }
 
   /**
@@ -680,13 +826,17 @@ public class ClassResolver extends TypeResolver {
    * @param type class needed to be serialized/deserialized
    * @param serializer serializer for object of {@code type}
    */
-  public void registerSerializer(Class<?> type, Serializer<?> serializer) {
+  public void registerInternalSerializer(Class<?> type, Serializer<?> serializer) {
+    registerSerializerImpl(type, serializer);
+  }
+
+  private void registerSerializerImpl(Class<?> type, Serializer<?> serializer) {
     checkRegisterAllowed();
     if (!serializer.getClass().getPackage().getName().startsWith("org.apache.fory")) {
       SerializationUtils.validate(type, serializer.getClass());
     }
     if (!extRegistry.registeredClassIdMap.containsKey(type) && !fory.isCrossLanguage()) {
-      register(type);
+      registerInternal(type);
     }
     addSerializer(type, serializer);
     ClassInfo classInfo = classInfoMap.get(type);
@@ -789,8 +939,8 @@ public class ClassResolver extends TypeResolver {
     }
   }
 
-  /** Ass serializer for specified class. */
-  private void addSerializer(Class<?> type, Serializer<?> serializer) {
+  /** Add serializer for specified class. */
+  public void addSerializer(Class<?> type, Serializer<?> serializer) {
     Preconditions.checkNotNull(serializer);
     // 1. Try to get ClassInfo from `registeredId2ClassInfo` and
     // `classInfoMap` or create a new `ClassInfo`.
@@ -801,7 +951,8 @@ public class ClassResolver extends TypeResolver {
     if (registered) {
       classInfo = registeredId2ClassInfo[classId];
     } else {
-      if (serializer instanceof ReplaceResolveSerializer) {
+      if (serializer instanceof ReplaceResolveSerializer
+          && !(serializer instanceof FinalFieldReplaceResolveSerializer)) {
         classId = REPLACE_STUB_ID;
       } else {
         classId = NO_CLASS_ID;
@@ -1029,16 +1180,13 @@ public class ClassResolver extends TypeResolver {
                           callback);
               return sc;
             case COMPATIBLE:
-              // If share class meta, compatible serializer won't be necessary, class
-              // definition will be sent to peer to create serializer for deserialization.
+              // Always use ObjectSerializer for compatible mode.
+              // Class definition will be sent to peer to create serializer for deserialization.
               sc =
                   fory.getJITContext()
                       .registerSerializerJITCallback(
-                          () -> shareMeta ? ObjectSerializer.class : CompatibleSerializer.class,
-                          () ->
-                              shareMeta
-                                  ? loadCodegenSerializer(fory, cls)
-                                  : loadCompatibleCodegenSerializer(fory, cls),
+                          () -> ObjectSerializer.class,
+                          () -> loadCodegenSerializer(fory, cls),
                           callback);
               return sc;
             default:
@@ -1053,15 +1201,8 @@ public class ClassResolver extends TypeResolver {
       if (codegen) {
         LOG.info("Object of type {} can't be serialized by jit", cls);
       }
-      switch (fory.getCompatibleMode()) {
-        case SCHEMA_CONSISTENT:
-          return ObjectSerializer.class;
-        case COMPATIBLE:
-          return shareMeta ? ObjectSerializer.class : CompatibleSerializer.class;
-        default:
-          throw new UnsupportedOperationException(
-              String.format("Unsupported mode %s", fory.getCompatibleMode()));
-      }
+      // Always use ObjectSerializer for both modes
+      return ObjectSerializer.class;
     }
   }
 
@@ -1087,48 +1228,9 @@ public class ClassResolver extends TypeResolver {
           }
           return false;
         };
-  }
-
-  public FieldResolver getFieldResolver(Class<?> cls) {
-    // can't use computeIfAbsent, since there may be recursive multiple
-    // `getFieldResolver` thus multiple updates, which cause concurrent
-    // modification exception.
-    FieldResolver fieldResolver = extRegistry.fieldResolverMap.get(cls);
-    if (fieldResolver == null) {
-      fieldResolver = FieldResolver.of(fory, cls);
-      extRegistry.fieldResolverMap.put(cls, fieldResolver);
+    if (classChecker instanceof AllowListChecker) {
+      ((AllowListChecker) classChecker).addListener(this);
     }
-    return fieldResolver;
-  }
-
-  @Override
-  public List<Descriptor> getFieldDescriptors(Class<?> clz, boolean searchParent) {
-    SortedMap<Member, Descriptor> allDescriptors = getAllDescriptorsMap(clz, searchParent);
-    List<Descriptor> result = new ArrayList<>(allDescriptors.size());
-    allDescriptors.forEach(
-        (member, descriptor) -> {
-          if (member instanceof Field) {
-            result.add(descriptor);
-          }
-        });
-    return result;
-  }
-
-  // thread safe
-  public SortedMap<Member, Descriptor> getAllDescriptorsMap(Class<?> clz, boolean searchParent) {
-    // when jit thread query this, it is already built by serialization main thread.
-    return extRegistry.descriptorsCache.computeIfAbsent(
-        Tuple2.of(clz, searchParent), t -> Descriptor.getAllDescriptorsMap(clz, searchParent));
-  }
-
-  public ClassInfo getClassInfo(short classId) {
-    ClassInfo classInfo = registeredId2ClassInfo[classId];
-    assert classInfo != null : classId;
-    if (classInfo.serializer == null) {
-      addSerializer(classInfo.cls, createSerializer(classInfo.cls));
-      classInfo = classInfoMap.get(classInfo.cls);
-    }
-    return classInfo;
   }
 
   // Invoked by fory JIT.
@@ -1138,6 +1240,16 @@ public class ClassResolver extends TypeResolver {
     if (classInfo == null || classInfo.serializer == null) {
       addSerializer(cls, createSerializer(cls));
       classInfo = classInfoMap.get(cls);
+    }
+    return classInfo;
+  }
+
+  public ClassInfo getClassInfo(short classId) {
+    ClassInfo classInfo = registeredId2ClassInfo[classId];
+    assert classInfo != null : classId;
+    if (classInfo.serializer == null) {
+      addSerializer(classInfo.cls, createSerializer(classInfo.cls));
+      classInfo = classInfoMap.get(classInfo.cls);
     }
     return classInfo;
   }
@@ -1227,8 +1339,18 @@ public class ClassResolver extends TypeResolver {
           && !Functions.isLambda(cls)
           && !ReflectionUtils.isJdkProxy(cls)
           && !extRegistry.registeredClassIdMap.containsKey(cls)
-          && !shimDispatcher.contains(cls)) {
+          && !shimDispatcher.contains(cls)
+          && !extRegistry.isTypeCheckerSet()) {
         LOG.warn(generateSecurityMsg(cls));
+      }
+    }
+
+    // For enum value classes (anonymous inner classes of abstract enums),
+    // reuse the serializer from the declaring enum class
+    if (!cls.isEnum() && Enum.class.isAssignableFrom(cls) && cls != Enum.class) {
+      Class<?> enclosingClass = cls.getEnclosingClass();
+      if (enclosingClass != null && enclosingClass.isEnum()) {
+        return getSerializer(enclosingClass);
       }
     }
 
@@ -1318,6 +1440,14 @@ public class ClassResolver extends TypeResolver {
     if (cls.isArray()) {
       return isSecure(TypeUtils.getArrayComponent(cls));
     }
+    // For enum value classes (anonymous inner classes of abstract enums),
+    // check if the declaring enum class is secure
+    if (!cls.isEnum() && Enum.class.isAssignableFrom(cls) && cls != Enum.class) {
+      Class<?> enclosingClass = cls.getEnclosingClass();
+      if (enclosingClass != null && enclosingClass.isEnum()) {
+        return isSecure(enclosingClass);
+      }
+    }
     if (fory.getConfig().requireClassRegistration()) {
       return Functions.isLambda(cls)
           || ReflectionUtils.isJdkProxy(cls)
@@ -1343,9 +1473,9 @@ public class ClassResolver extends TypeResolver {
   public void writeClassAndUpdateCache(MemoryBuffer buffer, Class<?> cls) {
     // fast path for common type
     if (cls == Integer.class) {
-      buffer.writeVarUint32Small7(INTEGER_CLASS_ID << 1);
+      buffer.writeVarUint32Small7(Types.INT32 << 1);
     } else if (cls == Long.class) {
-      buffer.writeVarUint32Small7(LONG_CLASS_ID << 1);
+      buffer.writeVarUint32Small7(Types.INT64 << 1);
     } else {
       writeClassInfo(buffer, getOrUpdateClassInfo(cls));
     }
@@ -1682,15 +1812,6 @@ public class ClassResolver extends TypeResolver {
 
   public void resetWrite() {}
 
-  private static final GenericType OBJECT_GENERIC_TYPE = GenericType.build(Object.class);
-
-  @CodegenInvoke
-  public GenericType getGenericTypeInStruct(Class<?> cls, String genericTypeStr) {
-    Map<String, GenericType> map =
-        extRegistry.classGenericTypes.computeIfAbsent(cls, this::buildGenericMap);
-    return map.getOrDefault(genericTypeStr, OBJECT_GENERIC_TYPE);
-  }
-
   @Override
   public GenericType buildGenericType(TypeRef<?> typeRef) {
     return GenericType.build(
@@ -1748,7 +1869,7 @@ public class ClassResolver extends TypeResolver {
   }
 
   public boolean isPrimitive(short classId) {
-    return classId >= PRIMITIVE_VOID_CLASS_ID && classId <= PRIMITIVE_DOUBLE_CLASS_ID;
+    return classId >= PRIMITIVE_VOID_ID && classId <= PRIMITIVE_FLOAT64_ID;
   }
 
   public CodeGenerator getCodeGenerator(ClassLoader... loaders) {
@@ -1765,19 +1886,66 @@ public class ClassResolver extends TypeResolver {
     extRegistry.codeGeneratorMap.put(Arrays.asList(loaders), codeGenerator);
   }
 
+  /**
+   * Normalize type name for consistent ordering between serialization and deserialization.
+   * Collection subtypes (List, Set, etc.) are normalized to "java.util.Collection". Map subtypes
+   * are normalized to "java.util.Map". This ensures fields have the same order regardless of
+   * whether the peer has the field locally.
+   */
+  private String getNormalizedTypeName(Descriptor d) {
+    Class<?> rawType = d.getRawType();
+    if (rawType != null) {
+      if (isCollection(rawType)) {
+        return "java.util.Collection";
+      }
+      if (isMap(rawType)) {
+        return "java.util.Map";
+      }
+    }
+    return d.getTypeName();
+  }
+
+  /**
+   * Creates a comparator for sorting descriptors by normalized type name and field name/id. This
+   * comparator normalizes Collection/Map types to ensure consistent field ordering between
+   * serialization and deserialization, even when peers have different Collection/Map subtypes.
+   */
+  public Comparator<Descriptor> createTypeAndNameComparator() {
+    return (d1, d2) -> {
+      // sort by type so that we can hit class info cache more possibly.
+      // sort by field id/name to fix order if type is same.
+      // Use normalized type name so that Collection/Map subtypes have consistent order
+      // between processes even if the field doesn't exist in peer (e.g., List vs Collection).
+      int c = getNormalizedTypeName(d1).compareTo(getNormalizedTypeName(d2));
+      // noinspection Duplicates
+      if (c == 0) {
+        c = getFieldSortKey(d1).compareTo(getFieldSortKey(d2));
+        if (c == 0) {
+          // Field name duplicate in super/child classes.
+          c = d1.getDeclaringClass().compareTo(d2.getDeclaringClass());
+          if (c == 0) {
+            // Final tie-breaker: use actual field name to distinguish fields with same tag ID.
+            // This ensures TreeSet never treats different fields as duplicates.
+            c = d1.getName().compareTo(d2.getName());
+          }
+        }
+      }
+      return c;
+    };
+  }
+
   @Override
   public DescriptorGrouper createDescriptorGrouper(
       Collection<Descriptor> descriptors,
       boolean descriptorsGroupedOrdered,
       Function<Descriptor, Descriptor> descriptorUpdator) {
     return DescriptorGrouper.createDescriptorGrouper(
-            fory.getClassResolver()::isMonomorphic,
+            this::isBuildIn,
             descriptors,
             descriptorsGroupedOrdered,
             descriptorUpdator,
-            fory.compressInt(),
-            fory.compressLong(),
-            DescriptorGrouper.COMPARATOR_BY_TYPE_AND_NAME)
+            getPrimitiveComparator(),
+            createTypeAndNameComparator())
         .sort();
   }
 
@@ -1788,6 +1956,7 @@ public class ClassResolver extends TypeResolver {
    * <p>Note that this method should be invoked after all registrations and invoked only once.
    * Repeated invocations will have no effect.
    */
+  @Override
   public void ensureSerializersCompiled() {
     if (extRegistry.ensureSerializersCompiled) {
       return;
@@ -1795,17 +1964,48 @@ public class ClassResolver extends TypeResolver {
     extRegistry.ensureSerializersCompiled = true;
     try {
       fory.getJITContext().lock();
-      Serializers.newSerializer(fory, LambdaSerializer.STUB_LAMBDA_CLASS, LambdaSerializer.class);
-      Serializers.newSerializer(
-          fory, JdkProxySerializer.SUBT_PROXY.getClass(), JdkProxySerializer.class);
+      // Lambda and JdkProxy serializers use java.lang.Class which is not supported in xlang mode
+      if (!fory.isCrossLanguage()) {
+        Serializers.newSerializer(fory, LambdaSerializer.STUB_LAMBDA_CLASS, LambdaSerializer.class);
+        Serializers.newSerializer(
+            fory, JdkProxySerializer.SUBT_PROXY.getClass(), JdkProxySerializer.class);
+      }
       classInfoMap.forEach(
           (cls, classInfo) -> {
+            GraalvmSupport.registerClass(cls, fory.getConfig().getConfigHash());
             if (classInfo.serializer == null) {
               if (isSerializable(classInfo.cls)) {
                 createSerializer0(cls);
               }
               if (cls.isArray()) {
-                createSerializer0(TypeUtils.getArrayComponent(cls));
+                // Also create serializer for the component type if it's serializable
+                Class<?> componentType = TypeUtils.getArrayComponent(cls);
+                if (isSerializable(componentType)) {
+                  createSerializer0(componentType);
+                }
+              }
+            }
+            // Always ensure array class serializers and their component type serializers
+            // are registered in GraalVM registry, since ObjectArraySerializer needs
+            // the component type serializer at construction time
+            if (cls.isArray() && GraalvmSupport.isGraalBuildtime()) {
+              // First ensure component type serializer is registered if it's serializable
+              Class<?> componentType = TypeUtils.getArrayComponent(cls);
+              if (isSerializable(componentType)) {
+                createSerializer0(componentType);
+              }
+              // Then register the array serializer
+              createSerializer0(cls);
+            }
+            // For abstract enums, also create and store serializers for enum value classes
+            // so they are available at GraalVM runtime
+            if (cls.isEnum() && GraalvmSupport.isGraalBuildtime()) {
+              for (Object enumConstant : cls.getEnumConstants()) {
+                Class<?> enumValueClass = enumConstant.getClass();
+                if (enumValueClass != cls) {
+                  // Get serializer for the enum value class (will reuse the enum's serializer)
+                  getSerializer(enumValueClass);
+                }
               }
             }
           });

@@ -25,21 +25,21 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.apache.fory.Fory;
 import org.apache.fory.codegen.CodeGenerator;
 import org.apache.fory.codegen.CompileUnit;
-import org.apache.fory.collection.Tuple2;
+import org.apache.fory.collection.Tuple3;
 import org.apache.fory.meta.ClassDef;
 import org.apache.fory.reflect.TypeRef;
 import org.apache.fory.resolver.ClassResolver;
-import org.apache.fory.resolver.FieldResolver;
 import org.apache.fory.serializer.Serializer;
 import org.apache.fory.util.ClassLoaderUtils;
 import org.apache.fory.util.GraalvmSupport;
 import org.apache.fory.util.Preconditions;
 
 /** Codec util to create and load jit serializer class. */
-@SuppressWarnings("rawtypes")
+@SuppressWarnings({"rawtypes", "unchecked"})
 public class CodecUtils {
-  private static ConcurrentHashMap<Tuple2<String, Class<?>>, Class> graalvmSerializers =
-      new ConcurrentHashMap<>();
+  // Cache key includes configHash to distinguish between xlang and non-xlang modes
+  private static final ConcurrentHashMap<Tuple3<String, Class<?>, Integer>, Class>
+      graalvmSerializers = new ConcurrentHashMap<>();
 
   // TODO(chaokunyang) how to uninstall org.apache.fory.codegen/builder classes for graalvm build
   // time
@@ -50,6 +50,7 @@ public class CodecUtils {
     return loadSerializer(
         "loadOrGenObjectCodecClass",
         cls,
+        fory,
         () -> loadOrGenCodecClass(cls, fory, new ObjectCodecBuilder(cls, fory)));
   }
 
@@ -59,35 +60,34 @@ public class CodecUtils {
     return loadSerializer(
         "loadOrGenMetaSharedCodecClass",
         cls,
+        fory,
         () ->
             loadOrGenCodecClass(
                 cls, fory, new MetaSharedCodecBuilder(TypeRef.of(cls), fory, classDef)));
   }
 
-  public static <T> Class<? extends Serializer<T>> loadOrGenCompatibleCodecClass(
-      Class<T> cls, Fory fory) {
-    return loadSerializer(
-        "loadOrGenCompatibleCodecClass",
-        cls,
-        () -> {
-          FieldResolver resolver = FieldResolver.of(fory, cls, true, false);
-          return loadOrGenCompatibleCodecClass(
-              cls, fory, resolver, Generated.GeneratedSerializer.class);
-        });
-  }
-
-  public static <T> Class<? extends Serializer<T>> loadOrGenCompatibleCodecClass(
-      Class<T> cls, Fory fory, FieldResolver fieldResolver, Class<?> parentSerializerClass) {
+  /**
+   * Load or generate a JIT serializer class for single-layer meta-shared serialization.
+   *
+   * @param cls the target class
+   * @param fory the Fory instance
+   * @param layerClassDef the ClassDef for this layer only
+   * @param layerMarkerClass the marker class for this layer
+   * @return the generated serializer class
+   */
+  public static <T> Class<? extends Serializer<T>> loadOrGenMetaSharedLayerCodecClass(
+      Class<T> cls, Fory fory, ClassDef layerClassDef, Class<?> layerMarkerClass) {
     Preconditions.checkNotNull(fory);
     return loadSerializer(
-        "loadOrGenCompatibleCodecClass",
+        "loadOrGenMetaSharedLayerCodecClass",
         cls,
-        () -> {
-          BaseObjectCodecBuilder codecBuilder =
-              new CompatibleCodecBuilder(
-                  TypeRef.of(cls), fory, fieldResolver, parentSerializerClass);
-          return loadOrGenCodecClass(cls, fory, codecBuilder);
-        });
+        fory,
+        () ->
+            loadOrGenCodecClass(
+                cls,
+                fory,
+                new MetaSharedLayerCodecBuilder(
+                    TypeRef.of(cls), fory, layerClassDef, layerMarkerClass)));
   }
 
   @SuppressWarnings("unchecked")
@@ -152,9 +152,10 @@ public class CodecUtils {
   }
 
   private static <T> Class<? extends Serializer<T>> loadSerializer(
-      String name, Class<?> cls, Callable<Class<? extends Serializer<T>>> func) {
+      String name, Class<?> cls, Fory fory, Callable<Class<? extends Serializer<T>>> func) {
+    int configHash = fory.getConfig().getConfigHash();
     if (GraalvmSupport.IN_GRAALVM_NATIVE_IMAGE) {
-      Tuple2<String, Class<?>> key = Tuple2.of(name, cls);
+      Tuple3<String, Class<?>, Integer> key = Tuple3.of(name, cls, configHash);
       Class serializerClass = graalvmSerializers.get(key);
       if (serializerClass != null) {
         return serializerClass;
@@ -163,7 +164,7 @@ public class CodecUtils {
     try {
       Class serializerClass = func.call();
       if (GraalvmSupport.IN_GRAALVM_NATIVE_IMAGE) {
-        graalvmSerializers.putIfAbsent(Tuple2.of(name, cls), serializerClass);
+        graalvmSerializers.putIfAbsent(Tuple3.of(name, cls, configHash), serializerClass);
       }
       return serializerClass;
     } catch (Exception e) {

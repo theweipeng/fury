@@ -18,14 +18,11 @@
 package codegen
 
 import (
-	"fmt"
 	"go/types"
 	"sort"
-	"strings"
 	"unicode"
 
 	"github.com/apache/fory/go/fory"
-	"github.com/spaolacci/murmur3"
 )
 
 // FieldInfo contains metadata about a struct field
@@ -36,6 +33,7 @@ type FieldInfo struct {
 	Index         int        // Original field index in struct
 	IsPrimitive   bool       // Whether it's a Fory primitive type
 	IsPointer     bool       // Whether it's a pointer type
+	Nullable      bool       // Whether the field can be null (pointer types)
 	TypeID        string     // Fory TypeID for sorting
 	PrimitiveSize int        // Size for primitive type sorting
 }
@@ -60,6 +58,9 @@ func toSnakeCase(s string) string {
 
 // isSupportedFieldType checks if a field type is supported
 func isSupportedFieldType(t types.Type) bool {
+	// Unwrap alias types (e.g., 'any' is an alias for 'interface{}')
+	t = types.Unalias(t)
+
 	// Handle pointer types
 	if ptr, ok := t.(*types.Pointer); ok {
 		t = ptr.Elem()
@@ -92,7 +93,7 @@ func isSupportedFieldType(t types.Type) bool {
 
 	// Check interface types
 	if iface, ok := t.(*types.Interface); ok {
-		// Support empty interface{} for dynamic types
+		// Support empty any for dynamic types
 		if iface.Empty() {
 			return true
 		}
@@ -113,6 +114,9 @@ func isSupportedFieldType(t types.Type) bool {
 
 // isPrimitiveType checks if a type is considered primitive in Fory
 func isPrimitiveType(t types.Type) bool {
+	// Unwrap alias types
+	t = types.Unalias(t)
+
 	// Handle pointer types
 	if ptr, ok := t.(*types.Pointer); ok {
 		t = ptr.Elem()
@@ -136,13 +140,41 @@ func isPrimitiveType(t types.Type) bool {
 
 // getTypeID returns the Fory TypeID for a given type
 func getTypeID(t types.Type) string {
+	// Unwrap alias types
+	t = types.Unalias(t)
+
 	// Handle pointer types
 	if ptr, ok := t.(*types.Pointer); ok {
 		t = ptr.Elem()
 	}
 
-	// Check slice types
-	if _, ok := t.(*types.Slice); ok {
+	// Check slice types - distinguish primitive arrays from generic lists
+	if slice, ok := t.(*types.Slice); ok {
+		elemType := slice.Elem()
+		// For pointer to primitive, unwrap the pointer
+		if ptr, ok := elemType.(*types.Pointer); ok {
+			elemType = ptr.Elem()
+		}
+		// Check if element is a primitive type (primitive arrays use specific typeIDs)
+		if basic, ok := elemType.Underlying().(*types.Basic); ok {
+			switch basic.Kind() {
+			case types.Bool:
+				return "BOOL_ARRAY"
+			case types.Int8:
+				return "INT8_ARRAY"
+			case types.Int16:
+				return "INT16_ARRAY"
+			case types.Int32:
+				return "INT32_ARRAY"
+			case types.Int, types.Int64:
+				return "INT64_ARRAY"
+			case types.Float32:
+				return "FLOAT32_ARRAY"
+			case types.Float64:
+				return "FLOAT64_ARRAY"
+			}
+		}
+		// Non-primitive slices use LIST
 		return "LIST"
 	}
 
@@ -154,7 +186,7 @@ func getTypeID(t types.Type) string {
 	// Check interface types
 	if iface, ok := t.(*types.Interface); ok {
 		if iface.Empty() {
-			return "INTERFACE" // Use a placeholder for empty interface{}
+			return "INTERFACE" // Use a placeholder for empty any
 		}
 	}
 
@@ -183,17 +215,17 @@ func getTypeID(t types.Type) string {
 		case types.Int16:
 			return "INT16"
 		case types.Int32:
-			return "INT32"
+			return "VARINT32"
 		case types.Int, types.Int64:
-			return "INT64"
+			return "VARINT64"
 		case types.Uint8:
 			return "UINT8"
 		case types.Uint16:
 			return "UINT16"
 		case types.Uint32:
-			return "UINT32"
+			return "VAR_UINT32"
 		case types.Uint, types.Uint64:
-			return "UINT64"
+			return "VAR_UINT64"
 		case types.Float32:
 			return "FLOAT32"
 		case types.Float64:
@@ -208,6 +240,9 @@ func getTypeID(t types.Type) string {
 
 // getPrimitiveSize returns the byte size of a primitive type
 func getPrimitiveSize(t types.Type) int {
+	// Unwrap alias types
+	t = types.Unalias(t)
+
 	// Handle pointer types
 	if ptr, ok := t.(*types.Pointer); ok {
 		t = ptr.Elem()
@@ -243,32 +278,59 @@ func getTypeIDValue(typeID string) int {
 		return int(fory.INT16) // 3
 	case "INT32":
 		return int(fory.INT32) // 4
+	case "VARINT32":
+		return int(fory.VARINT32) // 5
 	case "INT64":
 		return int(fory.INT64) // 6
+	case "VARINT64":
+		return int(fory.VARINT64) // 7
 	case "UINT8":
-		return int(fory.UINT8) // 100
+		return int(fory.UINT8) // 9
 	case "UINT16":
-		return int(fory.UINT16) // 101
+		return int(fory.UINT16) // 10
 	case "UINT32":
-		return int(fory.UINT32) // 102
+		return int(fory.UINT32) // 11
+	case "VAR_UINT32":
+		return int(fory.VAR_UINT32) // 12
 	case "UINT64":
-		return int(fory.UINT64) // 103
+		return int(fory.UINT64) // 13
+	case "VAR_UINT64":
+		return int(fory.VAR_UINT64) // 14
 	case "FLOAT32":
-		return int(fory.FLOAT) // 10
+		return int(fory.FLOAT32)
 	case "FLOAT64":
-		return int(fory.DOUBLE) // 11
+		return int(fory.FLOAT64)
 	case "STRING":
-		return int(fory.STRING) // 12
+		return int(fory.STRING) // 9
+	case "BINARY":
+		return int(fory.BINARY) // 10
+	case "LIST":
+		return int(fory.LIST) // 20
+	case "SET":
+		return int(fory.SET) // 21
+	case "MAP":
+		return int(fory.MAP) // 22
 	case "TIMESTAMP":
 		return int(fory.TIMESTAMP) // 25
 	case "LOCAL_DATE":
 		return int(fory.LOCAL_DATE) // 26
 	case "NAMED_STRUCT":
 		return int(fory.NAMED_STRUCT) // 17
-	case "LIST":
-		return int(fory.LIST) // 21
-	case "MAP":
-		return int(fory.MAP) // 23
+	// Primitive array types
+	case "BOOL_ARRAY":
+		return int(fory.BOOL_ARRAY) // 39
+	case "INT8_ARRAY":
+		return int(fory.INT8_ARRAY) // 40
+	case "INT16_ARRAY":
+		return int(fory.INT16_ARRAY) // 41
+	case "INT32_ARRAY":
+		return int(fory.INT32_ARRAY) // 42
+	case "INT64_ARRAY":
+		return int(fory.INT64_ARRAY) // 43
+	case "FLOAT32_ARRAY":
+		return int(fory.FLOAT32_ARRAY) // 49
+	case "FLOAT64_ARRAY":
+		return int(fory.FLOAT64_ARRAY) // 50
 	default:
 		return 999 // Unknown types sort last
 	}
@@ -296,11 +358,15 @@ func sortFields(fields []*FieldInfo) {
 			// When same size, sort by type id
 			// When same size and type id, sort by snake case field name
 
-			// Handle compression types (INT32/INT64/VAR_INT32/VAR_INT64)
+			// Handle compression types (INT32/INT64/VARINT32/VARINT64 and unsigned variants)
 			compressI := f1.TypeID == "INT32" || f1.TypeID == "INT64" ||
-				f1.TypeID == "VAR_INT32" || f1.TypeID == "VAR_INT64"
+				f1.TypeID == "VARINT32" || f1.TypeID == "VARINT64" ||
+				f1.TypeID == "UINT32" || f1.TypeID == "UINT64" ||
+				f1.TypeID == "VAR_UINT32" || f1.TypeID == "VAR_UINT64"
 			compressJ := f2.TypeID == "INT32" || f2.TypeID == "INT64" ||
-				f2.TypeID == "VAR_INT32" || f2.TypeID == "VAR_INT64"
+				f2.TypeID == "VARINT32" || f2.TypeID == "VARINT64" ||
+				f2.TypeID == "UINT32" || f2.TypeID == "UINT64" ||
+				f2.TypeID == "VAR_UINT32" || f2.TypeID == "VAR_UINT64"
 
 			if compressI != compressJ {
 				return !compressI && compressJ // non-compress comes first
@@ -320,14 +386,15 @@ func sortFields(fields []*FieldInfo) {
 			return f1.SnakeName < f2.SnakeName
 
 		case groupOtherInternalType:
-			// Other internal type fields: sort by type id then snake case field name
+			// Internal type fields (STRING, BINARY, LIST, SET, MAP): sort by type id then name only.
+			// Java does NOT sort by nullable flag for these types.
 			if f1.TypeID != f2.TypeID {
 				return getTypeIDValue(f1.TypeID) < getTypeIDValue(f2.TypeID)
 			}
 			return f1.SnakeName < f2.SnakeName
 
-		case groupList, groupSet, groupMap, groupOther:
-			// List/Set/Map/Other fields: sort by snake case field name only
+		case groupPrimitiveArray, groupOther:
+			// Primitive arrays and other fields: sort by snake case field name only
 			return f1.SnakeName < f2.SnakeName
 
 		default:
@@ -338,13 +405,13 @@ func sortFields(fields []*FieldInfo) {
 }
 
 // Field group constants for sorting
+// This matches reflection's field ordering in field_info.go:
+// primitives → boxed → otherInternalType (STRING/BINARY/LIST/SET/MAP) → primitiveArray → other
 const (
 	groupPrimitive         = 0 // primitive and nullable primitive fields
-	groupOtherInternalType = 1 // other internal type fields (string, timestamp, etc.)
-	groupList              = 2 // list fields
-	groupSet               = 3 // set fields
-	groupMap               = 4 // map fields
-	groupOther             = 5 // other fields
+	groupOtherInternalType = 1 // STRING, BINARY, LIST, SET, MAP (sorted by typeId, name)
+	groupPrimitiveArray    = 2 // primitive arrays (BOOL_ARRAY, INT32_ARRAY, etc.) - sorted by name
+	groupOther             = 3 // structs, enums, and unknown types - sorted by name
 )
 
 // getFieldGroup categorizes a field into its sorting group
@@ -357,182 +424,35 @@ func getFieldGroup(field *FieldInfo) int {
 		return groupPrimitive
 	}
 
-	// List fields
-	if typeID == "LIST" {
-		return groupList
+	// Primitive array fields - sorted by name only
+	primitiveArrayTypes := map[string]bool{
+		"BOOL_ARRAY":    true,
+		"INT8_ARRAY":    true,
+		"INT16_ARRAY":   true,
+		"INT32_ARRAY":   true,
+		"INT64_ARRAY":   true,
+		"FLOAT32_ARRAY": true,
+		"FLOAT64_ARRAY": true,
+	}
+	if primitiveArrayTypes[typeID] {
+		return groupPrimitiveArray
 	}
 
-	// Set fields
-	if typeID == "SET" {
-		return groupSet
-	}
-
-	// Map fields
-	if typeID == "MAP" {
-		return groupMap
-	}
-
-	// Other internal type fields
-	// These are fory internal types that are not primitives/lists/sets/maps
-	// Examples: STRING, TIMESTAMP, LOCAL_DATE, NAMED_STRUCT, etc.
+	// Internal types (STRING, BINARY, LIST, SET, MAP) - sorted by typeId, nullable, name
+	// These match reflection's category 1 in getFieldCategory
 	internalTypes := map[string]bool{
-		"STRING":       true,
-		"TIMESTAMP":    true,
-		"LOCAL_DATE":   true,
-		"NAMED_STRUCT": true,
-		"STRUCT":       true,
-		"BINARY":       true,
-		"ENUM":         true,
-		"NAMED_ENUM":   true,
-		"EXT":          true,
-		"NAMED_EXT":    true,
-		"INTERFACE":    true, // for interface{} types
+		"STRING": true,
+		"BINARY": true,
+		"LIST":   true,
+		"SET":    true,
+		"MAP":    true,
 	}
-
 	if internalTypes[typeID] {
 		return groupOtherInternalType
 	}
 
 	// Everything else goes to "other fields"
 	return groupOther
-}
-
-// computeStructHash computes a hash for struct schema compatibility
-// This implementation follows the new xlang serialization spec:
-// 1. Sort fields by fields sort algorithm (already done in s.Fields)
-// 2. Build string: snake_case(field_name),$type_id,$nullable;
-// 3. For "other fields", use TypeId::UNKNOWN
-// 4. Convert to UTF8 bytes
-// 5. Compute murmurhash3_x64_128, use first 32 bits
-func computeStructHash(s *StructInfo) int32 {
-	var hashString strings.Builder
-
-	// Iterate through sorted fields
-	for _, field := range s.Fields {
-		// Append snake_case field name
-		hashString.WriteString(field.SnakeName)
-		hashString.WriteString(",")
-
-		// Append type_id
-		typeID := getTypeIDForHash(field)
-		hashString.WriteString(fmt.Sprintf("%d", typeID))
-		hashString.WriteString(",")
-
-		// Append nullable (1 if nullable, 0 otherwise)
-		// nullable is determined by field type (matching reflection's nullable() function)
-		nullable := 0
-		if isNullableType(field.Type) {
-			nullable = 1
-		}
-		hashString.WriteString(fmt.Sprintf("%d", nullable))
-		hashString.WriteString(";")
-	}
-
-	// Convert to UTF8 bytes
-	hashBytes := []byte(hashString.String())
-
-	// Compute murmurhash3_x64_128 with seed 47, and use first 32 bits
-	// This matches the reflection implementation
-	h1, _ := murmur3.Sum128WithSeed(hashBytes, 47)
-	hash := int32(h1 & 0xFFFFFFFF)
-
-	if hash == 0 {
-		panic(fmt.Errorf("hash for type %v is 0", s.Name))
-	}
-
-	return hash
-}
-
-// isNullableType checks if a type is nullable (referencable)
-// This matches the reflection implementation's nullable() function
-func isNullableType(t types.Type) bool {
-	// Check pointer, slice, map, interface directly
-	switch t.(type) {
-	case *types.Pointer, *types.Slice, *types.Map, *types.Interface, *types.Array:
-		return true
-	}
-
-	// Check basic types (String is nullable)
-	if basic, ok := t.Underlying().(*types.Basic); ok {
-		return basic.Kind() == types.String
-	}
-
-	// For named types (e.g., time.Time, fory.Date), check underlying type
-	// Struct types are not nullable unless they're pointers
-	return false
-}
-
-// getTypeIDForHash returns the TypeId for hash calculation according to new spec
-// For "other fields" (groupOther), returns UNKNOWN (63)
-func getTypeIDForHash(field *FieldInfo) int16 {
-	// Determine field group
-	group := getFieldGroup(field)
-
-	// For "other fields", use UNKNOWN
-	if group == groupOther {
-		return fory.UNKNOWN
-	}
-
-	// For struct fields declared with concrete slice types,
-	// use typeID = LIST uniformly for hash calculation to align cross-language behavior
-	// This matches the reflection implementation
-	if field.TypeID == "LIST" {
-		return fory.LIST
-	}
-
-	// Map field TypeID string to Fory TypeId value
-	switch field.TypeID {
-	case "BOOL":
-		return fory.BOOL
-	case "INT8":
-		return fory.INT8
-	case "INT16":
-		return fory.INT16
-	case "INT32":
-		return fory.INT32
-	case "INT64":
-		return fory.INT64
-	case "UINT8":
-		return fory.UINT8
-	case "UINT16":
-		return fory.UINT16
-	case "UINT32":
-		return fory.UINT32
-	case "UINT64":
-		return fory.UINT64
-	case "FLOAT32":
-		return fory.FLOAT
-	case "FLOAT64":
-		return fory.DOUBLE
-	case "STRING":
-		return fory.STRING
-	case "TIMESTAMP":
-		return fory.TIMESTAMP
-	case "LOCAL_DATE":
-		return fory.LOCAL_DATE
-	case "NAMED_STRUCT":
-		return fory.NAMED_STRUCT
-	case "STRUCT":
-		return fory.STRUCT
-	case "SET":
-		return fory.SET
-	case "MAP":
-		return fory.MAP
-	case "BINARY":
-		return fory.BINARY
-	case "ENUM":
-		return fory.ENUM
-	case "NAMED_ENUM":
-		return fory.NAMED_ENUM
-	case "EXT":
-		return fory.EXT
-	case "NAMED_EXT":
-		return fory.NAMED_EXT
-	case "INTERFACE":
-		return fory.UNKNOWN // interface{} treated as UNKNOWN
-	default:
-		return fory.UNKNOWN
-	}
 }
 
 // getStructNames extracts struct names from StructInfo slice
@@ -577,6 +497,7 @@ func analyzeField(field *types.Var, index int) (*FieldInfo, error) {
 		Index:         index,
 		IsPrimitive:   isPrimitive,
 		IsPointer:     isPointer,
+		Nullable:      isPointer, // Pointer types are nullable, slices/maps are non-nullable in xlang mode
 		TypeID:        typeID,
 		PrimitiveSize: primitiveSize,
 	}, nil

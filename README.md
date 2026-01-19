@@ -25,14 +25,13 @@ Apache Fory™ delivers exceptional performance through advanced optimization te
 - **JIT Compilation**: Runtime code generation for Java eliminates virtual method calls and inlines hot paths
 - **Static Code Generation**: Compile-time code generation for Rust, C++, and Go delivers peak performance without runtime overhead
 - **Zero-Copy Operations**: Direct memory access without intermediate buffer copies; row format enables random access and partial serialization
-- **Intelligent Encoding**: Variable-length compression for integers and strings; SIMD acceleration for arrays (Java 16+)
-- **Meta Sharing**: Class metadata packing reduces redundant type information across serializations
+- **Meta Packing & Sharing**: Class metadata packing and sharing reduces redundant type information across serializations
 
 ### 🌍 Cross-Language Serialization
 
 The **[xlang serialization format](docs/specification/xlang_serialization_spec.md)** enables seamless data exchange across programming languages:
 
-- **Automatic Type Mapping**: Intelligent conversion between language-specific types ([type mapping](docs/specification/xlang_type_mapping.md))
+- **Automatic Type Mapping**: Automatic conversion between language-specific types ([type mapping](docs/specification/xlang_type_mapping.md))
 - **Reference Preservation**: Shared and circular references work correctly across languages
 - **Polymorphism**: Objects serialize/deserialize with their actual runtime types
 - **Schema Evolution**: Optional forward/backward compatibility for evolving schemas
@@ -120,6 +119,16 @@ Fory Rust demonstrates competitive performance compared to other Rust serializat
 
 For more detailed benchmarks and methodology, see [Rust Benchmarks](benchmarks/rust_benchmark).
 
+### C++ Serialization Performance
+
+Fory Rust demonstrates competitive performance compared to protobuf c++ serialization framework.
+
+<p align="center">
+<img src="docs/benchmarks/cpp/throughput.png" width="70%">
+</p>
+
+For more detailed benchmarks and methodology, see [C++ Benchmarks](benchmarks/cpp_benchmark).
+
 ## Installation
 
 **Java**:
@@ -128,36 +137,20 @@ For more detailed benchmarks and methodology, see [Rust Benchmarks](benchmarks/r
 <dependency>
   <groupId>org.apache.fory</groupId>
   <artifactId>fory-core</artifactId>
-  <version>0.13.1</version>
+  <version>0.14.1</version>
 </dependency>
-<!-- Optional row format support -->
-<!--
-<dependency>
-  <groupId>org.apache.fory</groupId>
-  <artifactId>fory-format</artifactId>
-  <version>0.13.1</version>
-</dependency>
--->
-<!-- SIMD acceleration for array compression (Java 16+) -->
-<!--
-<dependency>
-  <groupId>org.apache.fory</groupId>
-  <artifactId>fory-simd</artifactId>
-  <version>0.13.1</version>
-</dependency>
--->
 ```
 
-Snapshots are available from `https://repository.apache.org/snapshots/` (version `0.14.0-SNAPSHOT`).
+Snapshots are available from `https://repository.apache.org/snapshots/` (version `0.15.0-SNAPSHOT`).
 
 **Scala**:
 
 ```sbt
 // Scala 2.13
-libraryDependencies += "org.apache.fory" % "fory-scala_2.13" % "0.13.1"
+libraryDependencies += "org.apache.fory" % "fory-scala_2.13" % "0.14.1"
 
 // Scala 3
-libraryDependencies += "org.apache.fory" % "fory-scala_3" % "0.13.1"
+libraryDependencies += "org.apache.fory" % "fory-scala_3" % "0.14.1"
 ```
 
 **Kotlin**:
@@ -166,7 +159,7 @@ libraryDependencies += "org.apache.fory" % "fory-scala_3" % "0.13.1"
 <dependency>
   <groupId>org.apache.fory</groupId>
   <artifactId>fory-kotlin</artifactId>
-  <version>0.13.1</version>
+  <version>0.14.1</version>
 </dependency>
 ```
 
@@ -183,8 +176,12 @@ pip install pyfory[format]
 
 ```toml
 [dependencies]
-fory = "0.13"
+fory = "0.14"
 ```
+
+**C++**:
+
+Fory C++ supports both CMake and Bazel build systems. See [C++ Installation Guide](https://fory.apache.org/docs/docs/guide/cpp/#installation) for detailed instructions.
 
 **Golang**:
 
@@ -235,7 +232,7 @@ public class Example {
 }
 ```
 
-For detailed Java usage including compatibility modes, compression, and advanced features, see [Java Serialization Guide](docs/guide/java_serialization_guide.md) and [java/README.md](java/README.md).
+For detailed Java usage including compatibility modes, compression, and advanced features, see [Java Serialization Guide](docs/guide/java) and [java/README.md](java/README.md).
 
 #### Python Serialization
 
@@ -260,7 +257,67 @@ result = fory.deserialize(data)
 print(result.name, result.age)  # Output: chaokunyang 28
 ```
 
-For detailed Python usage including type hints, compatibility modes, and advanced features, see [Python Guide](docs/guide/python_guide.md).
+For detailed Python usage including type hints, compatibility modes, and advanced features, see [Python Guide](docs/guide/python).
+
+#### Rust Serialization
+
+Rust native mode provides compile-time code generation via derive macros for high-performance serialization without runtime overhead.
+
+```rust
+use fory::{Fory, ForyObject};
+
+#[derive(ForyObject, Debug, PartialEq)]
+struct Person {
+    name: String,
+    age: i32,
+}
+
+fn main() -> Result<(), fory::Error> {
+    // Create Fory instance - should be reused across serializations
+    let mut fory = Fory::default();
+    // Register your structs (required when class registration is enabled)
+    fory.register::<Person>(1);
+    let person = Person {
+        name: "chaokunyang".to_string(),
+        age: 28,
+    };
+    let bytes = fory.serialize(&person);
+    let result: Person = fory.deserialize(&bytes)?;
+    println!("{} {}", result.name, result.age); // Output: chaokunyang 28
+    Ok(())
+}
+```
+
+For detailed Rust usage including collections, references, and custom serializers, see [Rust Guide](docs/guide/rust).
+
+#### C++ Serialization
+
+C++ native mode provides compile-time reflection via the `FORY_STRUCT` macro for efficient serialization with zero runtime overhead.
+
+```cpp
+#include "fory/serialization/fory.h"
+
+using namespace fory::serialization;
+
+struct Person {
+    std::string name;
+    int32_t age;
+};
+FORY_STRUCT(Person, name, age);
+
+int main() {
+    // Create Fory instance - should be reused across serializations
+    auto fory = Fory::builder().build();
+    // Register your structs (required when class registration is enabled)
+    fory.register_struct<Person>(1);
+    Person person{"chaokunyang", 28};
+    auto bytes = fory.serialize(person).value();
+    auto result = fory.deserialize<Person>(bytes).value();
+    std::cout << result.name << " " << result.age << std::endl;  // Output: chaokunyang 28
+}
+```
+
+For detailed C++ usage including collections, smart pointers, and error handling, see [C++ Guide](docs/guide/cpp).
 
 #### Scala Serialization
 
@@ -291,7 +348,7 @@ object Example {
 }
 ```
 
-For detailed Scala usage including collection serialization and integration patterns, see [Scala Guide](docs/guide/scala_guide.md).
+For detailed Scala usage including collection serialization and integration patterns, see [Scala Guide](docs/guide/scala).
 
 #### Kotlin Serialization
 
@@ -392,9 +449,9 @@ fn main() -> Result<(), Error> {
 
 For examples with **circular references**, **shared references**, and **polymorphism** across languages, see:
 
-- [Cross-Language Serialization Guide](docs/guide/xlang_serialization_guide.md)
-- [Java Serialization Guide - Cross Language](docs/guide/java_serialization_guide.md#cross-language-serialization)
-- [Python Guide - Cross Language](docs/guide/python_guide.md#cross-language-serialization)
+- [Cross-Language Serialization Guide](docs/guide/xlang)
+- [Java Serialization Guide - Cross Language](docs/guide/java)
+- [Python Guide - Cross Language](docs/guide/python)
 
 ### Row Format Encoding
 
@@ -490,22 +547,22 @@ print(foo_row.f4[100000].f1)        # Access nested field
 print(foo_row.f4[200000].f2[5])     # Access deeply nested field
 ```
 
-For more details on row format, see [Row Format Guide](docs/guide/row_format_guide.md).
+For more details on row format, see [Row Format Specification](docs/specification/row_format_spec.md).
 
 ## Documentation
 
 ### User Guides
 
-| Guide                            | Description                                | Source                                                                  | Website                                                                             |
-| -------------------------------- | ------------------------------------------ | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| **Java Serialization**           | Comprehensive guide for Java serialization | [java_serialization_guide.md](docs/guide/java_serialization_guide.md)   | [📖 View](https://fory.apache.org/docs/docs/guide/java_serialization)               |
-| **Cross-Language Serialization** | Multi-language object exchange             | [xlang_serialization_guide.md](docs/guide/xlang_serialization_guide.md) | [📖 View](https://fory.apache.org/docs/specification/fory_xlang_serialization_spec) |
-| **Row Format**                   | Zero-copy random access format             | [row_format_guide.md](docs/guide/row_format_guide.md)                   | [📖 View](https://fory.apache.org/docs/specification/fory_row_format_spec)          |
-| **Python**                       | Python-specific features and usage         | [python_guide.md](docs/guide/python_guide.md)                           | [📖 View](https://fory.apache.org/docs/docs/guide/python_serialization)             |
-| **Rust**                         | Rust implementation and patterns           | [rust_guide.md](docs/guide/rust_guide.md)                               | [📖 View](https://fory.apache.org/docs/docs/guide/rust_serialization)               |
-| **Scala**                        | Scala integration and best practices       | [scala_guide.md](docs/guide/scala_guide.md)                             | [📖 View](https://fory.apache.org/docs/docs/guide/scala_serialization)              |
-| **GraalVM**                      | Native image support and AOT compilation   | [graalvm_guide.md](docs/guide/graalvm_guide.md)                         | [📖 View](https://fory.apache.org/docs/docs/guide/graalvm_serialization)            |
-| **Development**                  | Building and contributing to Fory          | [DEVELOPMENT.md](docs/guide/DEVELOPMENT.md)                             | [📖 View](https://fory.apache.org/docs/docs/guide/development)                      |
+| Guide                            | Description                                | Source                                          | Website                                                                  |
+| -------------------------------- | ------------------------------------------ | ----------------------------------------------- | ------------------------------------------------------------------------ |
+| **Java Serialization**           | Comprehensive guide for Java serialization | [java](docs/guide/java)                         | [📖 View](https://fory.apache.org/docs/docs/guide/java/)                 |
+| **Python**                       | Python-specific features and usage         | [python](docs/guide/python)                     | [📖 View](https://fory.apache.org/docs/docs/guide/python/)               |
+| **Rust**                         | Rust implementation and patterns           | [rust](docs/guide/rust)                         | [📖 View](https://fory.apache.org/docs/docs/guide/rust/)                 |
+| **C++**                          | C++ implementation and patterns            | [cpp](docs/guide/cpp)                           | [📖 View](https://fory.apache.org/docs/docs/guide/cpp/)                  |
+| **Scala**                        | Scala integration and best practices       | [scala](docs/guide/scala)                       | [📖 View](https://fory.apache.org/docs/docs/guide/scala/)                |
+| **Cross-Language Serialization** | Multi-language object exchange             | [xlang](docs/guide/xlang)                       | [📖 View](https://fory.apache.org/docs/docs/guide/xlang/)                |
+| **GraalVM**                      | Native image support and AOT compilation   | [graalvm_guide.md](docs/guide/graalvm_guide.md) | [📖 View](https://fory.apache.org/docs/docs/guide/graalvm_serialization) |
+| **Development**                  | Building and contributing to Fory          | [DEVELOPMENT.md](docs/guide/DEVELOPMENT.md)     | [📖 View](https://fory.apache.org/docs/docs/guide/development)           |
 
 ### Protocol Specifications
 
@@ -534,7 +591,7 @@ Apache Fory™ supports class schema forward/backward compatibility across **Jav
 
 - Version your serialized data by Fory major version
 - Plan migration strategies when upgrading major versions
-- See [upgrade guide](docs/guide/java_serialization_guide.md#upgrade-fory) for details
+- See [upgrade guide](docs/guide/java) for details
 
 **Future**: Binary compatibility will be guaranteed starting from Fory 1.0 release.
 
@@ -547,7 +604,7 @@ Serialization security varies by protocol:
 - **Row Format**: Secure with predefined schemas
 - **Object Graph Serialization** (Java/Python native): More flexible but requires careful security configuration
 
-Dynamic serialization can deserialize arbitrary types, which may introduces risks. For example, the deserialization may invoke `init` constructor or `equals/hashCode` method, if the method body contains malicious code, the system will be at risk.
+Dynamic serialization can deserialize arbitrary types, which may introduce risks. For example, the deserialization may invoke `init` constructor or `equals/hashCode` method; If the method body contains malicious code, the system will be at risk.
 
 Fory enables class registration **by default** for dynamic protocols, allowing only trusted registered types.
 **Do not disable class registration unless you can ensure your environment is secure**.

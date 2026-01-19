@@ -56,11 +56,13 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.LongStream;
 import lombok.AllArgsConstructor;
 import lombok.Data;
+import lombok.EqualsAndHashCode;
 import org.apache.fory.Fory;
 import org.apache.fory.ForyTestBase;
 import org.apache.fory.config.Language;
@@ -388,6 +390,23 @@ public class CollectionSerializersTest extends ForyTestBase {
         CollectionSerializers.CopyOnWriteArrayListSerializer.class);
   }
 
+  @EqualsAndHashCode
+  public static class NestedCopyOnWriteArrayList {
+    private final CopyOnWriteArrayList<String> list;
+
+    public NestedCopyOnWriteArrayList(CopyOnWriteArrayList<String> list) {
+      this.list = list;
+    }
+  }
+
+  @Test
+  public void testCopyOnWriteArrayListNested() {
+    final CopyOnWriteArrayList<String> list =
+        new CopyOnWriteArrayList<>(Arrays.asList("a", "b", "c"));
+    NestedCopyOnWriteArrayList nestedObject = new NestedCopyOnWriteArrayList(list);
+    Assert.assertEquals(nestedObject, serDe(getJavaFory(), nestedObject));
+  }
+
   @Test(dataProvider = "foryCopyConfig")
   public void testCopyOnWriteArrayList(Fory fory) {
     final CopyOnWriteArrayList<Object> list =
@@ -474,23 +493,25 @@ public class CollectionSerializersTest extends ForyTestBase {
             .withRefTracking(true)
             .requireClassRegistration(false)
             .build();
-    // TODO(chaokunyang) add optimized serializers for blocking queue.
     {
       ArrayBlockingQueue<Integer> queue = new ArrayBlockingQueue<>(10);
       queue.add(1);
       queue.add(2);
       queue.add(3);
-      assertEquals(new ArrayList<>(serDe(fory, queue)), new ArrayList<>(queue));
+      ArrayBlockingQueue<Integer> deserialized = serDe(fory, queue);
+      assertEquals(new ArrayList<>(deserialized), new ArrayList<>(queue));
+      // Verify capacity is preserved
+      assertEquals(deserialized.remainingCapacity() + deserialized.size(), 10);
     }
     {
-      // If reference tracking is off, deserialization will throw
-      // `java.lang.IllegalMonitorStateException`
-      // when using fory `ObjectStreamSerializer`, maybe some internal state are shared.
       LinkedBlockingQueue<Integer> queue = new LinkedBlockingQueue<>(10);
       queue.add(1);
       queue.add(2);
       queue.add(3);
-      assertEquals(new ArrayList<>(serDe(fory, queue)), new ArrayList<>(queue));
+      LinkedBlockingQueue<Integer> deserialized = serDe(fory, queue);
+      assertEquals(new ArrayList<>(deserialized), new ArrayList<>(queue));
+      // Verify capacity is preserved
+      assertEquals(deserialized.remainingCapacity() + deserialized.size(), 10);
     }
   }
 
@@ -503,17 +524,18 @@ public class CollectionSerializersTest extends ForyTestBase {
       queue.add(3);
       ArrayBlockingQueue<Integer> copy = fory.copy(queue);
       Assert.assertEquals(Arrays.toString(copy.toArray()), "[1, 2, 3]");
+      // Verify capacity is preserved
+      Assert.assertEquals(copy.remainingCapacity() + copy.size(), 10);
     }
     {
-      // If reference tracking is off, deserialization will throw
-      // `java.lang.IllegalMonitorStateException`
-      // when using fory `ObjectStreamSerializer`, maybe some internal state are shared.
       LinkedBlockingQueue<Integer> queue = new LinkedBlockingQueue<>(10);
       queue.add(1);
       queue.add(2);
       queue.add(3);
       LinkedBlockingQueue<Integer> copy = fory.copy(queue);
       Assert.assertEquals(Arrays.toString(copy.toArray()), "[1, 2, 3]");
+      // Verify capacity is preserved
+      Assert.assertEquals(copy.remainingCapacity() + copy.size(), 10);
     }
   }
 
@@ -964,5 +986,22 @@ public class CollectionSerializersTest extends ForyTestBase {
             .requireClassRegistration(false)
             .build();
     serDeCheck(fory, obj);
+  }
+
+  @Test
+  public void testCopyOnWriteArraySet() {
+    final CopyOnWriteArraySet<String> set =
+        new CopyOnWriteArraySet<>(Arrays.asList("Value1", "Value2"));
+    Assert.assertEquals(set, serDe(getJavaFory(), set));
+    Assert.assertEquals(
+        getJavaFory().getClassResolver().getSerializerClass(CopyOnWriteArraySet.class),
+        CollectionSerializers.CopyOnWriteArraySetSerializer.class);
+  }
+
+  @Test(dataProvider = "foryCopyConfig")
+  public void testCopyOnWriteArraySet(Fory fory) {
+    final CopyOnWriteArraySet<Object> set =
+        new CopyOnWriteArraySet<>(Arrays.asList("a", "b", Cyclic.create(true)));
+    copyCheck(fory, set);
   }
 }

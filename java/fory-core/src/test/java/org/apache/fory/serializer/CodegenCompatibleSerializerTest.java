@@ -30,10 +30,10 @@ import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import org.apache.fory.Fory;
 import org.apache.fory.ForyTestBase;
+import org.apache.fory.TestUtils;
 import org.apache.fory.config.CompatibleMode;
 import org.apache.fory.config.ForyBuilder;
 import org.apache.fory.config.Language;
-import org.apache.fory.reflect.ReflectionUtils;
 import org.apache.fory.serializer.collection.UnmodifiableSerializersTest;
 import org.apache.fory.test.bean.BeanA;
 import org.apache.fory.test.bean.BeanB;
@@ -44,14 +44,18 @@ import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
+/**
+ * Tests for compatible mode serialization using meta-shared approach with codegen. These tests
+ * verify forward/backward compatibility when using {@link CompatibleMode#COMPATIBLE} with scoped
+ * meta share and codegen enabled.
+ */
 public class CodegenCompatibleSerializerTest extends ForyTestBase {
 
   @DataProvider(name = "config")
   public static Object[][] config() {
     return Sets.cartesianProduct(
-            ImmutableSet.of(true, false), // referenceTracking
-            ImmutableSet.of(true, false), // scopedMetaShare
-            ImmutableSet.of(true, false)) // enable codegen
+            ImmutableSet.of(true), // referenceTracking
+            ImmutableSet.of(true)) // enable codegen
         .stream()
         .map(List::toArray)
         .toArray(Object[][]::new);
@@ -65,12 +69,11 @@ public class CodegenCompatibleSerializerTest extends ForyTestBase {
   }
 
   @Test(dataProvider = "config")
-  public void testWrite(boolean referenceTracking, boolean scopedMetaShare, boolean enableCodegen) {
+  public void testWrite(boolean referenceTracking, boolean enableCodegen) {
     Fory fory =
         foryBuilder()
             .withRefTracking(referenceTracking)
             .withCodegen(enableCodegen)
-            .withScopedMetaShare(scopedMetaShare)
             .withCompatibleMode(CompatibleMode.COMPATIBLE)
             .build();
     serDeCheck(fory, Foo.create());
@@ -79,12 +82,11 @@ public class CodegenCompatibleSerializerTest extends ForyTestBase {
   }
 
   @Test(dataProvider = "config")
-  public void testCopy(boolean referenceTracking, boolean scopedMetaShare, boolean enableCodegen) {
+  public void testCopy(boolean referenceTracking, boolean enableCodegen) {
     Fory fory =
         foryBuilder()
             .withRefCopy(referenceTracking)
             .withCodegen(enableCodegen)
-            .withScopedMetaShare(scopedMetaShare)
             .withCompatibleMode(CompatibleMode.COMPATIBLE)
             .build();
     copyCheck(fory, Foo.create());
@@ -93,8 +95,8 @@ public class CodegenCompatibleSerializerTest extends ForyTestBase {
   }
 
   @Test(dataProvider = "config")
-  public void testWriteCompatibleBasic(
-      boolean referenceTracking, boolean scopedMetaShare, boolean enableCodegen) throws Exception {
+  public void testWriteCompatibleBasic(boolean referenceTracking, boolean enableCodegen)
+      throws Exception {
     Supplier<ForyBuilder> builder =
         () ->
             Fory.builder()
@@ -102,7 +104,6 @@ public class CodegenCompatibleSerializerTest extends ForyTestBase {
                 .withRefTracking(referenceTracking)
                 .withCodegen(enableCodegen)
                 .withCompatibleMode(CompatibleMode.COMPATIBLE)
-                .withScopedMetaShare(scopedMetaShare)
                 .requireClassRegistration(false);
     Fory fory = builder.get().build();
     Object foo = Foo.create();
@@ -111,39 +112,38 @@ public class CodegenCompatibleSerializerTest extends ForyTestBase {
           Foo.createCompatibleClass1(), Foo.createCompatibleClass2(), Foo.createCompatibleClass3(),
         }) {
       Object newFoo = fooClass.newInstance();
-      ReflectionUtils.unsafeCopy(foo, newFoo);
+      TestUtils.unsafeCopy(foo, newFoo);
       Fory newFory = builder.get().withClassLoader(fooClass.getClassLoader()).build();
 
       {
         byte[] foo1Bytes = newFory.serialize(newFoo);
         Object deserialized = fory.deserialize(foo1Bytes);
         Assert.assertEquals(deserialized.getClass(), Foo.class);
-        Assert.assertTrue(ReflectionUtils.objectCommonFieldsEquals(deserialized, newFoo));
+        Assert.assertTrue(TestUtils.objectCommonFieldsEquals(deserialized, newFoo));
         byte[] fooBytes = fory.serialize(deserialized);
-        Assert.assertTrue(
-            ReflectionUtils.objectFieldsEquals(newFory.deserialize(fooBytes), newFoo));
+        TestUtils.objectFieldsEquals(newFory.deserialize(fooBytes), newFoo, true);
       }
       {
         byte[] bytes1 = fory.serialize(foo);
         Object o1 = newFory.deserialize(bytes1);
-        Assert.assertTrue(ReflectionUtils.objectCommonFieldsEquals(o1, foo));
+        Assert.assertTrue(TestUtils.objectCommonFieldsEquals(o1, foo));
         Object o2 = fory.deserialize(newFory.serialize(o1));
         List<String> fields =
             Arrays.stream(fooClass.getDeclaredFields())
                 .map(f -> f.getDeclaringClass().getSimpleName() + f.getName())
                 .collect(Collectors.toList());
-        Assert.assertTrue(ReflectionUtils.objectFieldsEquals(new HashSet<>(fields), o2, foo));
+        TestUtils.objectFieldsEquals(new HashSet<>(fields), o2, foo, true);
       }
       {
         Object o3 = fory.deserialize(newFory.serialize(foo));
-        Assert.assertTrue(ReflectionUtils.objectFieldsEquals(o3, foo));
+        TestUtils.objectFieldsEquals(o3, foo, true);
       }
     }
   }
 
   @Test(dataProvider = "config")
-  public void testWriteCompatibleBasicCopy(
-      boolean referenceTracking, boolean scopedMetaShare, boolean enableCodegen) throws Exception {
+  public void testWriteCompatibleBasicCopy(boolean referenceTracking, boolean enableCodegen)
+      throws Exception {
     Supplier<ForyBuilder> builder =
         () ->
             Fory.builder()
@@ -151,7 +151,6 @@ public class CodegenCompatibleSerializerTest extends ForyTestBase {
                 .withRefCopy(referenceTracking)
                 .withCodegen(enableCodegen)
                 .withCompatibleMode(CompatibleMode.COMPATIBLE)
-                .withScopedMetaShare(scopedMetaShare)
                 .requireClassRegistration(false);
     Fory fory = builder.get().build();
     Object foo = Foo.create();
@@ -160,23 +159,23 @@ public class CodegenCompatibleSerializerTest extends ForyTestBase {
           Foo.createCompatibleClass1(), Foo.createCompatibleClass2(), Foo.createCompatibleClass3(),
         }) {
       Object newFoo = fooClass.newInstance();
-      ReflectionUtils.unsafeCopy(foo, newFoo);
+      TestUtils.unsafeCopy(foo, newFoo);
       Fory newFory = builder.get().withClassLoader(fooClass.getClassLoader()).build();
       {
         Object copy = fory.copy(newFoo);
         Assert.assertEquals(copy.getClass().getName(), Foo.class.getName());
-        Assert.assertTrue(ReflectionUtils.objectCommonFieldsEquals(copy, newFoo));
+        Assert.assertTrue(TestUtils.objectCommonFieldsEquals(copy, newFoo));
       }
       {
         Object o3 = newFory.copy(foo);
-        Assert.assertTrue(ReflectionUtils.objectFieldsEquals(o3, foo));
+        TestUtils.objectFieldsEquals(o3, foo, true);
       }
     }
   }
 
   @Test(dataProvider = "config")
-  public void testWriteCompatibleCollectionBasic(
-      boolean referenceTracking, boolean scopedMetaShare, boolean enableCodegen) throws Exception {
+  public void testWriteCompatibleCollectionBasic(boolean referenceTracking, boolean enableCodegen)
+      throws Exception {
     BeanA beanA = BeanA.createBeanA(2);
     Supplier<ForyBuilder> builder =
         () ->
@@ -185,7 +184,6 @@ public class CodegenCompatibleSerializerTest extends ForyTestBase {
                 .withRefTracking(referenceTracking)
                 .withCodegen(enableCodegen)
                 .withCompatibleMode(CompatibleMode.COMPATIBLE)
-                .withScopedMetaShare(scopedMetaShare)
                 .requireClassRegistration(false);
     Fory fory = builder.get().build();
     String pkg = BeanA.class.getPackage().getName();
@@ -224,25 +222,25 @@ public class CodegenCompatibleSerializerTest extends ForyTestBase {
             code,
             CodegenCompatibleSerializerTest.class + "testWriteCompatibleCollectionBasic_2");
     Object newBeanA = cls2.newInstance();
-    ReflectionUtils.unsafeCopy(beanA, newBeanA);
+    TestUtils.unsafeCopy(beanA, newBeanA);
     Fory fory2 = builder.get().withClassLoader(cls2.getClassLoader()).build();
     byte[] newBeanABytes = fory2.serialize(newBeanA);
     Object deserialized = fory1.deserialize(newBeanABytes);
-    Assert.assertTrue(ReflectionUtils.objectCommonFieldsEquals(deserialized, newBeanA));
+    Assert.assertTrue(TestUtils.objectCommonFieldsEquals(deserialized, newBeanA));
     Assert.assertEquals(deserialized.getClass(), cls1);
     byte[] beanABytes = fory1.serialize(deserialized);
-    Assert.assertTrue(ReflectionUtils.objectFieldsEquals(fory2.deserialize(beanABytes), newBeanA));
+    TestUtils.objectFieldsEquals(fory2.deserialize(beanABytes), newBeanA, true);
 
     byte[] objBytes = fory1.serialize(beanA);
     Object obj2 = fory2.deserialize(objBytes);
-    Assert.assertTrue(ReflectionUtils.objectCommonFieldsEquals(obj2, newBeanA));
+    Assert.assertTrue(TestUtils.objectCommonFieldsEquals(obj2, newBeanA));
 
     Assert.assertEquals(fory.deserialize(fory2.serialize(beanA)), beanA);
   }
 
   @Test(dataProvider = "config")
-  public void testWriteCompatibleContainer(
-      boolean referenceTracking, boolean scopedMetaShare, boolean enableCodegen) throws Exception {
+  public void testWriteCompatibleContainer(boolean referenceTracking, boolean enableCodegen)
+      throws Exception {
     Supplier<ForyBuilder> builder =
         () ->
             Fory.builder()
@@ -250,32 +248,30 @@ public class CodegenCompatibleSerializerTest extends ForyTestBase {
                 .withRefTracking(referenceTracking)
                 .withCodegen(enableCodegen)
                 .withCompatibleMode(CompatibleMode.COMPATIBLE)
-                .withScopedMetaShare(scopedMetaShare)
                 .requireClassRegistration(false);
     Fory fory = builder.get().build();
     BeanA beanA = BeanA.createBeanA(2);
     serDe(fory, beanA);
     Class<?> cls = ClassUtils.createCompatibleClass1();
     Object newBeanA = cls.newInstance();
-    ReflectionUtils.unsafeCopy(beanA, newBeanA);
+    TestUtils.unsafeCopy(beanA, newBeanA);
     Fory newFory = builder.get().withClassLoader(cls.getClassLoader()).build();
     byte[] newBeanABytes = newFory.serialize(newBeanA);
     BeanA deserialized = (BeanA) fory.deserialize(newBeanABytes);
-    Assert.assertTrue(ReflectionUtils.objectCommonFieldsEquals(deserialized, newBeanA));
+    Assert.assertTrue(TestUtils.objectCommonFieldsEquals(deserialized, newBeanA));
     Assert.assertEquals(deserialized.getClass(), BeanA.class);
     byte[] beanABytes = fory.serialize(deserialized);
-    Assert.assertTrue(
-        ReflectionUtils.objectFieldsEquals(newFory.deserialize(beanABytes), newBeanA));
+    TestUtils.objectFieldsEquals(newFory.deserialize(beanABytes), newBeanA, true);
 
     byte[] objBytes = fory.serialize(beanA);
     Object obj2 = newFory.deserialize(objBytes);
-    Assert.assertTrue(ReflectionUtils.objectCommonFieldsEquals(obj2, newBeanA));
+    Assert.assertTrue(TestUtils.objectCommonFieldsEquals(obj2, newBeanA));
     Assert.assertEquals(fory.deserialize(newFory.serialize(beanA)), beanA);
   }
 
   @Test(dataProvider = "config")
-  public void testWriteCompatibleCollection(
-      boolean referenceTracking, boolean scopedMetaShare, boolean enableCodegen) throws Exception {
+  public void testWriteCompatibleCollection(boolean referenceTracking, boolean enableCodegen)
+      throws Exception {
     Supplier<ForyBuilder> builder =
         () ->
             Fory.builder()
@@ -283,7 +279,6 @@ public class CodegenCompatibleSerializerTest extends ForyTestBase {
                 .withRefTracking(referenceTracking)
                 .withCodegen(enableCodegen)
                 .withCompatibleMode(CompatibleMode.COMPATIBLE)
-                .withScopedMetaShare(scopedMetaShare)
                 .requireClassRegistration(false);
     Fory fory = builder.get().build();
     CollectionFields collectionFields = UnmodifiableSerializersTest.createCollectionFields();
@@ -297,27 +292,27 @@ public class CodegenCompatibleSerializerTest extends ForyTestBase {
     }
     Class<?> cls2 = ClassUtils.createCompatibleClass2();
     Object newObj = cls2.newInstance();
-    ReflectionUtils.unsafeCopy(collectionFields, newObj);
+    TestUtils.unsafeCopy(collectionFields, newObj);
     Fory fory2 = builder.get().withClassLoader(cls2.getClassLoader()).build();
     byte[] bytes1 = fory2.serialize(newObj);
     Object deserialized = fory.deserialize(bytes1);
     Assert.assertTrue(
-        ReflectionUtils.objectCommonFieldsEquals(
+        TestUtils.objectCommonFieldsEquals(
             CollectionFields.copyToCanEqual(deserialized, deserialized.getClass().newInstance()),
             CollectionFields.copyToCanEqual(newObj, newObj.getClass().newInstance())));
     Assert.assertEquals(deserialized.getClass(), CollectionFields.class);
 
     byte[] bytes2 = fory.serialize(deserialized);
     Object obj2 = fory2.deserialize(bytes2);
-    Assert.assertTrue(
-        ReflectionUtils.objectFieldsEquals(
-            CollectionFields.copyToCanEqual(obj2, obj2.getClass().newInstance()),
-            CollectionFields.copyToCanEqual(newObj, newObj.getClass().newInstance())));
+    TestUtils.objectFieldsEquals(
+        CollectionFields.copyToCanEqual(obj2, obj2.getClass().newInstance()),
+        CollectionFields.copyToCanEqual(newObj, newObj.getClass().newInstance()),
+        true);
 
     byte[] objBytes = fory.serialize(collectionFields);
     Object obj3 = fory2.deserialize(objBytes);
     Assert.assertTrue(
-        ReflectionUtils.objectCommonFieldsEquals(
+        TestUtils.objectCommonFieldsEquals(
             CollectionFields.copyToCanEqual(obj3, obj3.getClass().newInstance()),
             CollectionFields.copyToCanEqual(newObj, newObj.getClass().newInstance())));
 
@@ -327,8 +322,8 @@ public class CodegenCompatibleSerializerTest extends ForyTestBase {
   }
 
   @Test(dataProvider = "config")
-  public void testWriteCompatibleMap(
-      boolean referenceTracking, boolean scopedMetaShare, boolean enableCodegen) throws Exception {
+  public void testWriteCompatibleMap(boolean referenceTracking, boolean enableCodegen)
+      throws Exception {
     Supplier<ForyBuilder> builder =
         () ->
             Fory.builder()
@@ -336,7 +331,6 @@ public class CodegenCompatibleSerializerTest extends ForyTestBase {
                 .withRefTracking(referenceTracking)
                 .withCodegen(enableCodegen)
                 .withCompatibleMode(CompatibleMode.COMPATIBLE)
-                .withScopedMetaShare(scopedMetaShare)
                 .requireClassRegistration(false);
     Fory fory = builder.get().build();
     MapFields mapFields = UnmodifiableSerializersTest.createMapFields();
@@ -348,12 +342,12 @@ public class CodegenCompatibleSerializerTest extends ForyTestBase {
     }
     Class<?> cls = ClassUtils.createCompatibleClass3();
     Object newObj = cls.newInstance();
-    ReflectionUtils.unsafeCopy(mapFields, newObj);
+    TestUtils.unsafeCopy(mapFields, newObj);
     Fory fory2 = builder.get().withClassLoader(cls.getClassLoader()).build();
     byte[] bytes1 = fory2.serialize(newObj);
     Object deserialized = fory.deserialize(bytes1);
     Assert.assertTrue(
-        ReflectionUtils.objectCommonFieldsEquals(
+        TestUtils.objectCommonFieldsEquals(
             MapFields.copyToCanEqual(deserialized, deserialized.getClass().newInstance()),
             MapFields.copyToCanEqual(newObj, newObj.getClass().newInstance())));
     Assert.assertEquals(deserialized.getClass(), MapFields.class);
@@ -361,14 +355,14 @@ public class CodegenCompatibleSerializerTest extends ForyTestBase {
     byte[] bytes2 = fory.serialize(deserialized);
     Object obj2 = fory2.deserialize(bytes2);
     Assert.assertTrue(
-        ReflectionUtils.objectCommonFieldsEquals(
+        TestUtils.objectCommonFieldsEquals(
             MapFields.copyToCanEqual(obj2, obj2.getClass().newInstance()),
             MapFields.copyToCanEqual(newObj, newObj.getClass().newInstance())));
 
     byte[] objBytes = fory.serialize(mapFields);
     Object obj3 = fory2.deserialize(objBytes);
     Assert.assertTrue(
-        ReflectionUtils.objectCommonFieldsEquals(
+        TestUtils.objectCommonFieldsEquals(
             MapFields.copyToCanEqual(obj3, obj3.getClass().newInstance()),
             MapFields.copyToCanEqual(newObj, newObj.getClass().newInstance())));
 

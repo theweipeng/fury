@@ -468,6 +468,22 @@ public final class MemoryBuffer {
     UNSAFE.putShort(heapMemory, pos, value);
   }
 
+  // CHECKSTYLE.OFF:MethodName
+  public short _unsafeGetInt16(int index) {
+    // CHECKSTYLE.ON:MethodName
+    short v = UNSAFE.getShort(heapMemory, address + index);
+    return LITTLE_ENDIAN ? v : Short.reverseBytes(v);
+  }
+
+  // CHECKSTYLE.OFF:MethodName
+  public void _unsafePutInt16(int index, short value) {
+    // CHECKSTYLE.ON:MethodName
+    if (!LITTLE_ENDIAN) {
+      value = Short.reverseBytes(value);
+    }
+    UNSAFE.putShort(heapMemory, address + index, value);
+  }
+
   public int getInt32(int index) {
     final long pos = address + index;
     checkPosition(index, pos, 4);
@@ -485,7 +501,7 @@ public final class MemoryBuffer {
   }
 
   // CHECKSTYLE.OFF:MethodName
-  private int _unsafeGetInt32(int index) {
+  public int _unsafeGetInt32(int index) {
     // CHECKSTYLE.ON:MethodName
     int v = UNSAFE.getInt(heapMemory, address + index);
     return LITTLE_ENDIAN ? v : Integer.reverseBytes(v);
@@ -517,14 +533,14 @@ public final class MemoryBuffer {
   }
 
   // CHECKSTYLE.OFF:MethodName
-  long _unsafeGetInt64(int index) {
+  public long _unsafeGetInt64(int index) {
     // CHECKSTYLE.ON:MethodName
     long v = UNSAFE.getLong(heapMemory, address + index);
     return LITTLE_ENDIAN ? v : Long.reverseBytes(v);
   }
 
   // CHECKSTYLE.OFF:MethodName
-  private void _unsafePutInt64(int index, long value) {
+  public void _unsafePutInt64(int index, long value) {
     // CHECKSTYLE.ON:MethodName
     if (!LITTLE_ENDIAN) {
       value = Long.reverseBytes(value);
@@ -745,7 +761,9 @@ public final class MemoryBuffer {
    */
   public int writeVarInt32(int v) {
     ensure(writerIndex + 8);
-    int varintBytes = _unsafePutVarUint36Small(writerIndex, ((long) v << 1) ^ (v >> 31));
+    // Zigzag encoding: maps negative values to positive values
+    // This works entirely in int without conversion to long
+    int varintBytes = _unsafePutVarUint32(writerIndex, (v << 1) ^ (v >> 31));
     writerIndex += varintBytes;
     return varintBytes;
   }
@@ -758,8 +776,8 @@ public final class MemoryBuffer {
   // CHECKSTYLE.OFF:MethodName
   public int _unsafeWriteVarInt32(int v) {
     // CHECKSTYLE.ON:MethodName
-    // Ensure negatives close to zero is encode in little bytes.
-    int varintBytes = _unsafePutVarUint36Small(writerIndex, ((long) v << 1) ^ (v >> 31));
+    // Zigzag encoding ensures negatives close to zero are encoded in few bytes
+    int varintBytes = _unsafePutVarUint32(writerIndex, (v << 1) ^ (v >> 31));
     writerIndex += varintBytes;
     return varintBytes;
   }
@@ -774,7 +792,7 @@ public final class MemoryBuffer {
     // generated code is smaller. Otherwise, `MapRefResolver.writeRefOrNull`
     // may be `callee is too large`/`already compiled into a big method`
     ensure(writerIndex + 8);
-    int varintBytes = _unsafePutVarUint36Small(writerIndex, v);
+    int varintBytes = _unsafePutVarUint32(writerIndex, v);
     writerIndex += varintBytes;
     return varintBytes;
   }
@@ -786,7 +804,7 @@ public final class MemoryBuffer {
   // CHECKSTYLE.OFF:MethodName
   public int _unsafeWriteVarUint32(int v) {
     // CHECKSTYLE.ON:MethodName
-    int varintBytes = _unsafePutVarUint36Small(writerIndex, v);
+    int varintBytes = _unsafePutVarUint32(writerIndex, v);
     writerIndex += varintBytes;
     return varintBytes;
   }
@@ -819,7 +837,56 @@ public final class MemoryBuffer {
   }
 
   /**
+   * Writes an unsigned 32-bit varint at the given index using int operations. Caller must ensure
+   * there are at least 8 bytes available for writing. This method avoids int-to-long conversion
+   * overhead for the common cases (1-4 bytes).
+   *
+   * @param index the position to write at
+   * @param value the unsigned 32-bit value (high bit may be set)
+   * @return the number of bytes written (1-5)
+   */
+  // CHECKSTYLE.OFF:MethodName
+  public int _unsafePutVarUint32(int index, int value) {
+    // CHECKSTYLE.ON:MethodName
+    int encoded = (value & 0x7F);
+    if (value >>> 7 == 0) {
+      UNSAFE.putByte(heapMemory, address + index, (byte) value);
+      return 1;
+    }
+    // bit 8 `set` indicates have next data bytes.
+    // 0x3f80: 0b1111111 << 7
+    encoded |= (((value & 0x3f80) << 1) | 0x80);
+    if (value >>> 14 == 0) {
+      _unsafePutInt32(index, encoded);
+      return 2;
+    }
+    return continuePutVarUint32(index, encoded, value);
+  }
+
+  private int continuePutVarUint32(int index, int encoded, int value) {
+    // 0x1fc000: 0b1111111 << 14
+    encoded |= (((value & 0x1fc000) << 2) | 0x8000);
+    if (value >>> 21 == 0) {
+      _unsafePutInt32(index, encoded);
+      return 3;
+    }
+    // 0xfe00000: 0b1111111 << 21
+    encoded |= ((value & 0xfe00000) << 3) | 0x800000;
+    if (value >>> 28 == 0) {
+      _unsafePutInt32(index, encoded);
+      return 4;
+    }
+    // 5-byte case: bits 28-31 go to the 5th byte
+    // Need long for the final write to include the 5th byte
+    long encodedLong = Integer.toUnsignedLong(encoded) | 0x80000000L;
+    encodedLong |= (long) (value >>> 28) << 32;
+    _unsafePutInt64(index, encodedLong);
+    return 5;
+  }
+
+  /**
    * Caller must ensure there must be at least 8 bytes for writing, otherwise the crash may occur.
+   * Don't pass int value to avoid sign extension.
    */
   // CHECKSTYLE.OFF:MethodName
   public int _unsafePutVarUint36Small(int index, long value) {
@@ -1137,22 +1204,58 @@ public final class MemoryBuffer {
   }
 
   /**
-   * Write long using fory SLI(Small long as int) encoding. If long is in [0xc0000000, 0x3fffffff],
-   * encode as 4 bytes int: | little-endian: ((int) value) << 1 |; Otherwise write as 9 bytes: | 0b1
-   * | little-endian 8bytes long |
+   * Write signed long using fory Tagged(Small long as int) encoding. If long is in [0xc0000000,
+   * 0x3fffffff], encode as 4 bytes int: | little-endian: ((int) value) << 1 |; Otherwise write as 9
+   * bytes: | 0b1 | little-endian 8bytes long |
    */
-  public int writeSliInt64(long value) {
+  public int writeTaggedInt64(long value) {
     ensure(writerIndex + 9);
-    return _unsafeWriteSliInt64(value);
+    return _unsafeWriteTaggedInt64(value);
+  }
+
+  /**
+   * Write unsigned long using fory Tagged(Small long as int) encoding. If long is in [0,
+   * 0x7fffffff], encode as 4 bytes int: | little-endian: ((int) value) << 1 |; Otherwise write as 9
+   * bytes: | 0b1 | little-endian 8bytes long |
+   */
+  public int writeTaggedUint64(long value) {
+    ensure(writerIndex + 9);
+    return _unsafeWriteTaggedUint64(value);
+  }
+
+  /** Write unsigned long using fory Tagged(Small Long as Int) encoding. */
+  // CHECKSTYLE.OFF:MethodName
+  public int _unsafeWriteTaggedUint64(long value) {
+    // CHECKSTYLE.ON:MethodName
+    final int writerIndex = this.writerIndex;
+    final long pos = address + writerIndex;
+    final byte[] heapMemory = this.heapMemory;
+    if (value >= 0 && value <= Integer.MAX_VALUE) {
+      int v = ((int) value) << 1; // bit 0 unset, means int.
+      if (!LITTLE_ENDIAN) {
+        v = Integer.reverseBytes(v);
+      }
+      UNSAFE.putInt(heapMemory, pos, v);
+      this.writerIndex = writerIndex + 4;
+      return 4;
+    } else {
+      UNSAFE.putByte(heapMemory, pos, BIG_LONG_FLAG);
+      if (!LITTLE_ENDIAN) {
+        value = Long.reverseBytes(value);
+      }
+      UNSAFE.putLong(heapMemory, pos + 1, value);
+      this.writerIndex = writerIndex + 9;
+      return 9;
+    }
   }
 
   private static final long HALF_MAX_INT_VALUE = Integer.MAX_VALUE / 2;
   private static final long HALF_MIN_INT_VALUE = Integer.MIN_VALUE / 2;
   private static final byte BIG_LONG_FLAG = 0b1; // bit 0 set, means big long.
 
-  /** Write long using fory SLI(Small Long as Int) encoding. */
+  /** Write long using fory Tagged(Small Long as Int) encoding. */
   // CHECKSTYLE.OFF:MethodName
-  public int _unsafeWriteSliInt64(long value) {
+  public int _unsafeWriteTaggedInt64(long value) {
     // CHECKSTYLE.ON:MethodName
     final int writerIndex = this.writerIndex;
     final long pos = address + writerIndex;
@@ -1213,15 +1316,6 @@ public final class MemoryBuffer {
     idx += _unsafeWriteVarUint32(numBytes);
     Platform.copyMemory(arr, offset, heapMemory, address + idx, numBytes);
     writerIndex = idx + numBytes;
-  }
-
-  public void writePrimitiveArrayAlignedSize(Object arr, int offset, int numBytes) {
-    writeVarUint32Aligned(numBytes);
-    final int writerIdx = writerIndex;
-    final int newIdx = writerIdx + numBytes;
-    ensure(newIdx);
-    Platform.copyMemory(arr, offset, heapMemory, address + writerIdx, numBytes);
-    writerIndex = newIdx;
   }
 
   public void writePrimitiveArray(Object arr, int offset, int numBytes) {
@@ -1487,18 +1581,71 @@ public final class MemoryBuffer {
     return Long.reverseBytes(UNSAFE.getLong(heapMemory, address + readerIdx));
   }
 
-  /** Read fory SLI(Small Long as Int) encoded long. */
-  public long readSliInt64() {
+  /** Read signed fory Tagged(Small Long as Int) encoded long. */
+  public long readTaggedInt64() {
     if (LITTLE_ENDIAN) {
-      return _readSliInt64OnLE();
+      return _readTaggedInt64OnLE();
     } else {
-      return _readSliInt64OnBE();
+      return _readTaggedInt64OnBE();
+    }
+  }
+
+  /** Read unsigned fory Tagged(Small Long as Int) encoded long. */
+  public long readTaggedUint64() {
+    if (LITTLE_ENDIAN) {
+      return _readTaggedUint64OnLE();
+    } else {
+      return _readTaggedUint64OnBE();
     }
   }
 
   @CodegenInvoke
   // CHECKSTYLE.OFF:MethodName
-  public long _readSliInt64OnLE() {
+  public long _readTaggedUint64OnLE() {
+    // CHECKSTYLE.ON:MethodName
+    final int readIdx = readerIndex;
+    int diff = size - readIdx;
+    if (diff < 4) {
+      streamReader.fillBuffer(4 - diff);
+    }
+    int i = UNSAFE.getInt(heapMemory, address + readIdx);
+    if ((i & 0b1) != 0b1) {
+      readerIndex = readIdx + 4;
+      return i >>> 1; // unsigned right shift
+    }
+    diff = size - readIdx;
+    if (diff < 9) {
+      streamReader.fillBuffer(9 - diff);
+    }
+    readerIndex = readIdx + 9;
+    return UNSAFE.getLong(heapMemory, address + readIdx + 1);
+  }
+
+  @CodegenInvoke
+  // CHECKSTYLE.OFF:MethodName
+  public long _readTaggedUint64OnBE() {
+    // CHECKSTYLE.ON:MethodName
+    final int readIdx = readerIndex;
+    int diff = size - readIdx;
+    if (diff < 4) {
+      streamReader.fillBuffer(4 - diff);
+    }
+    int i = Integer.reverseBytes(UNSAFE.getInt(heapMemory, address + readIdx));
+    if ((i & 0b1) != 0b1) {
+      readerIndex = readIdx + 4;
+      return i >>> 1; // unsigned right shift
+    }
+    diff = size - readIdx;
+    if (diff < 9) {
+      streamReader.fillBuffer(9 - diff);
+    }
+    readerIndex = readIdx + 9;
+    return Long.reverseBytes(UNSAFE.getLong(heapMemory, address + readIdx + 1));
+  }
+
+  @CodegenInvoke
+  // CHECKSTYLE.OFF:MethodName
+  public long _readTaggedInt64OnLE() {
     // CHECKSTYLE.ON:MethodName
     // Duplicate and manual inline for performance.
     // noinspection Duplicates
@@ -1522,7 +1669,7 @@ public final class MemoryBuffer {
 
   @CodegenInvoke
   // CHECKSTYLE.OFF:MethodName
-  public long _readSliInt64OnBE() {
+  public long _readTaggedInt64OnBE() {
     // CHECKSTYLE.ON:MethodName
     // noinspection Duplicates
     final int readIdx = readerIndex;
@@ -2065,11 +2212,11 @@ public final class MemoryBuffer {
   }
 
   /** Reads the 1-9 byte int part of an aligned varint. */
-  public int readAlignedVarUint() {
+  public int readAlignedVarUint32() {
     int readerIdx = readerIndex;
     // use subtract to avoid overflow
     if (readerIdx < size - 10) {
-      return slowReadAlignedVarUint();
+      return slowReadAlignedVarUint32();
     }
     long pos = address + readerIdx;
     long startPos = pos;
@@ -2105,7 +2252,7 @@ public final class MemoryBuffer {
     return result;
   }
 
-  public int slowReadAlignedVarUint() {
+  public int slowReadAlignedVarUint32() {
     int b = readByte();
     // Mask first 6 bits,
     // bit 8 `set` indicates have next data bytes.
@@ -2334,21 +2481,6 @@ public final class MemoryBuffer {
     return arr;
   }
 
-  public byte[] readBytesWithAlignedSize() {
-    final int numBytes = readAlignedVarUint();
-    int readerIdx = readerIndex;
-    final byte[] arr = new byte[numBytes];
-    // use subtract to avoid overflow
-    if (readerIdx > size - numBytes) {
-      streamReader.readTo(arr, 0, numBytes);
-      return arr;
-    }
-    Platform.UNSAFE.copyMemory(
-        this.heapMemory, this.address + readerIdx, arr, Platform.BYTE_ARRAY_OFFSET, numBytes);
-    readerIndex = readerIdx + numBytes;
-    return arr;
-  }
-
   /** This method should be used to read data written by {@link #writePrimitiveArrayWithSize}. */
   public char[] readChars(int numBytes) {
     int readerIdx = readerIndex;
@@ -2389,11 +2521,6 @@ public final class MemoryBuffer {
         heapMemory, address + readerIdx, arr, Platform.CHAR_ARRAY_OFFSET, numBytes);
     readerIndex = readerIdx + numBytes;
     return arr;
-  }
-
-  public char[] readCharsWithAlignedSize() {
-    final int numBytes = readAlignedVarUint();
-    return readChars(numBytes);
   }
 
   public long[] readLongs(int numBytes) {

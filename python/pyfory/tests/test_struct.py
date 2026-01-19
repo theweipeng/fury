@@ -26,7 +26,7 @@ import typing
 import pyfory
 from pyfory import Fory
 from pyfory.error import TypeUnregisteredError
-from pyfory.serializer import DataClassSerializer
+from pyfory.struct import DataClassSerializer
 
 
 def ser_de(fory, obj):
@@ -36,21 +36,21 @@ def ser_de(fory, obj):
 
 @dataclass
 class SimpleObject:
-    f1: Dict[pyfory.int32, pyfory.float64] = None
+    f1: Optional[Dict[pyfory.int32, pyfory.float64]] = None
 
 
 @dataclass
 class ComplexObject:
-    f1: Any = None
-    f2: Any = None
+    f1: Optional[Any] = None
+    f2: Optional[Any] = None
     f3: pyfory.int8 = 0
     f4: pyfory.int16 = 0
     f5: pyfory.int32 = 0
     f6: pyfory.int64 = 0
     f7: pyfory.float32 = 0
     f8: pyfory.float64 = 0
-    f9: List[pyfory.int16] = None
-    f10: Dict[pyfory.int32, pyfory.float64] = None
+    f9: Optional[List[pyfory.int16]] = None
+    f10: Optional[Dict[pyfory.int32, pyfory.float64]] = None
 
 
 def test_struct():
@@ -87,13 +87,13 @@ def test_struct():
 
 @dataclass
 class SuperClass1:
-    f1: Any = None
+    f1: Optional[Any] = None
     f2: pyfory.int8 = 0
 
 
 @dataclass
 class ChildClass1(SuperClass1):
-    f3: Dict[str, pyfory.float64] = None
+    f3: Optional[Dict[str, pyfory.float64]] = None
 
 
 def test_strict():
@@ -121,8 +121,8 @@ class DataClassObject:
     f_bool: bool
     f_list: List[int]
     f_dict: Dict[str, float]
-    f_any: Any
-    f_complex: ComplexObject = None
+    f_any: Optional[Any]
+    f_complex: Optional[ComplexObject] = None
 
     @classmethod
     def create(cls):
@@ -159,7 +159,18 @@ def test_sort_fields():
 
     fory = Fory(xlang=True, ref=True)
     serializer = DataClassSerializer(fory, TestClass, xlang=True)
-    assert serializer._field_names == ["f13", "f5", "f11", "f12", "f1", "f7", "f4", "f15", "f6", "f10", "f2", "f14", "f3", "f9", "f8"]
+    # Sorting order:
+    # 1. Non-compressed primitives (compress=0) by -size, then name:
+    #    float64(8), float32(4), bool(1), int8(1) => f13, f5, f11, f7
+    #    (f11 < f7 alphabetically since '1' < '7')
+    # 2. Compressed primitives (compress=1) by -size, then name:
+    #    int64(8), int32(4) => f12, f1
+    # 3. Internal types by type_id, then name: str, datetime, bytes => f4, f15, f6
+    # 4. Collection types by type_id, then name: list => f10, f2
+    # 5. Set types by type_id, then name: set => f14
+    # 6. Map types by type_id, then name: dict => f3, f9
+    # 7. Other types (polymorphic/any) by name: any => f8
+    assert serializer._field_names == ["f13", "f5", "f11", "f7", "f12", "f1", "f4", "f15", "f6", "f10", "f2", "f14", "f3", "f9", "f8"]
 
 
 def test_data_class_serializer_xlang():
@@ -635,8 +646,8 @@ class CompatibleAllTypes:
     f_str: str = ""
     f_float: float = 0.0
     f_bool: bool = False
-    f_list: List[int] = None
-    f_dict: Dict[str, int] = None
+    f_list: Optional[List[int]] = None
+    f_dict: Optional[Dict[str, int]] = None
 
 
 @dataclass
@@ -645,8 +656,8 @@ class CompatibleAllTypesV2:
     f_str: str = ""
     f_float: float = 0.0
     f_bool: bool = False
-    f_list: List[int] = None
-    f_dict: Dict[str, int] = None
+    f_list: Optional[List[int]] = None
+    f_dict: Optional[Dict[str, int]] = None
     f_new: str = "default"
 
 
@@ -720,3 +731,72 @@ def test_optional_compatible_mode_evolution():
     assert v1_result.f1 == 300
     assert v1_result.f2 == "test3"
     assert v1_result.f3 is None
+
+
+# ============================================================================
+# Tests for dynamic field configuration
+# ============================================================================
+
+
+@dataclass
+class Animal:
+    name: str = pyfory.field(id=0, default="")
+
+
+@dataclass
+class Dog(Animal):
+    breed: str = pyfory.field(id=1, default="")
+
+
+@dataclass
+class Zoo:
+    # dynamic=True: can hold Dog instance in Animal field
+    animal: Animal = pyfory.field(id=0, dynamic=True)
+    # dynamic=False: use declared type's serializer, subclass info lost
+    animal2: Animal = pyfory.field(id=1, dynamic=False)
+
+
+def test_dynamic_with_inheritance():
+    """Test dynamic=True allows polymorphic serialization with inheritance."""
+    fory = Fory(xlang=False, ref=True, strict=False)
+    fory.register_type(Animal)
+    fory.register_type(Dog)
+    fory.register_type(Zoo)
+
+    dog1 = Dog(name="Buddy", breed="Labrador")
+    dog2 = Dog(name="Rex", breed="German Shepherd")
+    zoo = Zoo(animal=dog1, animal2=dog2)
+
+    result = ser_de(fory, zoo)
+    # dynamic=True: Dog type preserved
+    assert isinstance(result.animal, Dog)
+    assert result.animal.name == "Buddy"
+    assert result.animal.breed == "Labrador"
+    # dynamic=False: subclass info lost, only Animal fields deserialized
+    assert isinstance(result.animal2, Animal)
+    assert not isinstance(result.animal2, Dog)
+    assert result.animal2.name == "Rex"
+    assert not hasattr(result.animal2, "breed") or getattr(result.animal2, "breed", None) != "German Shepherd"
+
+
+def test_dynamic_with_inheritance_xlang():
+    """Test dynamic=True allows polymorphic serialization in xlang mode."""
+    fory = Fory(xlang=True, ref=True)
+    fory.register_type(Animal, typename="example.Animal")
+    fory.register_type(Dog, typename="example.Dog")
+    fory.register_type(Zoo, typename="example.Zoo")
+
+    dog1 = Dog(name="Max", breed="Husky")
+    dog2 = Dog(name="Luna", breed="Poodle")
+    zoo = Zoo(animal=dog1, animal2=dog2)
+
+    result = ser_de(fory, zoo)
+    # dynamic=True: Dog type preserved
+    assert isinstance(result.animal, Dog)
+    assert result.animal.name == "Max"
+    assert result.animal.breed == "Husky"
+    # dynamic=False: subclass info lost, only Animal fields deserialized
+    assert isinstance(result.animal2, Animal)
+    assert not isinstance(result.animal2, Dog)
+    assert result.animal2.name == "Luna"
+    assert not hasattr(result.animal2, "breed") or getattr(result.animal2, "breed", None) != "Poodle"

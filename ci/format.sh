@@ -139,7 +139,8 @@ format_java() {
       cd "$ROOT/java"
       mvn -T10 --no-transfer-progress spotless:apply
       mvn -T10 --no-transfer-progress checkstyle:check
-      cd "$ROOT/java/benchmark"
+      mvn -T10 --no-transfer-progress install -DskipTests
+      cd "$ROOT/benchmarks/java_benchmark"
       mvn -T10 --no-transfer-progress spotless:apply
       cd "$ROOT/integration_tests"
       dirs=("graalvm_tests" "jdk_compatibility_tests" "latest_jdk_tests")
@@ -150,6 +151,40 @@ format_java() {
       done
     else
       echo "Maven not installed, skip java check"
+    fi
+}
+
+format_cpp() {
+    echo "$(date)" "clang-format C++ files...."
+    if command -v clang-format >/dev/null; then
+      git ls-files -- '*.cc' '*.h' "${GIT_LS_EXCLUDES[@]}" | xargs -P 5 clang-format -i
+      echo "$(date)" "C++ formatting done!"
+    else
+      echo "ERROR: clang-format is not installed!"
+      exit 1
+    fi
+}
+
+format_python() {
+    echo "$(date)" "Ruff format Python files...."
+    if command -v ruff >/dev/null; then
+      git ls-files -- '*.py' "${GIT_LS_EXCLUDES[@]}" | xargs -P 10 ruff format
+      git ls-files -- '*.py' "${GIT_LS_EXCLUDES[@]}" | xargs ruff check --fix
+      echo "$(date)" "Python formatting done!"
+    else
+      echo "ERROR: ruff is not installed! Install with: pip install ruff"
+      exit 1
+    fi
+}
+
+format_go() {
+    echo "$(date)" "gofmt format Go files...."
+    if command -v gofmt >/dev/null; then
+      git ls-files -- '*.go' "${GIT_LS_EXCLUDES[@]}" | xargs -P 5 gofmt -w
+      echo "$(date)" "Go formatting done!"
+    else
+      echo "ERROR: gofmt is not installed! Install Go from https://go.dev/"
+      exit 1
     fi
 }
 
@@ -250,6 +285,12 @@ elif [ "${1-}" == '--all' ]; then
     if [ -n "${FORMAT_SH_PRINT_DIFF-}" ]; then git --no-pager diff; fi
 elif [ "${1-}" == '--java' ]; then
     format_java
+elif [ "${1-}" == '--cpp' ]; then
+    format_cpp
+elif [ "${1-}" == '--python' ]; then
+    format_python
+elif [ "${1-}" == '--go' ]; then
+    format_go
 else
     # Add the origin remote if it doesn't exist
     if ! git remote -v | grep -q origin; then

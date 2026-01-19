@@ -34,13 +34,14 @@ import java.util.Objects;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import javax.annotation.CheckForNull;
+import org.apache.fory.meta.TypeExtMeta;
 import org.apache.fory.type.TypeUtils;
 
 // Mostly derived from Guava 32.1.2 com.google.common.reflect.TypeToken
 // https://github.com/google/guava/blob/9f6a3840/guava/src/com/google/common/reflect/TypeToken.java
 public class TypeRef<T> {
   private final Type type;
-  private final Object extInfo;
+  private final TypeExtMeta typeExtMeta;
   private transient Class<? super T> rawType;
   private transient Map<TypeVariableKey, Type> typeMappings;
 
@@ -58,27 +59,27 @@ public class TypeRef<T> {
    */
   protected TypeRef() {
     this.type = capture();
-    this.extInfo = null;
+    this.typeExtMeta = null;
   }
 
-  protected TypeRef(Object extInfo) {
+  protected TypeRef(TypeExtMeta typeExtMeta) {
     this.type = capture();
-    this.extInfo = extInfo;
+    this.typeExtMeta = typeExtMeta;
   }
 
   private TypeRef(Class<T> declaringClass) {
     this.type = declaringClass;
-    this.extInfo = null;
+    this.typeExtMeta = null;
   }
 
-  private TypeRef(Class<T> declaringClass, Object extInfo) {
+  private TypeRef(Class<T> declaringClass, TypeExtMeta typeExtMeta) {
     this.type = declaringClass;
-    this.extInfo = extInfo;
+    this.typeExtMeta = typeExtMeta;
   }
 
   private TypeRef(Type type) {
     this.type = type;
-    this.extInfo = null;
+    this.typeExtMeta = null;
   }
 
   /** Returns an instance of type token that wraps {@code type}. */
@@ -86,7 +87,7 @@ public class TypeRef<T> {
     return new TypeRef<>(clazz);
   }
 
-  public static <T> TypeRef<T> of(Class<T> clazz, Object extInfo) {
+  public static <T> TypeRef<T> of(Class<T> clazz, TypeExtMeta extInfo) {
     return new TypeRef<>(clazz, extInfo);
   }
 
@@ -158,8 +159,8 @@ public class TypeRef<T> {
             });
   }
 
-  public Object getExtInfo() {
-    return extInfo;
+  public TypeExtMeta getTypeExtMeta() {
+    return typeExtMeta;
   }
 
   /** Returns true if this type is one of the primitive types (including {@code void}). */
@@ -169,6 +170,165 @@ public class TypeRef<T> {
 
   public boolean isInterface() {
     return getRawType().isInterface();
+  }
+
+  /**
+   * Returns true if this type is a wildcard type (e.g., {@code ?}, {@code ? extends Foo}, or {@code
+   * ? super Foo}), including captured wildcards.
+   */
+  public boolean isWildcard() {
+    if (type instanceof WildcardType) {
+      return true;
+    }
+    // Check for captured wildcards (TypeVariable created by WildcardCapturer)
+    if (type instanceof TypeVariable) {
+      return ((TypeVariable<?>) type).getGenericDeclaration() == WildcardCapturer.class;
+    }
+    return false;
+  }
+
+  /**
+   * Returns true if this type contains any wildcard bounds. This checks if the type itself is a
+   * wildcard, or if any of its type arguments contain wildcards (for parameterized types).
+   *
+   * <p>Examples:
+   *
+   * <ul>
+   *   <li>{@code ?} → true
+   *   <li>{@code ? extends Foo} → true
+   *   <li>{@code List<?>} → true
+   *   <li>{@code Map<String, ? extends Number>} → true
+   *   <li>{@code List<String>} → false
+   *   <li>{@code String} → false
+   * </ul>
+   */
+  public boolean hasWildcard() {
+    return containsWildcard(type);
+  }
+
+  private static boolean containsWildcard(Type t) {
+    if (t instanceof WildcardType) {
+      return true;
+    }
+    // Check for captured wildcards (TypeVariable created by WildcardCapturer)
+    if (t instanceof TypeVariable) {
+      TypeVariable<?> tv = (TypeVariable<?>) t;
+      if (tv.getGenericDeclaration() == WildcardCapturer.class) {
+        return true;
+      }
+    }
+    if (t instanceof ParameterizedType) {
+      for (Type arg : ((ParameterizedType) t).getActualTypeArguments()) {
+        if (containsWildcard(arg)) {
+          return true;
+        }
+      }
+    }
+    if (t instanceof GenericArrayType) {
+      return containsWildcard(((GenericArrayType) t).getGenericComponentType());
+    }
+    return false;
+  }
+
+  /**
+   * Resolves a wildcard type to its upper bound. This "lowers" the wildcard to a concrete type.
+   *
+   * <ul>
+   *   <li>For {@code ? extends Foo}, returns {@code TypeRef<Foo>}
+   *   <li>For {@code ? super Foo}, returns {@code TypeRef<Object>} (the implicit upper bound)
+   *   <li>For {@code ?}, returns {@code TypeRef<Object>}
+   *   <li>For captured wildcards, returns the upper bound
+   *   <li>For non-wildcard types, returns {@code this} unchanged
+   * </ul>
+   *
+   * <p>This method only resolves the top-level type. To resolve wildcards in type arguments as
+   * well, use {@link #resolveAllWildcards()}.
+   */
+  public TypeRef<?> resolveWildcard() {
+    if (type instanceof WildcardType) {
+      Type[] upperBounds = ((WildcardType) type).getUpperBounds();
+      if (upperBounds.length > 0) {
+        return of(upperBounds[0]);
+      }
+      return of(Object.class);
+    }
+    // Handle captured wildcards (TypeVariable created by WildcardCapturer)
+    if (type instanceof TypeVariable) {
+      TypeVariable<?> tv = (TypeVariable<?>) type;
+      if (tv.getGenericDeclaration() == WildcardCapturer.class) {
+        Type[] bounds = tv.getBounds();
+        if (bounds.length > 0) {
+          return of(bounds[0]);
+        }
+        return of(Object.class);
+      }
+    }
+    return this;
+  }
+
+  /**
+   * Resolves all wildcard types to their upper bounds, including wildcards in type arguments.
+   *
+   * <p>Examples:
+   *
+   * <ul>
+   *   <li>{@code ? extends String} → {@code String}
+   *   <li>{@code List<? extends String>} → {@code List<String>}
+   *   <li>{@code Map<? extends K, ? super V>} → {@code Map<K, Object>}
+   * </ul>
+   */
+  public TypeRef<?> resolveAllWildcards() {
+    Type resolved = resolveWildcardsInType(type);
+    if (resolved == type) {
+      return this;
+    }
+    return of(resolved);
+  }
+
+  private static Type resolveWildcardsInType(Type t) {
+    if (t instanceof WildcardType) {
+      Type[] upperBounds = ((WildcardType) t).getUpperBounds();
+      if (upperBounds.length > 0) {
+        return resolveWildcardsInType(upperBounds[0]);
+      }
+      return Object.class;
+    }
+    // Handle captured wildcards (TypeVariable created by WildcardCapturer)
+    if (t instanceof TypeVariable) {
+      TypeVariable<?> tv = (TypeVariable<?>) t;
+      if (tv.getGenericDeclaration() == WildcardCapturer.class) {
+        Type[] bounds = tv.getBounds();
+        if (bounds.length > 0) {
+          return resolveWildcardsInType(bounds[0]);
+        }
+        return Object.class;
+      }
+    }
+    if (t instanceof ParameterizedType) {
+      ParameterizedType pt = (ParameterizedType) t;
+      Type[] args = pt.getActualTypeArguments();
+      Type[] resolvedArgs = new Type[args.length];
+      boolean changed = false;
+      for (int i = 0; i < args.length; i++) {
+        resolvedArgs[i] = resolveWildcardsInType(args[i]);
+        if (resolvedArgs[i] != args[i]) {
+          changed = true;
+        }
+      }
+      if (!changed) {
+        return t;
+      }
+      return new ParameterizedTypeImpl(pt.getOwnerType(), pt.getRawType(), resolvedArgs);
+    }
+    if (t instanceof GenericArrayType) {
+      Type componentType = ((GenericArrayType) t).getGenericComponentType();
+      Type resolvedComponent = resolveWildcardsInType(componentType);
+      if (resolvedComponent == componentType) {
+        return t;
+      }
+      return newArrayType(resolvedComponent);
+    }
+    return t;
   }
 
   /**

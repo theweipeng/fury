@@ -28,8 +28,8 @@ from pyfory.resolver import (
     NULL_FLAG,
     NOT_NULL_VALUE_FLAG,
 )
-from pyfory.util import is_little_endian, set_bit, get_bit, clear_bit
-from pyfory.type import TypeId
+from pyfory.utils import set_bit, get_bit, clear_bit
+from pyfory.types import TypeId
 from pyfory.policy import DeserializationPolicy, DEFAULT_POLICY
 
 try:
@@ -41,14 +41,13 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-MAGIC_NUMBER = 0x62D4
 DEFAULT_DYNAMIC_WRITE_META_STR_ID = -1
 DYNAMIC_TYPE_ID = -1
 USE_TYPE_NAME = 0
 USE_TYPE_ID = 1
 # preserve 0 as flag for type id not set in TypeInfo`
 NO_TYPE_ID = 0
-INT64_TYPE_ID = TypeId.INT64
+INT64_TYPE_ID = TypeId.VARINT64
 FLOAT64_TYPE_ID = TypeId.FLOAT64
 BOOL_TYPE_ID = TypeId.BOOL
 STRING_TYPE_ID = TypeId.STRING
@@ -176,6 +175,7 @@ class Fory:
         max_depth: int = 50,
         policy: DeserializationPolicy = None,
         field_nullable: bool = False,
+        meta_compressor=None,
         **kwargs,
     ):
         """
@@ -241,10 +241,10 @@ class Fory:
         self.compatible = compatible
         self.field_nullable = field_nullable if self.is_py else False
         from pyfory.serialization import MetaStringResolver, SerializationContext
-        from pyfory._registry import TypeResolver
+        from pyfory.registry import TypeResolver
 
         self.metastring_resolver = MetaStringResolver()
-        self.type_resolver = TypeResolver(self, meta_share=compatible)
+        self.type_resolver = TypeResolver(self, meta_share=compatible, meta_compressor=meta_compressor)
         self.serialization_context = SerializationContext(fory=self, scoped_meta_share_enabled=compatible)
         self.type_resolver.initialize()
 
@@ -452,8 +452,6 @@ class Fory:
         if buffer is None:
             self.buffer.writer_index = 0
             buffer = self.buffer
-        if self.language == Language.XLANG:
-            buffer.write_int16(MAGIC_NUMBER)
         mask_index = buffer.writer_index
         # 1byte used for bit mask
         buffer.grow(1)
@@ -462,24 +460,19 @@ class Fory:
             set_bit(buffer, mask_index, 0)
         else:
             clear_bit(buffer, mask_index, 0)
-        # set endian
-        if is_little_endian:
-            set_bit(buffer, mask_index, 1)
-        else:
-            clear_bit(buffer, mask_index, 1)
 
         if self.language == Language.XLANG:
             # set reader as x_lang.
-            set_bit(buffer, mask_index, 2)
+            set_bit(buffer, mask_index, 1)
             # set writer language.
             buffer.write_int8(Language.PYTHON.value)
         else:
             # set reader as native.
-            clear_bit(buffer, mask_index, 2)
+            clear_bit(buffer, mask_index, 1)
         if self._buffer_callback is not None:
-            set_bit(buffer, mask_index, 3)
+            set_bit(buffer, mask_index, 2)
         else:
-            clear_bit(buffer, mask_index, 3)
+            clear_bit(buffer, mask_index, 2)
         # Reserve space for type definitions offset, similar to Java implementation
         type_defs_offset_pos = None
         if self.serialization_context.scoped_meta_share_enabled:
@@ -609,24 +602,16 @@ class Fory:
             buffer = Buffer(buffer)
         if unsupported_objects is not None:
             self._unsupported_objects = iter(unsupported_objects)
-        if self.language == Language.XLANG:
-            magic_numer = buffer.read_int16()
-            assert magic_numer == MAGIC_NUMBER, (
-                f"The fory xlang serialization must start with magic number {hex(MAGIC_NUMBER)}. "
-                "Please check whether the serialization is based on the xlang protocol and the data didn't corrupt."
-            )
         reader_index = buffer.reader_index
         buffer.reader_index = reader_index + 1
         if get_bit(buffer, reader_index, 0):
             return None
-        is_little_endian_ = get_bit(buffer, reader_index, 1)
-        assert is_little_endian_, "Big endian is not supported for now, please ensure peer machine is little endian."
-        is_target_x_lang = get_bit(buffer, reader_index, 2)
+        is_target_x_lang = get_bit(buffer, reader_index, 1)
         if is_target_x_lang:
             self._peer_language = Language(buffer.read_int8())
         else:
             self._peer_language = Language.PYTHON
-        is_out_of_band_serialization_enabled = get_bit(buffer, reader_index, 3)
+        is_out_of_band_serialization_enabled = get_bit(buffer, reader_index, 2)
         if is_out_of_band_serialization_enabled:
             assert buffers is not None, "buffers shouldn't be null when the serialized stream is produced with buffer_callback not null."
             self._buffers = iter(buffers)
@@ -634,6 +619,7 @@ class Fory:
             assert buffers is None, "buffers should be null when the serialized stream is produced with buffer_callback null."
 
         # Read type definitions at the start, similar to Java implementation
+        end_reader_index = None
         if self.serialization_context.scoped_meta_share_enabled:
             relative_type_defs_offset = buffer.read_int32()
             if relative_type_defs_offset != -1:
@@ -643,6 +629,8 @@ class Fory:
                 buffer.reader_index = current_reader_index + relative_type_defs_offset
                 # Read type definitions
                 self.type_resolver.read_type_defs(buffer)
+                # Save the end position (after type defs) - this is the true end of serialized data
+                end_reader_index = buffer.reader_index
                 # Jump back to continue with object deserialization
                 buffer.reader_index = current_reader_index
 
@@ -650,6 +638,12 @@ class Fory:
             obj = self.xread_ref(buffer)
         else:
             obj = self.read_ref(buffer)
+
+        # After reading the object, position buffer at the end of serialized data
+        # (which is after the type definitions, not after the object data)
+        if end_reader_index is not None:
+            buffer.reader_index = end_reader_index
+
         return obj
 
     def read_ref(self, buffer):
@@ -680,7 +674,8 @@ class Fory:
             ref_id = ref_resolver.try_preserve_ref_id(buffer)
             # indicates that the object is first read.
             if ref_id >= NOT_NULL_VALUE_FLAG:
-                o = self.xread_no_ref(buffer, serializer=serializer)
+                # Don't push -1 here - try_preserve_ref_id already pushed ref_id
+                o = self._xread_no_ref_internal(buffer, serializer)
                 ref_resolver.set_read_object(ref_id, o)
                 return o
             else:
@@ -691,6 +686,16 @@ class Fory:
         return self.xread_no_ref(buffer, serializer=serializer)
 
     def xread_no_ref(self, buffer, serializer=None):
+        if serializer is None:
+            serializer = self.type_resolver.read_typeinfo(buffer).serializer
+        # Push -1 to read_ref_ids so reference() can pop it and skip reference tracking
+        # This handles the case where xread_no_ref is called directly without xread_ref
+        if self.ref_tracking:
+            self.ref_resolver.read_ref_ids.append(-1)
+        return self._xread_no_ref_internal(buffer, serializer)
+
+    def _xread_no_ref_internal(self, buffer, serializer):
+        """Internal method to read without pushing to read_ref_ids."""
         if serializer is None:
             serializer = self.type_resolver.read_typeinfo(buffer).serializer
         self.inc_depth()

@@ -65,10 +65,20 @@ get_bazel_version() {
 }
 
 install_bazel() {
+  REQUIRED_VERSION=$(get_bazel_version)
+
   if command -v bazel >/dev/null; then
     echo "existing bazel location $(which bazel)"
-    echo "existing bazel version $(bazel version)"
-    return
+    INSTALLED_VERSION=$(bazel --version 2>/dev/null | sed 's/bazel //')
+    echo "existing bazel version: $INSTALLED_VERSION, required: $REQUIRED_VERSION"
+    if [ "$INSTALLED_VERSION" = "$REQUIRED_VERSION" ]; then
+      echo "Bazel version matches, using cached binary"
+      return
+    else
+      echo "Bazel version mismatch, re-downloading..."
+      # Remove old bazel binary
+      rm -f "$(which bazel)" 2>/dev/null || true
+    fi
   fi
 
   ARCH="$(uname -m)"
@@ -88,12 +98,11 @@ install_bazel() {
     *)          echo "Unsupported OS: $OPERATING_SYSTEM"; exit 1 ;;
   esac
 
-  BAZEL_VERSION=$(get_bazel_version)
   BAZEL_DIR="$HOME/.local/bin"
   mkdir -p "$BAZEL_DIR"
 
-  # Construct platform-specific URL
-  BINARY_URL="https://github.com/bazelbuild/bazel/releases/download/${BAZEL_VERSION}/bazel-${BAZEL_VERSION}-${OS}-${ARCH}"
+  # Construct platform-specific URL (use REQUIRED_VERSION defined at function start)
+  BINARY_URL="https://github.com/bazelbuild/bazel/releases/download/${REQUIRED_VERSION}/bazel-${REQUIRED_VERSION}-${OS}-${ARCH}"
 
   echo "Downloading bazel from: $BINARY_URL"
   # Retry download with exponential backoff to avoid transient network errors in CI
@@ -171,7 +180,7 @@ integration_tests() {
   cd "$ROOT"/java
   mvn -T10 -B --no-transfer-progress clean install -DskipTests
   echo "benchmark tests"
-  cd "$ROOT"/java/benchmark
+  cd "$ROOT"/benchmarks/java_benchmark
   mvn -T10 -B --no-transfer-progress clean test install -Pjmh
   echo "Start latest jdk tests"
   cd "$ROOT"/integration_tests/latest_jdk_tests
@@ -234,7 +243,7 @@ windows_java21_test() {
   echo "Executing fory java tests"
   cd "$ROOT/java"
   set +e
-  mvn -T10 --batch-mode --no-transfer-progress test -Dtest=!org.apache.fory.CrossLanguageTest install -pl '!fory-format,!fory-testsuite'
+  mvn -T10 --batch-mode --no-transfer-progress test install -pl '!fory-format,!fory-testsuite'
   testcode=$?
   if [[ $testcode -ne 0 ]]; then
     exit $testcode
@@ -272,7 +281,7 @@ case $1 in
     java21)
       jdk17_plus_tests
     ;;
-    java24)
+    java25)
       jdk17_plus_tests
     ;;
     kotlin)
@@ -376,9 +385,9 @@ case $1 in
       go install ./cmd/fory
       cd "$ROOT/go/fory/tests"
       go generate
-      go test -v
+      go test -v ./...
       cd "$ROOT/go/fory"
-      go test -v
+      go test -v ./...
       echo "Executing fory go tests succeeds"
     ;;
     format)
@@ -390,6 +399,9 @@ case $1 in
       mvn -T10 -B --no-transfer-progress spotless:check
       mvn -T10 -B --no-transfer-progress checkstyle:check
       echo "Executing format check succeeds"
+    ;;
+    install_pyfory)
+      install_pyfory
     ;;
     *)
       echo "Execute command $*"

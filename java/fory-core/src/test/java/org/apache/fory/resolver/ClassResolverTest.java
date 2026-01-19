@@ -24,7 +24,6 @@ import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertSame;
 import static org.testng.Assert.assertTrue;
 
-import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.primitives.Primitives;
 import java.nio.charset.StandardCharsets;
@@ -56,7 +55,6 @@ import org.apache.fory.reflect.TypeRef;
 import org.apache.fory.resolver.longlongpkg.C1;
 import org.apache.fory.resolver.longlongpkg.C2;
 import org.apache.fory.resolver.longlongpkg.C3;
-import org.apache.fory.serializer.CompatibleSerializer;
 import org.apache.fory.serializer.ObjectSerializer;
 import org.apache.fory.serializer.Serializer;
 import org.apache.fory.serializer.Serializers;
@@ -75,19 +73,21 @@ public class ClassResolverTest extends ForyTestBase {
   public void testPrimitivesClassId() {
     Fory fory = Fory.builder().withLanguage(Language.JAVA).requireClassRegistration(false).build();
     ClassResolver classResolver = fory.getClassResolver();
-    for (List<Class<?>> classes :
-        ImmutableList.of(
-            TypeUtils.getSortedPrimitiveClasses(), TypeUtils.getSortedBoxedClasses())) {
-      for (int i = 0; i < classes.size() - 1; i++) {
-        assertEquals(
-            classResolver.getRegisteredClassId(classes.get(i)) + 1,
-            classResolver.getRegisteredClassId(classes.get(i + 1)).shortValue());
-        assertTrue(classResolver.getRegisteredClassId(classes.get(i)) > 0);
-      }
+    // Test that primitive types have consecutive IDs
+    List<Class<?>> primitiveClasses = TypeUtils.getSortedPrimitiveClasses();
+    for (int i = 0; i < primitiveClasses.size() - 1; i++) {
       assertEquals(
-          classResolver.getRegisteredClassId(classes.get(classes.size() - 2)) + 1,
-          classResolver.getRegisteredClassId(classes.get(classes.size() - 1)).shortValue());
-      assertTrue(classResolver.getRegisteredClassId(classes.get(classes.size() - 1)) > 0);
+          classResolver.getRegisteredClassId(primitiveClasses.get(i)) + 1,
+          classResolver.getRegisteredClassId(primitiveClasses.get(i + 1)).shortValue());
+      assertTrue(classResolver.getRegisteredClassId(primitiveClasses.get(i)) > 0);
+    }
+    assertTrue(
+        classResolver.getRegisteredClassId(primitiveClasses.get(primitiveClasses.size() - 1)) > 0);
+    // Test that boxed types all have valid positive IDs
+    // Note: boxed types are no longer consecutive due to unsigned type IDs being added
+    List<Class<?>> boxedClasses = TypeUtils.getSortedBoxedClasses();
+    for (Class<?> boxedClass : boxedClasses) {
+      assertTrue(classResolver.getRegisteredClassId(boxedClass) > 0);
     }
   }
 
@@ -99,7 +99,7 @@ public class ClassResolverTest extends ForyTestBase {
     Assert.assertThrows(
         IllegalArgumentException.class, () -> classResolver.register(C1.class, "ns", "C1"));
     Assert.assertThrows(
-        IllegalArgumentException.class, () -> classResolver.register(C1.class, 200));
+        IllegalArgumentException.class, () -> classResolver.registerInternal(C1.class, 200));
     classResolver.register(C2.class, "", "C2");
     classResolver.register(Foo.class, "ns", "Foo");
 
@@ -117,6 +117,35 @@ public class ClassResolverTest extends ForyTestBase {
   @Test
   public void testRegisterClass() {
     Fory fory = Fory.builder().withLanguage(Language.JAVA).requireClassRegistration(false).build();
+  }
+
+  @Test
+  public void testRegisterClassWithUserIds() {
+    // Test that user IDs 0 and 1 work correctly (mapped to internal IDs 256 and 257)
+    Fory fory = Fory.builder().withLanguage(Language.JAVA).requireClassRegistration(true).build();
+    ClassResolver classResolver = fory.getClassResolver();
+
+    // Register with user ID 0
+    classResolver.register(Foo.class, 0);
+    // Register with user ID 1
+    classResolver.register(Bar.class, 1);
+
+    // Verify internal IDs are offset by USER_ID_BASE (256)
+    assertEquals(
+        classResolver.getRegisteredClassId(Foo.class).shortValue(), ClassResolver.USER_ID_BASE);
+    assertEquals(
+        classResolver.getRegisteredClassId(Bar.class).shortValue(),
+        (short) (ClassResolver.USER_ID_BASE + 1));
+
+    // Verify serialization/deserialization works
+    Foo foo = new Foo();
+    foo.f1 = 42;
+    serDeCheck(fory, foo);
+
+    Bar bar = new Bar();
+    bar.f1 = 10;
+    bar.f2 = 100L;
+    serDeCheck(fory, bar);
   }
 
   @Test
@@ -165,15 +194,9 @@ public class ClassResolverTest extends ForyTestBase {
     assertEquals(
         classResolver.getSerializerClass(TreeMap.class), MapSerializers.SortedMapSerializer.class);
 
-    if (ClassResolver.requireJavaSerialization(ArrayBlockingQueue.class)) {
-      assertEquals(
-          classResolver.getSerializerClass(ArrayBlockingQueue.class),
-          CollectionSerializers.JDKCompatibleCollectionSerializer.class);
-    } else {
-      assertEquals(
-          classResolver.getSerializerClass(ArrayBlockingQueue.class),
-          CollectionSerializers.DefaultJavaCollectionSerializer.class);
-    }
+    assertEquals(
+        classResolver.getSerializerClass(ArrayBlockingQueue.class),
+        CollectionSerializers.ArrayBlockingQueueSerializer.class);
     assertEquals(
         classResolver.getSerializerClass(ConcurrentHashMap.class),
         MapSerializers.ConcurrentHashMapSerializer.class);
@@ -323,19 +346,21 @@ public class ClassResolverTest extends ForyTestBase {
       classResolver.setSerializer(Foo.class, new ObjectSerializer<>(fory, Foo.class));
       ClassInfo classInfo = classResolver.getClassInfo(Foo.class);
       assertSame(classInfo.getSerializer().getClass(), ObjectSerializer.class);
-      classResolver.setSerializer(Foo.class, new CompatibleSerializer<>(fory, Foo.class));
+      // Create another ObjectSerializer to test setSerializer updates the existing classInfo
+      classResolver.setSerializer(Foo.class, new ObjectSerializer<>(fory, Foo.class, true));
       Assert.assertSame(classResolver.getClassInfo(Foo.class), classInfo);
-      assertSame(classInfo.getSerializer().getClass(), CompatibleSerializer.class);
+      assertSame(classInfo.getSerializer().getClass(), ObjectSerializer.class);
     }
     {
-      classResolver.register(Bar.class);
+      classResolver.registerInternal(Bar.class);
       ClassInfo classInfo = classResolver.getClassInfo(Bar.class);
       classResolver.setSerializer(Bar.class, new ObjectSerializer<>(fory, Bar.class));
       Assert.assertSame(classResolver.getClassInfo(Bar.class), classInfo);
       assertSame(classInfo.getSerializer().getClass(), ObjectSerializer.class);
-      classResolver.setSerializer(Bar.class, new CompatibleSerializer<>(fory, Bar.class));
+      // Create another ObjectSerializer to test setSerializer updates the existing classInfo
+      classResolver.setSerializer(Bar.class, new ObjectSerializer<>(fory, Bar.class, true));
       Assert.assertSame(classResolver.getClassInfo(Bar.class), classInfo);
-      assertSame(classInfo.getSerializer().getClass(), CompatibleSerializer.class);
+      assertSame(classInfo.getSerializer().getClass(), ObjectSerializer.class);
     }
   }
 
@@ -539,5 +564,107 @@ public class ClassResolverTest extends ForyTestBase {
     Assert.assertEquals(
         fory.getClassResolver().getSerializer(abs2Test.getClass()).getClass(),
         AbstractCustomSerializer.class);
+  }
+
+  // Test enum with abstract methods (which makes the enum class abstract)
+  enum AbstractEnum {
+    VALUE1 {
+      @Override
+      public int getValue() {
+        return 1;
+      }
+    },
+    VALUE2 {
+      @Override
+      public int getValue() {
+        return 2;
+      }
+    };
+
+    public abstract int getValue();
+  }
+
+  @Test
+  public void testAbstractEnumIsSerializable() {
+    Fory fory = Fory.builder().withLanguage(Language.JAVA).requireClassRegistration(false).build();
+    ClassResolver classResolver = fory.getClassResolver();
+    // Abstract enums should be serializable
+    Assert.assertTrue(classResolver.isSerializable(AbstractEnum.class));
+    // The concrete enum value classes should also be serializable
+    Assert.assertTrue(classResolver.isSerializable(AbstractEnum.VALUE1.getClass()));
+    Assert.assertTrue(classResolver.isSerializable(AbstractEnum.VALUE2.getClass()));
+  }
+
+  @Test
+  public void testAbstractEnumSerialization() {
+    Fory fory = Fory.builder().withLanguage(Language.JAVA).requireClassRegistration(false).build();
+    // Serialize and deserialize abstract enum values
+    Assert.assertEquals(AbstractEnum.VALUE1, serDe(fory, AbstractEnum.VALUE1));
+    Assert.assertEquals(AbstractEnum.VALUE2, serDe(fory, AbstractEnum.VALUE2));
+    Assert.assertEquals(1, ((AbstractEnum) serDe(fory, AbstractEnum.VALUE1)).getValue());
+    Assert.assertEquals(2, ((AbstractEnum) serDe(fory, AbstractEnum.VALUE2)).getValue());
+  }
+
+  @Test
+  public void testAbstractObjectArraySerialization() {
+    Fory fory = Fory.builder().withLanguage(Language.JAVA).requireClassRegistration(false).build();
+    // Create an array of abstract type with concrete instances
+    AbsTest[] array = new AbsTest[2];
+    SubAbsTest item1 = new SubAbsTest();
+    item1.setF1(10);
+    item1.f2 = 100L;
+    Sub2AbsTest item2 = new Sub2AbsTest();
+    item2.setF1(20);
+    item2.f2 = 200L;
+    item2.f3 = "test";
+    array[0] = item1;
+    array[1] = item2;
+
+    AbsTest[] result = serDe(fory, array);
+    Assert.assertEquals(result.length, 2);
+    Assert.assertEquals(result[0].getF1(), 10);
+    Assert.assertEquals(((SubAbsTest) result[0]).f2, 100L);
+    Assert.assertEquals(result[1].getF1(), 20);
+    Assert.assertEquals(((Sub2AbsTest) result[1]).f2, 200L);
+    Assert.assertEquals(((Sub2AbsTest) result[1]).f3, "test");
+  }
+
+  @Test
+  public void testAbstractObjectArrayWithRegistration() {
+    Fory fory = Fory.builder().withLanguage(Language.JAVA).requireClassRegistration(true).build();
+    // Register the concrete types but not the abstract type
+    fory.register(SubAbsTest.class);
+    fory.register(Sub2AbsTest.class);
+    fory.register(AbsTest[].class);
+
+    AbsTest[] array = new AbsTest[2];
+    SubAbsTest item1 = new SubAbsTest();
+    item1.setF1(10);
+    item1.f2 = 100L;
+    Sub2AbsTest item2 = new Sub2AbsTest();
+    item2.setF1(20);
+    item2.f2 = 200L;
+    item2.f3 = "test";
+    array[0] = item1;
+    array[1] = item2;
+
+    AbsTest[] result = serDe(fory, array);
+    Assert.assertEquals(result.length, 2);
+    Assert.assertEquals(result[0].getF1(), 10);
+    Assert.assertEquals(result[1].getF1(), 20);
+  }
+
+  @Test
+  public void testAbstractEnumArraySerialization() {
+    Fory fory = Fory.builder().withLanguage(Language.JAVA).requireClassRegistration(false).build();
+    // Create an array of abstract enum type
+    AbstractEnum[] array = new AbstractEnum[] {AbstractEnum.VALUE1, AbstractEnum.VALUE2};
+
+    AbstractEnum[] result = serDe(fory, array);
+    Assert.assertEquals(result.length, 2);
+    Assert.assertEquals(result[0], AbstractEnum.VALUE1);
+    Assert.assertEquals(result[1], AbstractEnum.VALUE2);
+    Assert.assertEquals(result[0].getValue(), 1);
+    Assert.assertEquals(result[1].getValue(), 2);
   }
 }

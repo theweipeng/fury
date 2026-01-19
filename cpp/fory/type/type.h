@@ -23,6 +23,8 @@
 
 namespace fory {
 enum class TypeId : int32_t {
+  // Unknown/polymorphic type marker.
+  UNKNOWN = 0,
   // a boolean value (true or false).
   BOOL = 1,
   // an 8-bit signed integer.
@@ -32,83 +34,111 @@ enum class TypeId : int32_t {
   // a 32-bit signed integer.
   INT32 = 4,
   // a 32-bit signed integer which uses fory var_int32 encoding.
-  VAR_INT32 = 5,
+  VARINT32 = 5,
   // a 64-bit signed integer.
   INT64 = 6,
   // a 64-bit signed integer which uses fory PVL encoding.
-  VAR_INT64 = 7,
-  // a 64-bit signed integer which uses fory SLI encoding.
-  SLI_INT64 = 8,
+  VARINT64 = 7,
+  // a 64-bit signed integer which uses fory hybrid encoding.
+  TAGGED_INT64 = 8,
+  // an 8-bit unsigned integer.
+  UINT8 = 9,
+  // a 16-bit unsigned integer.
+  UINT16 = 10,
+  // a 32-bit unsigned integer.
+  UINT32 = 11,
+  // a 32-bit unsigned integer which uses fory var_uint32 encoding.
+  VAR_UINT32 = 12,
+  // a 64-bit unsigned integer.
+  UINT64 = 13,
+  // a 64-bit unsigned integer which uses fory var_uint64 encoding.
+  VAR_UINT64 = 14,
+  // a 64-bit unsigned integer which uses fory hybrid encoding.
+  TAGGED_UINT64 = 15,
   // a 16-bit floating point number.
-  FLOAT16 = 9,
+  FLOAT16 = 16,
   // a 32-bit floating point number.
-  FLOAT32 = 10,
+  FLOAT32 = 17,
   // a 64-bit floating point number including NaN and Infinity.
-  FLOAT64 = 11,
+  FLOAT64 = 18,
   // a text string encoded using Latin1/UTF16/UTF-8 encoding.
-  STRING = 12,
-  // a data type consisting of a set of named values.
-  ENUM = 13,
-  // an enum whose value will be serialized as the registered name.
-  NAMED_ENUM = 14,
-  // a morphic(final) type serialized by Fory Struct serializer.
-  STRUCT = 15,
-  // a morphic(final) type serialized by Fory compatible Struct serializer.
-  COMPATIBLE_STRUCT = 16,
-  // a `struct` whose type mapping will be encoded as a name.
-  NAMED_STRUCT = 17,
-  // a `compatible_struct` whose type mapping will be encoded as a name.
-  NAMED_COMPATIBLE_STRUCT = 18,
-  // a type which will be serialized by a customized serializer.
-  EXT = 19,
-  // an `ext` type whose type mapping will be encoded as a name.
-  NAMED_EXT = 20,
+  STRING = 19,
   // a sequence of objects.
-  LIST = 21,
+  LIST = 20,
   // an unordered set of unique elements.
-  SET = 22,
+  SET = 21,
   // a map of key-value pairs.
-  MAP = 23,
+  MAP = 22,
+  // a data type consisting of a set of named values.
+  ENUM = 23,
+  // an enum whose value will be serialized as the registered name.
+  NAMED_ENUM = 24,
+  // a morphic(final) type serialized by Fory Struct serializer.
+  STRUCT = 25,
+  // a morphic(final) type serialized by Fory compatible Struct serializer.
+  COMPATIBLE_STRUCT = 26,
+  // a `struct` whose type mapping will be encoded as a name.
+  NAMED_STRUCT = 27,
+  // a `compatible_struct` whose type mapping will be encoded as a name.
+  NAMED_COMPATIBLE_STRUCT = 28,
+  // a type which will be serialized by a customized serializer.
+  EXT = 29,
+  // an `ext` type whose type mapping will be encoded as a name.
+  NAMED_EXT = 30,
+  // an union type that can hold different types of values.
+  UNION = 31,
+  // a null value with no data.
+  NONE = 32,
   // an absolute length of time, independent of any calendar/timezone,
   // as a count of nanoseconds.
-  DURATION = 24,
+  DURATION = 33,
   // a point in time, independent of any calendar/timezone, as a count
   // of nanoseconds.
-  TIMESTAMP = 25,
+  TIMESTAMP = 34,
   // a naive date without timezone. The count is days relative to an
   // epoch at UTC midnight on Jan 1, 1970.
-  LOCAL_DATE = 26,
+  LOCAL_DATE = 35,
   // exact decimal value represented as an integer value in two's
   // complement.
-  DECIMAL = 27,
+  DECIMAL = 36,
   // a variable-length array of bytes.
-  BINARY = 28,
+  BINARY = 37,
   // a multidimensional array with varying sub-array sizes but same type.
-  ARRAY = 29,
+  ARRAY = 38,
   // one-dimensional boolean array.
-  BOOL_ARRAY = 30,
+  BOOL_ARRAY = 39,
   // one-dimensional int8 array.
-  INT8_ARRAY = 31,
+  INT8_ARRAY = 40,
   // one-dimensional int16 array.
-  INT16_ARRAY = 32,
+  INT16_ARRAY = 41,
   // one-dimensional int32 array.
-  INT32_ARRAY = 33,
+  INT32_ARRAY = 42,
   // one-dimensional int64 array.
-  INT64_ARRAY = 34,
+  INT64_ARRAY = 43,
+  // one-dimensional uint8 array.
+  UINT8_ARRAY = 44,
+  // one-dimensional uint16 array.
+  UINT16_ARRAY = 45,
+  // one-dimensional uint32 array.
+  UINT32_ARRAY = 46,
+  // one-dimensional uint64 array.
+  UINT64_ARRAY = 47,
   // one-dimensional float16 array.
-  FLOAT16_ARRAY = 35,
+  FLOAT16_ARRAY = 48,
   // one-dimensional float32 array.
-  FLOAT32_ARRAY = 36,
+  FLOAT32_ARRAY = 49,
   // one-dimensional float64 array.
-  FLOAT64_ARRAY = 37,
-  // an arrow record batch object.
-  ARROW_RECORD_BATCH = 38,
-  // an arrow table object.
-  ARROW_TABLE = 39,
-  // Unknown/polymorphic type marker.
-  UNKNOWN = 64,
-  // Bound value, typically used as a sentinel value.
-  BOUND = 64
+  FLOAT64_ARRAY = 50,
+  // C++ specific types (not part of xlang spec)
+  // 8-bits character.
+  CHAR = 64,
+  // 16-bits character
+  CHAR16 = 65,
+  // 32-bits character
+  CHAR32 = 66,
+  // Bound value for range checks (types with id >= BOUND are not internal
+  // types).
+  BOUND = 67
 };
 
 inline bool IsUserType(int32_t type_id) {
@@ -152,14 +182,31 @@ inline bool IsTypeShareMeta(int32_t type_id) {
   }
 }
 
+/// Check if type_id represents a struct type.
+/// Struct types include STRUCT, COMPATIBLE_STRUCT, NAMED_STRUCT, and
+/// NAMED_COMPATIBLE_STRUCT.
+inline constexpr bool is_struct_type(TypeId type_id) {
+  return type_id == TypeId::STRUCT || type_id == TypeId::COMPATIBLE_STRUCT ||
+         type_id == TypeId::NAMED_STRUCT ||
+         type_id == TypeId::NAMED_COMPATIBLE_STRUCT;
+}
+
+/// Check if type_id represents an ext type.
+/// Ext types include EXT and NAMED_EXT.
+inline constexpr bool is_ext_type(TypeId type_id) {
+  return type_id == TypeId::EXT || type_id == TypeId::NAMED_EXT;
+}
+
 /// Check if type_id represents an internal (built-in) type.
 /// Internal types are all types except user-defined types (ENUM, STRUCT, EXT).
+/// UNKNOWN is excluded because it's a marker for polymorphic types, not a
+/// concrete type.
 /// Keep as constexpr for compile time evaluation or constant folding.
 inline constexpr bool is_internal_type(uint32_t type_id) {
   if (type_id == 0 || type_id >= static_cast<uint32_t>(TypeId::BOUND)) {
     return false;
   }
-  // Internal types are all types that are NOT user types
+  // Internal types are all types that are NOT user types or UNKNOWN
   uint32_t tid_low = type_id & 0xff;
   return tid_low != static_cast<uint32_t>(TypeId::ENUM) &&
          tid_low != static_cast<uint32_t>(TypeId::NAMED_ENUM) &&
@@ -168,6 +215,7 @@ inline constexpr bool is_internal_type(uint32_t type_id) {
          tid_low != static_cast<uint32_t>(TypeId::NAMED_STRUCT) &&
          tid_low != static_cast<uint32_t>(TypeId::NAMED_COMPATIBLE_STRUCT) &&
          tid_low != static_cast<uint32_t>(TypeId::EXT) &&
-         tid_low != static_cast<uint32_t>(TypeId::NAMED_EXT);
+         tid_low != static_cast<uint32_t>(TypeId::NAMED_EXT) &&
+         tid_low != static_cast<uint32_t>(TypeId::UNKNOWN);
 }
 } // namespace fory

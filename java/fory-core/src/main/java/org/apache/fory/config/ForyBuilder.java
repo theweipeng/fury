@@ -67,7 +67,7 @@ public final class ForyBuilder {
   boolean timeRefIgnored = true;
   ClassLoader classLoader;
   boolean compressInt = true;
-  public LongEncoding longEncoding = LongEncoding.SLI;
+  public LongEncoding longEncoding = LongEncoding.TAGGED;
   boolean compressIntArray = false;
   boolean compressLongArray = false;
   boolean compressString = false;
@@ -89,6 +89,7 @@ public final class ForyBuilder {
   int bufferSizeLimitBytes = 128 * 1024;
   MetaCompressor metaCompressor = new DeflaterMetaCompressor();
   int maxDepth = 50;
+  float mapRefLoadFactor = 0.51f;
 
   public ForyBuilder() {}
 
@@ -98,6 +99,11 @@ public final class ForyBuilder {
    */
   public ForyBuilder withLanguage(Language language) {
     this.language = language;
+    return this;
+  }
+
+  public ForyBuilder withXlang(boolean xlang) {
+    this.language = xlang ? Language.XLANG : Language.JAVA;
     return this;
   }
 
@@ -182,11 +188,11 @@ public final class ForyBuilder {
   }
 
   /**
-   * Use variable length encoding for long. Enabled by default, use {@link LongEncoding#SLI} (Small
-   * long as int) for long encoding.
+   * Use variable length encoding for long. Enabled by default, use {@link LongEncoding#TAGGED}
+   * (Small long as int) for long encoding.
    */
   public ForyBuilder withLongCompressed(boolean longCompressed) {
-    return withLongCompressed(longCompressed ? LongEncoding.SLI : LongEncoding.LE_RAW_BYTES);
+    return withLongCompressed(longCompressed ? LongEncoding.TAGGED : LongEncoding.FIXED);
   }
 
   /** Use variable length encoding for long. */
@@ -256,6 +262,11 @@ public final class ForyBuilder {
   public ForyBuilder withCompatibleMode(CompatibleMode compatibleMode) {
     this.compatibleMode = compatibleMode;
     return this;
+  }
+
+  public ForyBuilder withCompatible(boolean compatible) {
+    return withCompatibleMode(
+        compatible ? CompatibleMode.COMPATIBLE : CompatibleMode.SCHEMA_CONSISTENT);
   }
 
   /**
@@ -389,6 +400,14 @@ public final class ForyBuilder {
     return this;
   }
 
+  /** Set loadFactor of MapRefResolver writtenObjects. Default value is 0.51 */
+  public ForyBuilder withMapRefLoadFactor(float loadFactor) {
+    Preconditions.checkArgument(
+        loadFactor > 0 && loadFactor < 1, "loadFactor must > 0 and < 1 but got %s", loadFactor);
+    this.mapRefLoadFactor = loadFactor;
+    return this;
+  }
+
   /** Whether enable scala-specific serialization optimization. */
   public ForyBuilder withScalaOptimizationEnabled(boolean enableScalaOptimization) {
     this.scalaOptimizationEnabled = enableScalaOptimization;
@@ -420,7 +439,7 @@ public final class ForyBuilder {
     }
     if (language != Language.JAVA) {
       stringRefIgnored = true;
-      longEncoding = LongEncoding.PVL;
+      longEncoding = LongEncoding.VARINT;
       compressInt = true;
       compressString = true;
     }

@@ -30,7 +30,7 @@ try:
 except ImportError:
     ENABLE_FORY_CYTHON_SERIALIZATION = False
 
-from pyfory._registry import TypeInfo
+from pyfory.registry import TypeInfo
 
 if ENABLE_FORY_CYTHON_SERIALIZATION:
     from pyfory.serialization import Fory, TypeInfo  # noqa: F401,F811
@@ -43,6 +43,16 @@ from pyfory.serializer import (  # noqa: F401 # pylint: disable=unused-import
     Int16Serializer,
     Int32Serializer,
     Int64Serializer,
+    Varint32Serializer,
+    Varint64Serializer,
+    TaggedInt64Serializer,
+    Uint8Serializer,
+    Uint16Serializer,
+    Uint32Serializer,
+    VarUint32Serializer,
+    Uint64Serializer,
+    VarUint64Serializer,
+    TaggedUint64Serializer,
     Float32Serializer,
     Float64Serializer,
     StringSerializer,
@@ -56,21 +66,30 @@ from pyfory.serializer import (  # noqa: F401 # pylint: disable=unused-import
     MapSerializer,
     EnumSerializer,
     SliceSerializer,
-    DataClassSerializer,
     FunctionSerializer,
     TypeSerializer,
     MethodSerializer,
     ReduceSerializer,
     StatefulSerializer,
 )
-from pyfory.type import (  # noqa: F401 # pylint: disable=unused-import
-    record_class_factory,
-    get_qualified_classname,
+from pyfory.struct import DataClassSerializer
+from pyfory.field import field  # noqa: F401 # pylint: disable=unused-import
+from pyfory.types import (  # noqa: F401 # pylint: disable=unused-import
     TypeId,
     int8,
     int16,
     int32,
     int64,
+    fixed_int32,
+    fixed_int64,
+    tagged_int64,
+    uint8,
+    uint16,
+    uint32,
+    fixed_uint32,
+    uint64,
+    fixed_uint64,
+    tagged_uint64,
     float32,
     float64,
     # Int8ArrayType,
@@ -79,12 +98,16 @@ from pyfory.type import (  # noqa: F401 # pylint: disable=unused-import
     int64_array,
     float32_array,
     float64_array,
+)
+from pyfory.type_util import (  # noqa: F401 # pylint: disable=unused-import
+    record_class_factory,
+    get_qualified_classname,
     dataslots,
 )
 from pyfory.policy import DeserializationPolicy  # noqa: F401 # pylint: disable=unused-import
-from pyfory._util import Buffer  # noqa: F401 # pylint: disable=unused-import
+from pyfory.buffer import Buffer  # noqa: F401 # pylint: disable=unused-import
 
-__version__ = "0.14.0.dev"
+__version__ = "0.14.1.dev"
 
 __all__ = [
     # Core classes
@@ -94,6 +117,8 @@ __all__ = [
     "TypeInfo",
     "Buffer",
     "DeserializationPolicy",
+    # Field metadata
+    "field",
     # Language constants
     "PYTHON",
     "XLANG",
@@ -105,6 +130,16 @@ __all__ = [
     "int16",
     "int32",
     "int64",
+    "fixed_int32",
+    "fixed_int64",
+    "tagged_int64",
+    "uint8",
+    "uint16",
+    "uint32",
+    "fixed_uint32",
+    "uint64",
+    "fixed_uint64",
+    "tagged_uint64",
     "float32",
     "float64",
     "int16_array",
@@ -121,6 +156,16 @@ __all__ = [
     "Int16Serializer",
     "Int32Serializer",
     "Int64Serializer",
+    "Varint32Serializer",
+    "Varint64Serializer",
+    "TaggedInt64Serializer",
+    "Uint8Serializer",
+    "Uint16Serializer",
+    "Uint32Serializer",
+    "VarUint32Serializer",
+    "Uint64Serializer",
+    "VarUint64Serializer",
+    "TaggedUint64Serializer",
     "Float32Serializer",
     "Float64Serializer",
     "StringSerializer",

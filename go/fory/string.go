@@ -19,6 +19,7 @@ package fory
 
 import (
 	"fmt"
+	"reflect"
 	"unicode/utf16"
 )
 
@@ -29,116 +30,61 @@ const (
 	encodingUTF8           // UTF-8 encoding (default)
 )
 
-// writeString implements string serialization with automatic encoding detection
-func writeString(buf *ByteBuffer, value string) error {
-	// Check if string can be encoded as Latin1
-	if isLatin1(value) {
-		return writeLatin1(buf, value)
-	}
+// writeString writes a string to buffer using xlang encoding
+// Optimized to combine header and data writes with single grow() call
+func writeString(buf *ByteBuffer, value string) {
+	data := unsafeGetBytes(value)
+	dataLen := len(data)
+	header := (uint64(dataLen) << 2) | encodingUTF8
 
-	// Check if UTF-16LE encoding is more efficient
-	if utf16Bytes, ok := tryUTF16LE(value); ok {
-		return writeUTF16LE(buf, utf16Bytes)
+	// Reserve space for header (max 5 bytes) + data in one call
+	buf.Reserve(5 + dataLen)
+	// Write header inline without grow check
+	buf.UnsafeWriteVaruint64(header)
+	// Write data inline without grow check
+	if dataLen > 0 {
+		copy(buf.data[buf.writerIndex:], data)
+		buf.writerIndex += dataLen
 	}
-
-	// Default to UTF-8 encoding
-	return writeUTF8(buf, value)
 }
 
-// readString implements string deserialization with encoding parsing
-func readString(buf *ByteBuffer) string {
-	header := buf.ReadVarUint64()
-	size := header >> 2       // Extract string length (in characters)
+// readString reads a string from buffer using xlang encoding
+func readString(buf *ByteBuffer, err *Error) string {
+	header := buf.ReadVaruint36Small(err)
+	size := header >> 2       // Extract byte count
 	encoding := header & 0b11 // Extract encoding type
 
 	switch encoding {
 	case encodingLatin1:
-		return readLatin1(buf, int(size))
+		return readLatin1(buf, int(size), err)
 	case encodingUTF16LE:
-		return readUTF16LE(buf, int(size))
+		// For UTF16LE, size is byte count, need to convert to char count
+		return readUTF16LE(buf, int(size), err)
 	case encodingUTF8:
-		return readUTF8(buf, int(size))
+		return readUTF8(buf, int(size), err)
 	default:
-		panic(fmt.Sprintf("invalid string encoding: %d", encoding))
+		err.SetError(fmt.Errorf("invalid string encoding: %d", encoding))
+		return ""
 	}
-}
-
-// Encoding detection helper functions
-func isLatin1(s string) bool {
-	// Check if all runes fit within Latin1 range (0-255)
-	for _, r := range s {
-		if r > 0xFF {
-			return false
-		}
-	}
-	return true
-}
-
-func tryUTF16LE(s string) ([]byte, bool) {
-	runes := []rune(s)
-	utf16Runes := utf16.Encode(runes)
-
-	// Check for surrogate pairs (indicates complex Unicode)
-	hasSurrogate := false
-	for _, r := range utf16Runes {
-		if r >= 0xD800 && r <= 0xDFFF {
-			hasSurrogate = true
-			break
-		}
-	}
-
-	if hasSurrogate {
-		return nil, false
-	}
-
-	// Convert to Little Endian byte order
-	buf := make([]byte, 2*len(utf16Runes))
-	for i, r := range utf16Runes {
-		buf[2*i] = byte(r)        // Low byte
-		buf[2*i+1] = byte(r >> 8) // High byte
-	}
-	return buf, true
-}
-
-// Specific encoding write methods
-func writeLatin1(buf *ByteBuffer, s string) error {
-	length := len(s)
-	header := (uint64(length) << 2) | encodingLatin1 // Pack length and encoding
-
-	buf.WriteVarUint64(header)
-	buf.WriteBinary(unsafeGetBytes(s)) // Directly use underlying bytes (Latin1 chars are compatible with UTF-8 in Go)
-	return nil
-}
-
-func writeUTF16LE(buf *ByteBuffer, data []byte) error {
-	length := len(data) / 2 // Character count (2 bytes per char)
-	header := (uint64(length) << 2) | encodingUTF16LE
-
-	buf.WriteVarUint64(header)
-	buf.WriteBinary(data)
-	return nil
-}
-
-func writeUTF8(buf *ByteBuffer, s string) error {
-	data := unsafeGetBytes(s)
-	header := (uint64(len(data)) << 2) | encodingUTF8
-
-	buf.WriteVarUint64(header)
-	buf.WriteBinary(data)
-	return nil
 }
 
 // Specific encoding read methods
-func readLatin1(buf *ByteBuffer, size int) string {
-	data := buf.ReadBinary(size)
-	return string(data) // Go automatically handles Latin1 to UTF-8 conversion
+func readLatin1(buf *ByteBuffer, size int, err *Error) string {
+	data := buf.ReadBinary(size, err)
+	// Latin1 bytes need to be converted to UTF-8
+	// Each Latin1 byte is a single Unicode code point (0-255)
+	runes := make([]rune, size)
+	for i, b := range data {
+		runes[i] = rune(b)
+	}
+	return string(runes)
 }
 
-func readUTF16LE(buf *ByteBuffer, charCount int) string {
-	byteCount := charCount * 2
-	data := buf.ReadBinary(byteCount)
+func readUTF16LE(buf *ByteBuffer, byteCount int, err *Error) string {
+	data := buf.ReadBinary(byteCount, err)
 
 	// Reconstruct UTF-16 code units
+	charCount := byteCount / 2
 	u16s := make([]uint16, charCount)
 	for i := 0; i < byteCount; i += 2 {
 		u16s[i/2] = uint16(data[i]) | uint16(data[i+1])<<8
@@ -147,19 +93,116 @@ func readUTF16LE(buf *ByteBuffer, charCount int) string {
 	return string(utf16.Decode(u16s))
 }
 
-func readUTF8(buf *ByteBuffer, size int) string {
-	data := buf.ReadBinary(size)
+func readUTF8(buf *ByteBuffer, size int, err *Error) string {
+	data := buf.ReadBinary(size, err)
 	return string(data) // Direct UTF-8 conversion
 }
 
-// WriteString provides public API for zero-reflection string serialization
-// This method is specifically designed for code generation to avoid reflection overhead
-func WriteString(buf *ByteBuffer, value string) error {
-	return writeString(buf, value)
+// ============================================================================
+// String Serializers - implement unified Serializer interface
+// ============================================================================
+
+// stringSerializer handles string type
+type stringSerializer struct{}
+
+var globalStringSerializer = stringSerializer{}
+
+func (s stringSerializer) WriteData(ctx *WriteContext, value reflect.Value) {
+	writeString(ctx.buffer, value.String())
 }
 
-// ReadString provides public API for zero-reflection string deserialization
-// This method is specifically designed for code generation to avoid reflection overhead
-func ReadString(buf *ByteBuffer) string {
-	return readString(buf)
+func (s stringSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool, hasGenerics bool, value reflect.Value) {
+	if refMode != RefModeNone {
+		// String is non-primitive, needs ref flag
+		ctx.buffer.WriteInt8(NotNullValueFlag)
+	}
+	if writeType {
+		ctx.buffer.WriteVaruint32Small7(uint32(STRING))
+	}
+	s.WriteData(ctx, value)
+}
+
+func (s stringSerializer) ReadData(ctx *ReadContext, value reflect.Value) {
+	err := ctx.Err()
+	str := readString(ctx.buffer, err)
+	if ctx.HasError() {
+		return
+	}
+	value.SetString(str)
+}
+
+func (s stringSerializer) Read(ctx *ReadContext, refMode RefMode, readType bool, hasGenerics bool, value reflect.Value) {
+	err := ctx.Err()
+	if refMode != RefModeNone {
+		// String is non-primitive, needs ref flag
+		refFlag := ctx.buffer.ReadInt8(err)
+		if refFlag == NullFlag {
+			value.SetString("")
+			return
+		}
+	}
+	if readType {
+		_ = ctx.buffer.ReadVaruint32Small7(err)
+	}
+	if ctx.HasError() {
+		return
+	}
+	s.ReadData(ctx, value)
+}
+
+func (s stringSerializer) ReadWithTypeInfo(ctx *ReadContext, refMode RefMode, typeInfo *TypeInfo, value reflect.Value) {
+	s.Read(ctx, refMode, false, false, value)
+}
+
+// ptrToStringSerializer serializes a pointer to string
+type ptrToStringSerializer struct{}
+
+func (s ptrToStringSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool, hasGenerics bool, value reflect.Value) {
+	if refMode != RefModeNone {
+		if value.IsNil() {
+			ctx.buffer.WriteInt8(NullFlag)
+			return
+		}
+		ctx.buffer.WriteInt8(NotNullValueFlag)
+	}
+	if writeType {
+		ctx.buffer.WriteVaruint32Small7(uint32(STRING))
+	}
+	s.WriteData(ctx, value)
+}
+
+func (s ptrToStringSerializer) WriteData(ctx *WriteContext, value reflect.Value) {
+	str := value.Interface().(*string)
+	writeString(ctx.buffer, *str)
+}
+
+func (s ptrToStringSerializer) Read(ctx *ReadContext, refMode RefMode, readType bool, hasGenerics bool, value reflect.Value) {
+	err := ctx.Err()
+	if refMode != RefModeNone {
+		if ctx.buffer.ReadInt8(err) == NullFlag {
+			return
+		}
+	}
+	if readType {
+		_ = ctx.buffer.ReadVaruint32Small7(err)
+	}
+	if ctx.HasError() {
+		return
+	}
+	s.ReadData(ctx, value)
+}
+
+func (s ptrToStringSerializer) ReadData(ctx *ReadContext, value reflect.Value) {
+	err := ctx.Err()
+	str := readString(ctx.buffer, err)
+	if ctx.HasError() {
+		return
+	}
+	ptr := new(string)
+	*ptr = str
+	value.Set(reflect.ValueOf(ptr))
+}
+
+func (s ptrToStringSerializer) ReadWithTypeInfo(ctx *ReadContext, refMode RefMode, typeInfo *TypeInfo, value reflect.Value) {
+	s.Read(ctx, refMode, false, false, value)
 }

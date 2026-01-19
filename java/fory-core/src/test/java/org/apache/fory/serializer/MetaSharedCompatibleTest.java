@@ -31,6 +31,7 @@ import java.util.List;
 import java.util.stream.Collectors;
 import org.apache.fory.Fory;
 import org.apache.fory.ForyTestBase;
+import org.apache.fory.TestUtils;
 import org.apache.fory.builder.MetaSharedCodecBuilder;
 import org.apache.fory.codegen.CompileUnit;
 import org.apache.fory.codegen.JaninoUtils;
@@ -41,8 +42,6 @@ import org.apache.fory.meta.ClassDefEncoderTest;
 import org.apache.fory.reflect.ReflectionUtils;
 import org.apache.fory.resolver.MetaContext;
 import org.apache.fory.serializer.collection.UnmodifiableSerializersTest;
-import org.apache.fory.serializer.converter.FieldConverter;
-import org.apache.fory.serializer.converter.FieldConverters;
 import org.apache.fory.test.bean.BeanA;
 import org.apache.fory.test.bean.BeanB;
 import org.apache.fory.test.bean.CollectionFields;
@@ -142,7 +141,7 @@ public class MetaSharedCompatibleTest extends ForyTestBase {
           Foo.createCompatibleClass1(), Foo.createCompatibleClass2(), Foo.createCompatibleClass3(),
         }) {
       Object newFoo = fooClass.newInstance();
-      ReflectionUtils.unsafeCopy(foo, newFoo);
+      TestUtils.unsafeCopy(foo, newFoo);
       MetaContext context = new MetaContext();
       Fory newFory =
           foryBuilder()
@@ -158,19 +157,18 @@ public class MetaSharedCompatibleTest extends ForyTestBase {
         fory.getSerializationContext().setMetaContext(context);
         Object deserialized = fory.deserialize(foo1Bytes);
         Assert.assertEquals(deserialized.getClass(), Foo.class);
-        Assert.assertTrue(ReflectionUtils.objectCommonFieldsEquals(deserialized, newFoo));
+        Assert.assertTrue(TestUtils.objectCommonFieldsEquals(deserialized, newFoo));
         fory.getSerializationContext().setMetaContext(context);
         byte[] fooBytes = fory.serialize(deserialized);
         newFory.getSerializationContext().setMetaContext(context1);
-        Assert.assertTrue(
-            ReflectionUtils.objectFieldsEquals(newFory.deserialize(fooBytes), newFoo));
+        TestUtils.objectFieldsEquals(newFory.deserialize(fooBytes), newFoo, true);
       }
       {
         fory.getSerializationContext().setMetaContext(context);
         byte[] bytes1 = fory.serialize(foo);
         newFory.getSerializationContext().setMetaContext(context1);
         Object o1 = newFory.deserialize(bytes1);
-        Assert.assertTrue(ReflectionUtils.objectCommonFieldsEquals(o1, foo));
+        Assert.assertTrue(TestUtils.objectCommonFieldsEquals(o1, foo));
         fory.getSerializationContext().setMetaContext(context);
         newFory.getSerializationContext().setMetaContext(context1);
         Object o2 = fory.deserialize(newFory.serialize(o1));
@@ -178,13 +176,13 @@ public class MetaSharedCompatibleTest extends ForyTestBase {
             Arrays.stream(fooClass.getDeclaredFields())
                 .map(f -> f.getDeclaringClass().getSimpleName() + f.getName())
                 .collect(Collectors.toList());
-        Assert.assertTrue(ReflectionUtils.objectFieldsEquals(new HashSet<>(fields), o2, foo));
+        TestUtils.objectFieldsEquals(new HashSet<>(fields), o2, foo, true);
       }
       {
         fory.getSerializationContext().setMetaContext(context);
         newFory.getSerializationContext().setMetaContext(context1);
         Object o3 = fory.deserialize(newFory.serialize(foo));
-        Assert.assertTrue(ReflectionUtils.objectFieldsEquals(o3, foo));
+        TestUtils.objectFieldsEquals(o3, foo, true);
       }
     }
   }
@@ -234,7 +232,7 @@ public class MetaSharedCompatibleTest extends ForyTestBase {
             code,
             MetaSharedCompatibleTest.class + "testWriteCompatibleCollectionBasic_2");
     Object o2 = cls2.newInstance();
-    ReflectionUtils.unsafeCopy(beanA, o2);
+    TestUtils.unsafeCopy(beanA, o2);
     Fory fory2 =
         foryBuilder()
             .withCodegen(false)
@@ -249,7 +247,7 @@ public class MetaSharedCompatibleTest extends ForyTestBase {
     byte[] objBytes = fory1.serialize(beanA);
     fory2.getSerializationContext().setMetaContext(context2);
     Object obj2 = fory2.deserialize(objBytes);
-    Assert.assertTrue(ReflectionUtils.objectCommonFieldsEquals(obj2, o2));
+    Assert.assertTrue(TestUtils.objectCommonFieldsEquals(obj2, o2));
   }
 
   @Test(dataProvider = "config3")
@@ -303,7 +301,7 @@ public class MetaSharedCompatibleTest extends ForyTestBase {
             code,
             MetaSharedCompatibleTest.class + "testWriteCompatibleCollectionBasic_2");
     Object o2 = cls2.newInstance();
-    ReflectionUtils.unsafeCopy(beanA, o2);
+    TestUtils.unsafeCopy(beanA, o2);
     Fory fory2 =
         foryBuilder()
             .withRefTracking(referenceTracking)
@@ -318,18 +316,18 @@ public class MetaSharedCompatibleTest extends ForyTestBase {
     byte[] bytes2 = fory2.serialize(o2);
     fory1.getSerializationContext().setMetaContext(context1);
     Object deserialized = fory1.deserialize(bytes2);
-    Assert.assertTrue(ReflectionUtils.objectCommonFieldsEquals(deserialized, o2));
+    Assert.assertTrue(TestUtils.objectCommonFieldsEquals(deserialized, o2));
     Assert.assertEquals(deserialized.getClass(), cls1);
     fory1.getSerializationContext().setMetaContext(context1);
     byte[] beanABytes = fory1.serialize(deserialized);
     fory2.getSerializationContext().setMetaContext(context2);
-    Assert.assertTrue(ReflectionUtils.objectFieldsEquals(fory2.deserialize(beanABytes), o2));
+    TestUtils.objectFieldsEquals(fory2.deserialize(beanABytes), o2, true);
 
     fory1.getSerializationContext().setMetaContext(context1);
     byte[] objBytes = fory1.serialize(beanA);
     fory2.getSerializationContext().setMetaContext(context2);
     Object obj2 = fory2.deserialize(objBytes);
-    Assert.assertTrue(ReflectionUtils.objectCommonFieldsEquals(obj2, o2));
+    Assert.assertTrue(TestUtils.objectCommonFieldsEquals(obj2, o2));
 
     Fory fory =
         foryBuilder()
@@ -363,7 +361,7 @@ public class MetaSharedCompatibleTest extends ForyTestBase {
     serDeMetaShared(fory, beanA);
     Class<?> cls = ClassUtils.createCompatibleClass1();
     Object newBeanA = cls.newInstance();
-    ReflectionUtils.unsafeCopy(beanA, newBeanA);
+    TestUtils.unsafeCopy(beanA, newBeanA);
     Fory newFory =
         foryBuilder()
             .withRefTracking(referenceTracking)
@@ -376,19 +374,18 @@ public class MetaSharedCompatibleTest extends ForyTestBase {
     byte[] newBeanABytes = newFory.serialize(newBeanA);
     fory.getSerializationContext().setMetaContext(context);
     Object deserialized = fory.deserialize(newBeanABytes);
-    Assert.assertTrue(ReflectionUtils.objectCommonFieldsEquals(deserialized, newBeanA));
+    Assert.assertTrue(TestUtils.objectCommonFieldsEquals(deserialized, newBeanA));
     Assert.assertEquals(deserialized.getClass(), BeanA.class);
     fory.getSerializationContext().setMetaContext(context);
     byte[] beanABytes = fory.serialize(deserialized);
     newFory.getSerializationContext().setMetaContext(context1);
-    Assert.assertTrue(
-        ReflectionUtils.objectFieldsEquals(newFory.deserialize(beanABytes), newBeanA));
+    TestUtils.objectFieldsEquals(newFory.deserialize(beanABytes), newBeanA, true);
 
     fory.getSerializationContext().setMetaContext(context);
     byte[] objBytes = fory.serialize(beanA);
     newFory.getSerializationContext().setMetaContext(context1);
     Object obj2 = newFory.deserialize(objBytes);
-    Assert.assertTrue(ReflectionUtils.objectCommonFieldsEquals(obj2, newBeanA));
+    Assert.assertTrue(TestUtils.objectCommonFieldsEquals(obj2, newBeanA));
 
     newFory.getSerializationContext().setMetaContext(context1);
     fory.getSerializationContext().setMetaContext(context);
@@ -419,7 +416,7 @@ public class MetaSharedCompatibleTest extends ForyTestBase {
     }
     Class<?> cls2 = ClassUtils.createCompatibleClass2();
     Object newObj = cls2.newInstance();
-    ReflectionUtils.unsafeCopy(collectionFields, newObj);
+    TestUtils.unsafeCopy(collectionFields, newObj);
     Fory fory2 =
         foryBuilder()
             .withRefTracking(referenceTracking)
@@ -434,7 +431,7 @@ public class MetaSharedCompatibleTest extends ForyTestBase {
     fory.getSerializationContext().setMetaContext(context);
     Object deserialized = fory.deserialize(bytes1);
     Assert.assertTrue(
-        ReflectionUtils.objectCommonFieldsEquals(
+        TestUtils.objectCommonFieldsEquals(
             CollectionFields.copyToCanEqual(deserialized, deserialized.getClass().newInstance()),
             CollectionFields.copyToCanEqual(newObj, newObj.getClass().newInstance())));
     Assert.assertEquals(deserialized.getClass(), CollectionFields.class);
@@ -443,17 +440,17 @@ public class MetaSharedCompatibleTest extends ForyTestBase {
     byte[] bytes2 = fory.serialize(deserialized);
     fory2.getSerializationContext().setMetaContext(context2);
     Object obj2 = fory2.deserialize(bytes2);
-    Assert.assertTrue(
-        ReflectionUtils.objectFieldsEquals(
-            CollectionFields.copyToCanEqual(obj2, obj2.getClass().newInstance()),
-            CollectionFields.copyToCanEqual(newObj, newObj.getClass().newInstance())));
+    TestUtils.objectFieldsEquals(
+        CollectionFields.copyToCanEqual(obj2, obj2.getClass().newInstance()),
+        CollectionFields.copyToCanEqual(newObj, newObj.getClass().newInstance()),
+        true);
 
     fory.getSerializationContext().setMetaContext(context);
     byte[] objBytes = fory.serialize(collectionFields);
     fory2.getSerializationContext().setMetaContext(context2);
     Object obj3 = fory2.deserialize(objBytes);
     Assert.assertTrue(
-        ReflectionUtils.objectCommonFieldsEquals(
+        TestUtils.objectCommonFieldsEquals(
             CollectionFields.copyToCanEqual(obj3, obj3.getClass().newInstance()),
             CollectionFields.copyToCanEqual(newObj, newObj.getClass().newInstance())));
 
@@ -487,7 +484,7 @@ public class MetaSharedCompatibleTest extends ForyTestBase {
     }
     Class<?> cls = ClassUtils.createCompatibleClass3();
     Object newObj = cls.newInstance();
-    ReflectionUtils.unsafeCopy(mapFields, newObj);
+    TestUtils.unsafeCopy(mapFields, newObj);
     Fory fory2 =
         foryBuilder()
             .withRefTracking(referenceTracking)
@@ -500,7 +497,7 @@ public class MetaSharedCompatibleTest extends ForyTestBase {
     fory.getSerializationContext().setMetaContext(context);
     Object deserialized = fory.deserialize(bytes1);
     Assert.assertTrue(
-        ReflectionUtils.objectCommonFieldsEquals(
+        TestUtils.objectCommonFieldsEquals(
             MapFields.copyToCanEqual(deserialized, deserialized.getClass().newInstance()),
             MapFields.copyToCanEqual(newObj, newObj.getClass().newInstance())));
     Assert.assertEquals(deserialized.getClass(), MapFields.class);
@@ -510,7 +507,7 @@ public class MetaSharedCompatibleTest extends ForyTestBase {
     fory2.getSerializationContext().setMetaContext(context2);
     Object obj2 = fory2.deserialize(bytes2);
     Assert.assertTrue(
-        ReflectionUtils.objectCommonFieldsEquals(
+        TestUtils.objectCommonFieldsEquals(
             MapFields.copyToCanEqual(obj2, obj2.getClass().newInstance()),
             MapFields.copyToCanEqual(newObj, newObj.getClass().newInstance())));
 
@@ -519,7 +516,7 @@ public class MetaSharedCompatibleTest extends ForyTestBase {
     fory2.getSerializationContext().setMetaContext(context2);
     Object obj3 = fory2.deserialize(objBytes);
     Assert.assertTrue(
-        ReflectionUtils.objectCommonFieldsEquals(
+        TestUtils.objectCommonFieldsEquals(
             MapFields.copyToCanEqual(obj3, obj3.getClass().newInstance()),
             MapFields.copyToCanEqual(newObj, newObj.getClass().newInstance())));
 
@@ -575,7 +572,7 @@ public class MetaSharedCompatibleTest extends ForyTestBase {
     }
     {
       Object o = serDeMetaShared(fory, o1);
-      Assert.assertTrue(ReflectionUtils.objectFieldsEquals(o, o1));
+      TestUtils.objectFieldsEquals(o, o1, true);
     }
 
     Class<?> cls2 =
@@ -611,19 +608,19 @@ public class MetaSharedCompatibleTest extends ForyTestBase {
     }
     {
       Object o = serDeMetaShared(fory2, o2);
-      Assert.assertTrue(ReflectionUtils.objectFieldsEquals(o, o2));
+      TestUtils.objectFieldsEquals(o, o2, true);
     }
     {
       fory2.getSerializationContext().setMetaContext(context2);
       fory.getSerializationContext().setMetaContext(context);
       byte[] bytes2 = fory2.serialize(o2);
       Object o = fory.deserialize(bytes2);
-      Assert.assertTrue(ReflectionUtils.objectCommonFieldsEquals(o, o2));
+      Assert.assertTrue(TestUtils.objectCommonFieldsEquals(o, o2));
       fory2.getSerializationContext().setMetaContext(context2);
       fory.getSerializationContext().setMetaContext(context);
       Object newObj2 = fory2.deserialize(fory.serialize(o));
       // `DuplicateFieldsClass2.intField2` of `newObj2` will be 0.
-      Assert.assertFalse(ReflectionUtils.objectCommonFieldsEquals(newObj2, o2));
+      Assert.assertFalse(TestUtils.objectCommonFieldsEquals(newObj2, o2, false));
       for (Field field : ReflectionUtils.getFields(DuplicateFieldsClass1.class, true)) {
         field.setAccessible(true);
         Assert.assertEquals(field.get(newObj2), field.get(o2));
@@ -661,7 +658,7 @@ public class MetaSharedCompatibleTest extends ForyTestBase {
     }
     Object o = serDeMetaShared(fory, o1);
     Assert.assertEquals(o.getClass(), o1.getClass());
-    Assert.assertTrue(ReflectionUtils.objectFieldsEquals(o, o1));
+    TestUtils.objectFieldsEquals(o, o1, true);
   }
 
   @Test
@@ -940,160 +937,5 @@ public class MetaSharedCompatibleTest extends ForyTestBase {
     Assert.assertNull(getObjectFieldValue(o1, "f1"));
     Assert.assertEquals(ReflectionUtils.getObjectFieldValue(o1, "f2"), 20);
     Assert.assertEquals(ReflectionUtils.getObjectFieldValue(o1, "f3"), 30);
-  }
-
-  @Test(dataProvider = "language")
-  public void testCompatibleFieldConvert(Language language) throws Exception {
-    byte[] bytes;
-    Object o1;
-    ImmutableSet<String> floatFields = ImmutableSet.of("f11", "f12", "f13", "f14");
-    {
-      CompileUnit compileUnit =
-          new CompileUnit(
-              "",
-              "CompatibleFieldConvert",
-              ("public final class CompatibleFieldConvert {\n"
-                  + "  public boolean ftrue;\n"
-                  + "  public Boolean ffalse;\n"
-                  + "  public byte f3;\n"
-                  + "  public Byte f4;\n"
-                  + "  public short f5;\n"
-                  + "  public Short f6;\n"
-                  + "  public int f7;\n"
-                  + "  public Integer f8;\n"
-                  + "  public long f9;\n"
-                  + "  public Long f10;\n"
-                  + "  public float f11;\n"
-                  + "  public Float f12;\n"
-                  + "  public double f13;\n"
-                  + "  public Double f14;\n"
-                  + "  public String toString() {return \"\" + ftrue + ffalse + "
-                  + "f3 + f4 + f5 + f6 + f7 + f8 + f9 + f10 + f11 + f12 + f13 + f14;}\n"
-                  + "}"));
-
-      ClassLoader classLoader =
-          JaninoUtils.compile(Thread.currentThread().getContextClassLoader(), compileUnit);
-      Class<?> cls = classLoader.loadClass(compileUnit.getQualifiedClassName());
-      o1 = cls.newInstance();
-      for (Field field : ReflectionUtils.getSortedFields(cls, false)) {
-        String name = field.getName();
-        field.setAccessible(true);
-        FieldConverter<?> converter = FieldConverters.getConverter(String.class, field);
-        Assert.assertNotNull(converter);
-        Object converted = converter.convert(name.substring(1));
-        field.set(o1, converted);
-      }
-      Fory fory =
-          builder()
-              .withLanguage(language)
-              .withCompatibleMode(CompatibleMode.COMPATIBLE)
-              .withClassLoader(classLoader)
-              .build();
-      if (language == Language.XLANG) {
-        fory.register(cls);
-      }
-      bytes = fory.serialize(o1);
-    }
-    {
-      CompileUnit compileUnit =
-          new CompileUnit(
-              "",
-              "CompatibleFieldConvert",
-              ("public final class CompatibleFieldConvert {\n"
-                  + "  public Boolean ftrue;\n"
-                  + "  public boolean ffalse;\n"
-                  + "  public Byte f3;\n"
-                  + "  public byte f4;\n"
-                  + "  public Short f5;\n"
-                  + "  public short f6;\n"
-                  + "  public Integer f7;\n"
-                  + "  public int f8;\n"
-                  + "  public Long f9;\n"
-                  + "  public long f10;\n"
-                  + "  public Float f11;\n"
-                  + "  public float f12;\n"
-                  + "  public Double f13;\n"
-                  + "  public double f14;\n"
-                  + "  public String toString() {return \"\" + ftrue + ffalse + "
-                  + "f3 + f4 + f5 + f6 + f7 + f8 + f9 + f10 + f11 + f12 + f13 + f14;}\n"
-                  + "}"));
-      ClassLoader classLoader =
-          JaninoUtils.compile(Thread.currentThread().getContextClassLoader(), compileUnit);
-      Class<?> cls = classLoader.loadClass(compileUnit.getQualifiedClassName());
-      Assert.assertNotEquals(cls, o1.getClass());
-      Fory fory =
-          builder()
-              .withLanguage(language)
-              .withCompatibleMode(CompatibleMode.COMPATIBLE)
-              .withClassLoader(classLoader)
-              .build();
-      if (language == Language.XLANG) {
-        fory.register(cls);
-      }
-      Object o = fory.deserialize(bytes);
-      Assert.assertEquals(o.getClass(), cls);
-      List<Field> fields = ReflectionUtils.getSortedFields(cls, false);
-      for (Field field : fields) {
-        field.setAccessible(true);
-        Object fieldValue = field.get(o);
-        if (fieldValue instanceof Float || fieldValue instanceof Double) {
-          Assert.assertEquals(fieldValue.toString(), field.getName().substring(1) + ".0");
-        } else {
-          Assert.assertEquals(fieldValue.toString(), field.getName().substring(1));
-        }
-      }
-      Assert.assertEquals(o.toString(), o1.toString());
-    }
-    {
-      CompileUnit compileUnit =
-          new CompileUnit(
-              "",
-              "CompatibleFieldConvert",
-              ("public final class CompatibleFieldConvert {\n"
-                  + "  public String ftrue;\n"
-                  + "  public String ffalse;\n"
-                  + "  public String f3;\n"
-                  + "  public String f4;\n"
-                  + "  public String f5;\n"
-                  + "  public String f6;\n"
-                  + "  public String f7;\n"
-                  + "  public String f8;\n"
-                  + "  public String f9;\n"
-                  + "  public String f10;\n"
-                  + "  public String f11;\n"
-                  + "  public String f12;\n"
-                  + "  public String f13;\n"
-                  + "  public String f14;\n"
-                  + "  public String toString() {return \"\" + ftrue + ffalse + "
-                  + "f3 + f4 + f5 + f6 + f7 + f8 + f9 + f10 + f11 + f12 + f13 + f14;}\n"
-                  + "}"));
-
-      ClassLoader classLoader =
-          JaninoUtils.compile(Thread.currentThread().getContextClassLoader(), compileUnit);
-      Fory fory =
-          builder()
-              .withLanguage(language)
-              .withCompatibleMode(CompatibleMode.COMPATIBLE)
-              .withClassLoader(classLoader)
-              .build();
-      Class<?> cls = classLoader.loadClass(compileUnit.getQualifiedClassName());
-      Assert.assertNotEquals(cls, o1.getClass());
-      if (language == Language.XLANG) {
-        fory.register(cls);
-      }
-      Object o = fory.deserialize(bytes);
-      Assert.assertEquals(o.getClass(), cls);
-      List<Field> fields = ReflectionUtils.getSortedFields(cls, false);
-      for (Field field : fields) {
-        field.setAccessible(true);
-        Object fieldValue = field.get(o);
-        if (floatFields.contains(field.getName())) {
-          Assert.assertEquals(fieldValue.toString(), field.getName().substring(1) + ".0");
-        } else {
-          Assert.assertEquals(fieldValue.toString(), field.getName().substring(1));
-        }
-      }
-      Assert.assertEquals(o.toString(), o1.toString());
-    }
   }
 }

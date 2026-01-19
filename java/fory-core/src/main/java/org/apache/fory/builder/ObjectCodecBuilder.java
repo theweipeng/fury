@@ -31,7 +31,6 @@ import static org.apache.fory.type.TypeUtils.PRIMITIVE_LONG_TYPE;
 import static org.apache.fory.type.TypeUtils.PRIMITIVE_VOID_TYPE;
 import static org.apache.fory.type.TypeUtils.getRawType;
 import static org.apache.fory.type.TypeUtils.getSizeOfPrimitiveType;
-import static org.apache.fory.type.TypeUtils.isPrimitive;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -54,15 +53,17 @@ import org.apache.fory.codegen.Expression.Reference;
 import org.apache.fory.codegen.Expression.ReplaceStub;
 import org.apache.fory.codegen.Expression.StaticInvoke;
 import org.apache.fory.codegen.ExpressionVisitor;
+import org.apache.fory.logging.Logger;
+import org.apache.fory.logging.LoggerFactory;
 import org.apache.fory.memory.Platform;
 import org.apache.fory.reflect.ObjectCreators;
 import org.apache.fory.reflect.TypeRef;
 import org.apache.fory.serializer.ObjectSerializer;
-import org.apache.fory.serializer.PrimitiveSerializers.LongSerializer;
 import org.apache.fory.serializer.SerializationUtils;
 import org.apache.fory.type.Descriptor;
 import org.apache.fory.type.DescriptorGrouper;
-import org.apache.fory.util.Preconditions;
+import org.apache.fory.type.DispatchId;
+import org.apache.fory.type.TypeUtils;
 import org.apache.fory.util.function.SerializableSupplier;
 import org.apache.fory.util.record.RecordUtils;
 
@@ -81,6 +82,8 @@ import org.apache.fory.util.record.RecordUtils;
  * @see ObjectCodecOptimizer for code stats and split heuristics.
  */
 public class ObjectCodecBuilder extends BaseObjectCodecBuilder {
+  private static final Logger LOG = LoggerFactory.getLogger(ObjectCodecBuilder.class);
+
   private final Literal classVersionHash;
   protected ObjectCodecOptimizer objectCodecOptimizer;
   protected Map<String, Integer> recordReversedMapping;
@@ -101,6 +104,18 @@ public class ObjectCodecBuilder extends BaseObjectCodecBuilder {
     }
     Collection<Descriptor> p = descriptors;
     DescriptorGrouper grouper = typeResolver(r -> r.createDescriptorGrouper(p, false));
+    if (org.apache.fory.util.Utils.debugOutputEnabled()) {
+      LOG.info("========== sorted descriptors for {} ==========", beanClass.getSimpleName());
+      List<Descriptor> sortedDescriptors = grouper.getSortedDescriptors();
+      for (Descriptor d : sortedDescriptors) {
+        LOG.info(
+            "  {} -> {}, ref {}, nullable {}",
+            d.getName(),
+            d.getTypeName(),
+            d.isTrackingRef(),
+            d.isNullable());
+      }
+    }
     classVersionHash =
         fory.checkClassVersion()
             ? new Literal(ObjectSerializer.computeStructHash(fory, grouper), PRIMITIVE_INT_TYPE)
@@ -137,12 +152,6 @@ public class ObjectCodecBuilder extends BaseObjectCodecBuilder {
     ctx.addImport(Generated.GeneratedObjectSerializer.class);
   }
 
-  /** Mark non-inner registered final types as non-final to write class def for those types. */
-  @Override
-  protected boolean isMonomorphic(Class<?> clz) {
-    return typeResolver(r -> r.isMonomorphic(clz));
-  }
-
   /**
    * Return an expression that serialize java bean of type {@link CodecBuilder#beanClass} to buffer.
    */
@@ -162,7 +171,7 @@ public class ObjectCodecBuilder extends BaseObjectCodecBuilder {
     addGroupExpressions(
         objectCodecOptimizer.boxedWriteGroups, numGroups, expressions, bean, buffer);
     addGroupExpressions(
-        objectCodecOptimizer.finalWriteGroups, numGroups, expressions, bean, buffer);
+        objectCodecOptimizer.buildInWriteGroups, numGroups, expressions, bean, buffer);
     for (Descriptor descriptor :
         objectCodecOptimizer.descriptorGrouper.getCollectionDescriptors()) {
       expressions.add(serializeGroup(Collections.singletonList(descriptor), bean, buffer, false));
@@ -192,7 +201,7 @@ public class ObjectCodecBuilder extends BaseObjectCodecBuilder {
 
   private int getNumGroups(ObjectCodecOptimizer objectCodecOptimizer) {
     return objectCodecOptimizer.boxedWriteGroups.size()
-        + objectCodecOptimizer.finalWriteGroups.size()
+        + objectCodecOptimizer.buildInWriteGroups.size()
         + objectCodecOptimizer.otherWriteGroups.size()
         + objectCodecOptimizer.descriptorGrouper.getCollectionDescriptors().size()
         + objectCodecOptimizer.descriptorGrouper.getMapDescriptors().size();
@@ -207,9 +216,7 @@ public class ObjectCodecBuilder extends BaseObjectCodecBuilder {
             // `bean` will be replaced by `Reference` to cut-off expr dependency.
             Expression fieldValue = getFieldValue(bean, d);
             walkPath.add(d.getDeclaringClass() + d.getName());
-            boolean nullable = d.isNullable();
-            Expression fieldExpr =
-                serializeForNullable(fieldValue, buffer, d.getTypeRef(), nullable);
+            Expression fieldExpr = serializeField(fieldValue, buffer, d);
             walkPath.removeLast();
             groupExpressions.add(fieldExpr);
           }
@@ -260,39 +267,50 @@ public class ObjectCodecBuilder extends BaseObjectCodecBuilder {
       ListExpression groupExpressions = new ListExpression();
       // use Reference to cut-off expr dependency.
       for (Descriptor descriptor : group) {
-        Class<?> clz = descriptor.getRawType();
-        Preconditions.checkArgument(isPrimitive(clz));
+        int dispatchId = getNumericDescriptorDispatchId(descriptor);
         // `bean` will be replaced by `Reference` to cut-off expr dependency.
         Expression fieldValue = getFieldValue(bean, descriptor);
         if (fieldValue instanceof Inlineable) {
           ((Inlineable) fieldValue).inline();
         }
-        if (clz == byte.class) {
-          groupExpressions.add(unsafePut(base, getWriterPos(writerAddr, acc), fieldValue));
-          acc += 1;
-        } else if (clz == boolean.class) {
+        if (dispatchId == DispatchId.PRIMITIVE_BOOL || dispatchId == DispatchId.BOOL) {
           groupExpressions.add(unsafePutBoolean(base, getWriterPos(writerAddr, acc), fieldValue));
           acc += 1;
-        } else if (clz == char.class) {
+        } else if (dispatchId == DispatchId.PRIMITIVE_INT8
+            || dispatchId == DispatchId.PRIMITIVE_UINT8
+            || dispatchId == DispatchId.INT8
+            || dispatchId == DispatchId.UINT8) {
+          groupExpressions.add(unsafePut(base, getWriterPos(writerAddr, acc), fieldValue));
+          acc += 1;
+        } else if (dispatchId == DispatchId.PRIMITIVE_CHAR || dispatchId == DispatchId.CHAR) {
           groupExpressions.add(unsafePutChar(base, getWriterPos(writerAddr, acc), fieldValue));
           acc += 2;
-        } else if (clz == short.class) {
+        } else if (dispatchId == DispatchId.PRIMITIVE_INT16
+            || dispatchId == DispatchId.PRIMITIVE_UINT16
+            || dispatchId == DispatchId.INT16
+            || dispatchId == DispatchId.UINT16) {
           groupExpressions.add(unsafePutShort(base, getWriterPos(writerAddr, acc), fieldValue));
           acc += 2;
-        } else if (clz == int.class) {
+        } else if (dispatchId == DispatchId.PRIMITIVE_INT32
+            || dispatchId == DispatchId.PRIMITIVE_UINT32
+            || dispatchId == DispatchId.INT32
+            || dispatchId == DispatchId.UINT32) {
           groupExpressions.add(unsafePutInt(base, getWriterPos(writerAddr, acc), fieldValue));
           acc += 4;
-        } else if (clz == long.class) {
+        } else if (dispatchId == DispatchId.PRIMITIVE_INT64
+            || dispatchId == DispatchId.PRIMITIVE_UINT64
+            || dispatchId == DispatchId.INT64
+            || dispatchId == DispatchId.UINT64) {
           groupExpressions.add(unsafePutLong(base, getWriterPos(writerAddr, acc), fieldValue));
           acc += 8;
-        } else if (clz == float.class) {
+        } else if (dispatchId == DispatchId.PRIMITIVE_FLOAT32 || dispatchId == DispatchId.FLOAT32) {
           groupExpressions.add(unsafePutFloat(base, getWriterPos(writerAddr, acc), fieldValue));
           acc += 4;
-        } else if (clz == double.class) {
+        } else if (dispatchId == DispatchId.PRIMITIVE_FLOAT64 || dispatchId == DispatchId.FLOAT64) {
           groupExpressions.add(unsafePutDouble(base, getWriterPos(writerAddr, acc), fieldValue));
           acc += 8;
         } else {
-          throw new IllegalStateException("impossible");
+          throw new IllegalStateException("Unsupported dispatchId: " + dispatchId);
         }
       }
       if (numPrimitiveFields < 4) {
@@ -319,10 +337,25 @@ public class ObjectCodecBuilder extends BaseObjectCodecBuilder {
     int extraSize = 0;
     for (List<Descriptor> group : primitiveGroups) {
       for (Descriptor d : group) {
-        if (d.getRawType() == int.class) {
+        int id = getNumericDescriptorDispatchId(d);
+        if (id == DispatchId.PRIMITIVE_INT32
+            || id == DispatchId.PRIMITIVE_VARINT32
+            || id == DispatchId.PRIMITIVE_VAR_UINT32
+            || id == DispatchId.INT32
+            || id == DispatchId.VARINT32
+            || id == DispatchId.VAR_UINT32) {
           // varint may be written as 5bytes, use 8bytes for written as long to reduce cost.
           extraSize += 4;
-        } else if (d.getRawType() == long.class) {
+        } else if (id == DispatchId.PRIMITIVE_INT64
+            || id == DispatchId.PRIMITIVE_VARINT64
+            || id == DispatchId.PRIMITIVE_TAGGED_INT64
+            || id == DispatchId.PRIMITIVE_VAR_UINT64
+            || id == DispatchId.PRIMITIVE_TAGGED_UINT64
+            || id == DispatchId.INT64
+            || id == DispatchId.VARINT64
+            || id == DispatchId.TAGGED_INT64
+            || id == DispatchId.VAR_UINT64
+            || id == DispatchId.TAGGED_UINT64) {
           extraSize += 1; // long use 1~9 bytes.
         }
       }
@@ -342,59 +375,92 @@ public class ObjectCodecBuilder extends BaseObjectCodecBuilder {
       int acc = 0;
       boolean compressStarted = false;
       for (Descriptor descriptor : group) {
-        Class<?> clz = descriptor.getRawType();
-        Preconditions.checkArgument(isPrimitive(clz));
+        int dispatchId = getNumericDescriptorDispatchId(descriptor);
         // `bean` will be replaced by `Reference` to cut-off expr dependency.
         Expression fieldValue = getFieldValue(bean, descriptor);
         if (fieldValue instanceof Inlineable) {
           ((Inlineable) fieldValue).inline();
         }
-        if (clz == byte.class) {
-          groupExpressions.add(unsafePut(base, getWriterPos(writerAddr, acc), fieldValue));
-          acc += 1;
-        } else if (clz == boolean.class) {
+        if (dispatchId == DispatchId.PRIMITIVE_BOOL || dispatchId == DispatchId.BOOL) {
           groupExpressions.add(unsafePutBoolean(base, getWriterPos(writerAddr, acc), fieldValue));
           acc += 1;
-        } else if (clz == char.class) {
+        } else if (dispatchId == DispatchId.PRIMITIVE_INT8
+            || dispatchId == DispatchId.PRIMITIVE_UINT8
+            || dispatchId == DispatchId.INT8
+            || dispatchId == DispatchId.UINT8) {
+          groupExpressions.add(unsafePut(base, getWriterPos(writerAddr, acc), fieldValue));
+          acc += 1;
+        } else if (dispatchId == DispatchId.PRIMITIVE_CHAR || dispatchId == DispatchId.CHAR) {
           groupExpressions.add(unsafePutChar(base, getWriterPos(writerAddr, acc), fieldValue));
           acc += 2;
-        } else if (clz == short.class) {
+        } else if (dispatchId == DispatchId.PRIMITIVE_INT16
+            || dispatchId == DispatchId.PRIMITIVE_UINT16
+            || dispatchId == DispatchId.INT16
+            || dispatchId == DispatchId.UINT16) {
           groupExpressions.add(unsafePutShort(base, getWriterPos(writerAddr, acc), fieldValue));
           acc += 2;
-        } else if (clz == float.class) {
+        } else if (dispatchId == DispatchId.PRIMITIVE_FLOAT32 || dispatchId == DispatchId.FLOAT32) {
           groupExpressions.add(unsafePutFloat(base, getWriterPos(writerAddr, acc), fieldValue));
           acc += 4;
-        } else if (clz == double.class) {
+        } else if (dispatchId == DispatchId.PRIMITIVE_FLOAT64 || dispatchId == DispatchId.FLOAT64) {
           groupExpressions.add(unsafePutDouble(base, getWriterPos(writerAddr, acc), fieldValue));
           acc += 8;
-        } else if (clz == int.class) {
-          if (!fory.compressInt()) {
-            groupExpressions.add(unsafePutInt(base, getWriterPos(writerAddr, acc), fieldValue));
-            acc += 4;
-          } else {
-            if (!compressStarted) {
-              // int/long are sorted in the last.
-              addIncWriterIndexExpr(groupExpressions, buffer, acc);
-              compressStarted = true;
-            }
-            groupExpressions.add(new Invoke(buffer, "_unsafeWriteVarInt32", fieldValue));
-            acc += 0;
+        } else if (dispatchId == DispatchId.PRIMITIVE_INT32
+            || dispatchId == DispatchId.PRIMITIVE_UINT32
+            || dispatchId == DispatchId.INT32
+            || dispatchId == DispatchId.UINT32) {
+          groupExpressions.add(unsafePutInt(base, getWriterPos(writerAddr, acc), fieldValue));
+          acc += 4;
+        } else if (dispatchId == DispatchId.PRIMITIVE_INT64
+            || dispatchId == DispatchId.PRIMITIVE_UINT64
+            || dispatchId == DispatchId.INT64
+            || dispatchId == DispatchId.UINT64) {
+          groupExpressions.add(unsafePutLong(base, getWriterPos(writerAddr, acc), fieldValue));
+          acc += 8;
+        } else if (dispatchId == DispatchId.PRIMITIVE_VARINT32
+            || dispatchId == DispatchId.VARINT32) {
+          if (!compressStarted) {
+            addIncWriterIndexExpr(groupExpressions, buffer, acc);
+            compressStarted = true;
           }
-        } else if (clz == long.class) {
-          if (!fory.compressLong()) {
-            groupExpressions.add(unsafePutLong(base, getWriterPos(writerAddr, acc), fieldValue));
-            acc += 8;
-          } else {
-            if (!compressStarted) {
-              // int/long are sorted in the last.
-              addIncWriterIndexExpr(groupExpressions, buffer, acc);
-              compressStarted = true;
-            }
-            groupExpressions.add(
-                LongSerializer.writeInt64(buffer, fieldValue, fory.longEncoding(), false));
+          groupExpressions.add(new Invoke(buffer, "_unsafeWriteVarInt32", fieldValue));
+        } else if (dispatchId == DispatchId.PRIMITIVE_VAR_UINT32
+            || dispatchId == DispatchId.VAR_UINT32) {
+          if (!compressStarted) {
+            addIncWriterIndexExpr(groupExpressions, buffer, acc);
+            compressStarted = true;
           }
+          groupExpressions.add(new Invoke(buffer, "_unsafeWriteVarUint32", fieldValue));
+        } else if (dispatchId == DispatchId.PRIMITIVE_VARINT64
+            || dispatchId == DispatchId.VARINT64) {
+          if (!compressStarted) {
+            addIncWriterIndexExpr(groupExpressions, buffer, acc);
+            compressStarted = true;
+          }
+          groupExpressions.add(new Invoke(buffer, "writeVarInt64", fieldValue));
+        } else if (dispatchId == DispatchId.PRIMITIVE_TAGGED_INT64
+            || dispatchId == DispatchId.TAGGED_INT64) {
+          if (!compressStarted) {
+            addIncWriterIndexExpr(groupExpressions, buffer, acc);
+            compressStarted = true;
+          }
+          groupExpressions.add(new Invoke(buffer, "writeTaggedInt64", fieldValue));
+        } else if (dispatchId == DispatchId.PRIMITIVE_VAR_UINT64
+            || dispatchId == DispatchId.VAR_UINT64) {
+          if (!compressStarted) {
+            addIncWriterIndexExpr(groupExpressions, buffer, acc);
+            compressStarted = true;
+          }
+          groupExpressions.add(new Invoke(buffer, "writeVarUint64", fieldValue));
+        } else if (dispatchId == DispatchId.PRIMITIVE_TAGGED_UINT64
+            || dispatchId == DispatchId.TAGGED_UINT64) {
+          if (!compressStarted) {
+            addIncWriterIndexExpr(groupExpressions, buffer, acc);
+            compressStarted = true;
+          }
+          groupExpressions.add(new Invoke(buffer, "writeTaggedUint64", fieldValue));
         } else {
-          throw new IllegalStateException("impossible");
+          throw new IllegalStateException("Unsupported dispatchId: " + dispatchId);
         }
       }
       if (!compressStarted) {
@@ -421,7 +487,7 @@ public class ObjectCodecBuilder extends BaseObjectCodecBuilder {
   private int getTotalSizeOfPrimitives(List<List<Descriptor>> primitiveGroups) {
     return primitiveGroups.stream()
         .flatMap(Collection::stream)
-        .mapToInt(d -> getSizeOfPrimitiveType(d.getRawType()))
+        .mapToInt(d -> getSizeOfPrimitiveType(TypeUtils.unwrap(d.getRawType())))
         .sum();
   }
 
@@ -457,7 +523,7 @@ public class ObjectCodecBuilder extends BaseObjectCodecBuilder {
     deserializeReadGroup(
         objectCodecOptimizer.boxedReadGroups, numGroups, expressions, bean, buffer);
     deserializeReadGroup(
-        objectCodecOptimizer.finalReadGroups, numGroups, expressions, bean, buffer);
+        objectCodecOptimizer.buildInReadGroups, numGroups, expressions, bean, buffer);
     for (Descriptor d : objectCodecOptimizer.descriptorGrouper.getCollectionDescriptors()) {
       expressions.add(deserializeGroup(Collections.singletonList(d), bean, buffer, false));
     }
@@ -555,17 +621,15 @@ public class ObjectCodecBuilder extends BaseObjectCodecBuilder {
           for (Descriptor d : group) {
             ExpressionVisitor.ExprHolder exprHolder = ExpressionVisitor.ExprHolder.of("bean", bean);
             walkPath.add(d.getDeclaringClass() + d.getName());
-            boolean nullable = d.isNullable();
             Expression action =
-                deserializeForNullable(
+                deserializeField(
                     buffer,
-                    d.getTypeRef(),
+                    d,
                     // `bean` will be replaced by `Reference` to cut-off expr
                     // dependency.
                     expr ->
                         setFieldValue(
-                            exprHolder.get("bean"), d, tryInlineCast(expr, d.getTypeRef())),
-                    nullable);
+                            exprHolder.get("bean"), d, tryInlineCast(expr, d.getTypeRef())));
             walkPath.removeLast();
             groupExpressions.add(action);
           }
@@ -597,7 +661,7 @@ public class ObjectCodecBuilder extends BaseObjectCodecBuilder {
         "checkClassVersion",
         PRIMITIVE_VOID_TYPE,
         false,
-        foryRef,
+        beanClassExpr(),
         inlineInvoke(buffer, readIntFunc(), PRIMITIVE_INT_TYPE),
         Objects.requireNonNull(classVersionHash));
   }
@@ -636,36 +700,46 @@ public class ObjectCodecBuilder extends BaseObjectCodecBuilder {
     for (List<Descriptor> group : primitiveGroups) {
       ListExpression groupExpressions = new ListExpression();
       for (Descriptor descriptor : group) {
-        TypeRef<?> type = descriptor.getTypeRef();
-        Class<?> clz = getRawType(type);
-        Preconditions.checkArgument(isPrimitive(clz));
+        int dispatchId = getNumericDescriptorDispatchId(descriptor);
         Expression fieldValue;
-        if (clz == byte.class) {
-          fieldValue = unsafeGet(heapBuffer, getReaderAddress(readerAddr, acc));
-          acc += 1;
-        } else if (clz == boolean.class) {
+        if (dispatchId == DispatchId.PRIMITIVE_BOOL || dispatchId == DispatchId.BOOL) {
           fieldValue = unsafeGetBoolean(heapBuffer, getReaderAddress(readerAddr, acc));
           acc += 1;
-        } else if (clz == char.class) {
+        } else if (dispatchId == DispatchId.PRIMITIVE_INT8
+            || dispatchId == DispatchId.PRIMITIVE_UINT8
+            || dispatchId == DispatchId.INT8
+            || dispatchId == DispatchId.UINT8) {
+          fieldValue = unsafeGet(heapBuffer, getReaderAddress(readerAddr, acc));
+          acc += 1;
+        } else if (dispatchId == DispatchId.PRIMITIVE_CHAR || dispatchId == DispatchId.CHAR) {
           fieldValue = unsafeGetChar(heapBuffer, getReaderAddress(readerAddr, acc));
           acc += 2;
-        } else if (clz == short.class) {
+        } else if (dispatchId == DispatchId.PRIMITIVE_INT16
+            || dispatchId == DispatchId.PRIMITIVE_UINT16
+            || dispatchId == DispatchId.INT16
+            || dispatchId == DispatchId.UINT16) {
           fieldValue = unsafeGetShort(heapBuffer, getReaderAddress(readerAddr, acc));
           acc += 2;
-        } else if (clz == int.class) {
+        } else if (dispatchId == DispatchId.PRIMITIVE_INT32
+            || dispatchId == DispatchId.PRIMITIVE_UINT32
+            || dispatchId == DispatchId.INT32
+            || dispatchId == DispatchId.UINT32) {
           fieldValue = unsafeGetInt(heapBuffer, getReaderAddress(readerAddr, acc));
           acc += 4;
-        } else if (clz == long.class) {
+        } else if (dispatchId == DispatchId.PRIMITIVE_INT64
+            || dispatchId == DispatchId.PRIMITIVE_UINT64
+            || dispatchId == DispatchId.INT64
+            || dispatchId == DispatchId.UINT64) {
           fieldValue = unsafeGetLong(heapBuffer, getReaderAddress(readerAddr, acc));
           acc += 8;
-        } else if (clz == float.class) {
+        } else if (dispatchId == DispatchId.PRIMITIVE_FLOAT32 || dispatchId == DispatchId.FLOAT32) {
           fieldValue = unsafeGetFloat(heapBuffer, getReaderAddress(readerAddr, acc));
           acc += 4;
-        } else if (clz == double.class) {
+        } else if (dispatchId == DispatchId.PRIMITIVE_FLOAT64 || dispatchId == DispatchId.FLOAT64) {
           fieldValue = unsafeGetDouble(heapBuffer, getReaderAddress(readerAddr, acc));
           acc += 8;
         } else {
-          throw new IllegalStateException("impossible");
+          throw new IllegalStateException("Unsupported dispatchId: " + dispatchId);
         }
         // `bean` will be replaced by `Reference` to cut-off expr dependency.
         groupExpressions.add(setFieldValue(bean, descriptor, fieldValue));
@@ -703,52 +777,88 @@ public class ObjectCodecBuilder extends BaseObjectCodecBuilder {
       int acc = 0;
       boolean compressStarted = false;
       for (Descriptor descriptor : group) {
-        TypeRef<?> type = descriptor.getTypeRef();
-        Class<?> clz = getRawType(type);
-        Preconditions.checkArgument(isPrimitive(clz));
+        int dispatchId = getNumericDescriptorDispatchId(descriptor);
         Expression fieldValue;
-        if (clz == byte.class) {
-          fieldValue = unsafeGet(heapBuffer, getReaderAddress(readerAddr, acc));
-          acc += 1;
-        } else if (clz == boolean.class) {
+        if (dispatchId == DispatchId.PRIMITIVE_BOOL || dispatchId == DispatchId.BOOL) {
           fieldValue = unsafeGetBoolean(heapBuffer, getReaderAddress(readerAddr, acc));
           acc += 1;
-        } else if (clz == char.class) {
+        } else if (dispatchId == DispatchId.PRIMITIVE_INT8
+            || dispatchId == DispatchId.PRIMITIVE_UINT8
+            || dispatchId == DispatchId.INT8
+            || dispatchId == DispatchId.UINT8) {
+          fieldValue = unsafeGet(heapBuffer, getReaderAddress(readerAddr, acc));
+          acc += 1;
+        } else if (dispatchId == DispatchId.PRIMITIVE_CHAR || dispatchId == DispatchId.CHAR) {
           fieldValue = unsafeGetChar(heapBuffer, getReaderAddress(readerAddr, acc));
           acc += 2;
-        } else if (clz == short.class) {
+        } else if (dispatchId == DispatchId.PRIMITIVE_INT16
+            || dispatchId == DispatchId.PRIMITIVE_UINT16
+            || dispatchId == DispatchId.INT16
+            || dispatchId == DispatchId.UINT16) {
           fieldValue = unsafeGetShort(heapBuffer, getReaderAddress(readerAddr, acc));
           acc += 2;
-        } else if (clz == float.class) {
+        } else if (dispatchId == DispatchId.PRIMITIVE_FLOAT32 || dispatchId == DispatchId.FLOAT32) {
           fieldValue = unsafeGetFloat(heapBuffer, getReaderAddress(readerAddr, acc));
           acc += 4;
-        } else if (clz == double.class) {
+        } else if (dispatchId == DispatchId.PRIMITIVE_FLOAT64 || dispatchId == DispatchId.FLOAT64) {
           fieldValue = unsafeGetDouble(heapBuffer, getReaderAddress(readerAddr, acc));
           acc += 8;
-        } else if (clz == int.class) {
-          if (!fory.compressInt()) {
-            fieldValue = unsafeGetInt(heapBuffer, getReaderAddress(readerAddr, acc));
-            acc += 4;
-          } else {
-            if (!compressStarted) {
-              compressStarted = true;
-              addIncReaderIndexExpr(groupExpressions, buffer, acc);
-            }
-            fieldValue = readVarInt32(buffer);
+        } else if (dispatchId == DispatchId.PRIMITIVE_INT32
+            || dispatchId == DispatchId.PRIMITIVE_UINT32
+            || dispatchId == DispatchId.INT32
+            || dispatchId == DispatchId.UINT32) {
+          fieldValue = unsafeGetInt(heapBuffer, getReaderAddress(readerAddr, acc));
+          acc += 4;
+        } else if (dispatchId == DispatchId.PRIMITIVE_INT64
+            || dispatchId == DispatchId.PRIMITIVE_UINT64
+            || dispatchId == DispatchId.INT64
+            || dispatchId == DispatchId.UINT64) {
+          fieldValue = unsafeGetLong(heapBuffer, getReaderAddress(readerAddr, acc));
+          acc += 8;
+        } else if (dispatchId == DispatchId.PRIMITIVE_VARINT32
+            || dispatchId == DispatchId.VARINT32) {
+          if (!compressStarted) {
+            compressStarted = true;
+            addIncReaderIndexExpr(groupExpressions, buffer, acc);
           }
-        } else if (clz == long.class) {
-          if (!fory.compressLong()) {
-            fieldValue = unsafeGetLong(heapBuffer, getReaderAddress(readerAddr, acc));
-            acc += 8;
-          } else {
-            if (!compressStarted) {
-              compressStarted = true;
-              addIncReaderIndexExpr(groupExpressions, buffer, acc);
-            }
-            fieldValue = LongSerializer.readInt64(buffer, fory.longEncoding());
+          fieldValue = readVarInt32(buffer);
+        } else if (dispatchId == DispatchId.PRIMITIVE_VAR_UINT32
+            || dispatchId == DispatchId.VAR_UINT32) {
+          if (!compressStarted) {
+            compressStarted = true;
+            addIncReaderIndexExpr(groupExpressions, buffer, acc);
           }
+          fieldValue = new Invoke(buffer, "readVarUint32", PRIMITIVE_INT_TYPE);
+        } else if (dispatchId == DispatchId.PRIMITIVE_VARINT64
+            || dispatchId == DispatchId.VARINT64) {
+          if (!compressStarted) {
+            compressStarted = true;
+            addIncReaderIndexExpr(groupExpressions, buffer, acc);
+          }
+          fieldValue = new Invoke(buffer, "readVarInt64", PRIMITIVE_LONG_TYPE);
+        } else if (dispatchId == DispatchId.PRIMITIVE_TAGGED_INT64
+            || dispatchId == DispatchId.TAGGED_INT64) {
+          if (!compressStarted) {
+            compressStarted = true;
+            addIncReaderIndexExpr(groupExpressions, buffer, acc);
+          }
+          fieldValue = new Invoke(buffer, "readTaggedInt64", PRIMITIVE_LONG_TYPE);
+        } else if (dispatchId == DispatchId.PRIMITIVE_VAR_UINT64
+            || dispatchId == DispatchId.VAR_UINT64) {
+          if (!compressStarted) {
+            compressStarted = true;
+            addIncReaderIndexExpr(groupExpressions, buffer, acc);
+          }
+          fieldValue = new Invoke(buffer, "readVarUint64", PRIMITIVE_LONG_TYPE);
+        } else if (dispatchId == DispatchId.PRIMITIVE_TAGGED_UINT64
+            || dispatchId == DispatchId.TAGGED_UINT64) {
+          if (!compressStarted) {
+            compressStarted = true;
+            addIncReaderIndexExpr(groupExpressions, buffer, acc);
+          }
+          fieldValue = new Invoke(buffer, "readTaggedUint64", PRIMITIVE_LONG_TYPE);
         } else {
-          throw new IllegalStateException("impossible");
+          throw new IllegalStateException("Unsupported dispatchId: " + dispatchId);
         }
         // `bean` will be replaced by `Reference` to cut-off expr dependency.
         groupExpressions.add(setFieldValue(bean, descriptor, fieldValue));

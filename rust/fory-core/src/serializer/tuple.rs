@@ -21,8 +21,56 @@ use crate::resolver::type_resolver::TypeResolver;
 use crate::serializer::collection::{read_collection_type_info, write_collection_type_info};
 use crate::serializer::skip::skip_any_value;
 use crate::serializer::{ForyDefault, Serializer};
-use crate::types::TypeId;
+use crate::types::{RefMode, TypeId};
 use std::mem;
+
+// Unit type () implementation - represents an empty/unit value with no data
+impl Serializer for () {
+    #[inline(always)]
+    fn fory_write_data(&self, _context: &mut WriteContext) -> Result<(), Error> {
+        // Unit type has no data to write
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn fory_read_data(_context: &mut ReadContext) -> Result<Self, Error> {
+        // Unit type has no data to read
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn fory_reserved_space() -> usize {
+        0
+    }
+
+    #[inline(always)]
+    fn fory_get_type_id(_: &TypeResolver) -> Result<u32, Error> {
+        // Use NONE - unit type has no runtime data, skip can return early
+        Ok(TypeId::NONE as u32)
+    }
+
+    #[inline(always)]
+    fn fory_type_id_dyn(&self, _: &TypeResolver) -> Result<u32, Error> {
+        // Use NONE - unit type has no runtime data, skip can return early
+        Ok(TypeId::NONE as u32)
+    }
+
+    #[inline(always)]
+    fn fory_static_type_id() -> TypeId {
+        // Use NONE - unit type has no runtime data, skip can return early
+        TypeId::NONE
+    }
+
+    #[inline(always)]
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+impl ForyDefault for () {
+    #[inline(always)]
+    fn fory_default() -> Self {}
+}
 
 /// Helper function to write a tuple element based on its type characteristics.
 /// This handles the different serialization strategies for various element types.
@@ -31,7 +79,12 @@ fn write_tuple_element<T: Serializer>(elem: &T, context: &mut WriteContext) -> R
     if T::fory_is_option() || T::fory_is_shared_ref() || T::fory_static_type_id() == TypeId::UNKNOWN
     {
         // For Option, shared references, or unknown static types, use full write with ref tracking
-        elem.fory_write(context, true, false, false)
+        let ref_mode = if T::fory_is_shared_ref() {
+            RefMode::Tracking
+        } else {
+            RefMode::NullOnly
+        };
+        elem.fory_write(context, ref_mode, false, false)
     } else {
         // For concrete types with known static type IDs, directly write data
         elem.fory_write_data(context)
@@ -47,7 +100,12 @@ fn read_tuple_element<T: Serializer + ForyDefault>(
     if T::fory_is_option() || T::fory_is_shared_ref() || T::fory_static_type_id() == TypeId::UNKNOWN
     {
         // For Option, shared references, or unknown static types, use full read with ref tracking
-        T::fory_read(context, true, false)
+        let ref_mode = if T::fory_is_shared_ref() {
+            RefMode::Tracking
+        } else {
+            RefMode::NullOnly
+        };
+        T::fory_read(context, ref_mode, false)
     } else {
         // For concrete types with known static type IDs, directly read data
         T::fory_read_data(context)
@@ -65,7 +123,7 @@ impl<T0: Serializer + ForyDefault> Serializer for (T0,) {
             context.writer.write_varuint32(1);
             let header = 0u8; // No IS_SAME_TYPE flag
             context.writer.write_u8(header);
-            self.0.fory_write(context, true, true, false)?;
+            self.0.fory_write(context, RefMode::NullOnly, true, false)?;
         }
         Ok(())
     }
@@ -87,7 +145,7 @@ impl<T0: Serializer + ForyDefault> Serializer for (T0,) {
             let _header = context.reader.read_u8()?;
 
             let elem0 = if len > 0 {
-                T0::fory_read(context, true, true)?
+                T0::fory_read(context, RefMode::NullOnly, true)?
             } else {
                 T0::fory_default()
             };
@@ -309,9 +367,9 @@ macro_rules! impl_tuple_serializer {
                     context.writer.write_u8(header);
 
                     // Write each element with its type info
-                    self.0.fory_write(context, true, true, false)?;
+                    self.0.fory_write(context, RefMode::NullOnly, true, false)?;
                     $(
-                        fory_tuple_field!(self, $T).fory_write(context, true, true, false)?;
+                        fory_tuple_field!(self, $T).fory_write(context, RefMode::NullOnly, true, false)?;
                     )*
                 }
                 Ok(())
@@ -344,7 +402,7 @@ macro_rules! impl_tuple_serializer {
                     // Read first element or use default
                     let elem0 = if index < len {
                         index += 1;
-                        $T0::fory_read(context, true, true)?
+                        $T0::fory_read(context, RefMode::NullOnly, true)?
                     } else {
                         $T0::fory_default()
                     };
@@ -354,7 +412,7 @@ macro_rules! impl_tuple_serializer {
                         #[allow(non_snake_case)]
                         let $T = if index < len {
                             index += 1;
-                            $T::fory_read(context, true, true)?
+                            $T::fory_read(context, RefMode::NullOnly, true)?
                         } else {
                             $T::fory_default()
                         };

@@ -16,7 +16,8 @@
 // under the License.
 
 use crate::object::{derive_enum, misc, read, write};
-use crate::util::sorted_fields;
+use crate::util::{extract_fields, source_fields};
+use crate::ForyAttrs;
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::Data;
@@ -36,15 +37,28 @@ fn has_existing_default(ast: &syn::DeriveInput, trait_name: &str) -> bool {
     })
 }
 
-pub fn derive_serializer(ast: &syn::DeriveInput, debug_enabled: bool) -> TokenStream {
+pub fn derive_serializer(ast: &syn::DeriveInput, attrs: ForyAttrs) -> TokenStream {
     let name = &ast.ident;
+    let (impl_generics, ty_generics, where_clause) = ast.generics.split_for_impl();
+
+    // Extract type parameter names from generics (e.g., "C", "T", "E")
+    let type_params: std::collections::HashSet<String> = ast
+        .generics
+        .params
+        .iter()
+        .filter_map(|p| match p {
+            syn::GenericParam::Type(tp) => Some(tp.ident.to_string()),
+            _ => None, // Ignore lifetime and const parameters
+        })
+        .collect();
+
     use crate::object::util::{clear_struct_context, set_struct_context};
-    set_struct_context(&name.to_string(), debug_enabled);
+    set_struct_context(&name.to_string(), attrs.debug_enabled, type_params);
 
     // Check if ForyDefault is already derived/implemented
     let has_existing_default = has_existing_default(ast, "ForyDefault");
     let default_impl = if !has_existing_default {
-        generate_default_impl(ast)
+        generate_default_impl(ast, attrs.generate_default)
     } else {
         quote! {}
     };
@@ -59,13 +73,14 @@ pub fn derive_serializer(ast: &syn::DeriveInput, debug_enabled: bool) -> TokenSt
         enum_variant_meta_types,
     ) = match &ast.data {
         syn::Data::Struct(s) => {
-            let fields = sorted_fields(&s.fields);
+            let source_fields = source_fields(&s.fields);
+            let fields = extract_fields(&source_fields);
             (
                 misc::gen_actual_type_id(),
                 misc::gen_get_sorted_field_names(&fields),
-                misc::gen_field_fields_info(&fields),
+                misc::gen_field_fields_info(&source_fields),
                 quote! { Ok(Vec::new()) }, // No variants for structs
-                read::gen_read_compatible(&fields),
+                read::gen_read_compatible(&source_fields),
                 vec![], // No variant meta types for structs
             )
         }
@@ -74,7 +89,7 @@ pub fn derive_serializer(ast: &syn::DeriveInput, debug_enabled: bool) -> TokenSt
             let variant_meta_types =
                 derive_enum::gen_all_variant_meta_types_with_enum_name(name, s);
             (
-                derive_enum::gen_actual_type_id(),
+                derive_enum::gen_actual_type_id(s),
                 quote! { &[] },
                 derive_enum::gen_field_fields_info(s),
                 derive_enum::gen_variants_fields_info(name, s),
@@ -102,14 +117,15 @@ pub fn derive_serializer(ast: &syn::DeriveInput, debug_enabled: bool) -> TokenSt
         static_type_id_ts,
     ) = match &ast.data {
         syn::Data::Struct(s) => {
-            let fields = sorted_fields(&s.fields);
+            let source_fields = source_fields(&s.fields);
+            let fields = extract_fields(&source_fields);
             (
                 write::gen_write(),
-                write::gen_write_data(&fields),
+                write::gen_write_data(&source_fields),
                 write::gen_write_type_info(),
                 read::gen_read(name),
-                read::gen_read_with_type_info(name),
-                read::gen_read_data(&fields),
+                read::gen_read_with_type_info(),
+                read::gen_read_data(&source_fields),
                 read::gen_read_type_info(),
                 write::gen_reserved_space(&fields),
                 quote! { fory_core::TypeId::STRUCT },
@@ -118,13 +134,13 @@ pub fn derive_serializer(ast: &syn::DeriveInput, debug_enabled: bool) -> TokenSt
         syn::Data::Enum(e) => (
             derive_enum::gen_write(e),
             derive_enum::gen_write_data(e),
-            derive_enum::gen_write_type_info(),
+            derive_enum::gen_write_type_info(e),
             derive_enum::gen_read(e),
             derive_enum::gen_read_with_type_info(e),
             derive_enum::gen_read_data(e),
-            derive_enum::gen_read_type_info(),
+            derive_enum::gen_read_type_info(e),
             derive_enum::gen_reserved_space(),
-            quote! { fory_core::TypeId::ENUM },
+            derive_enum::gen_static_type_id(e),
         ),
         syn::Data::Union(_) => {
             panic!("Union is not supported")
@@ -142,14 +158,14 @@ pub fn derive_serializer(ast: &syn::DeriveInput, debug_enabled: bool) -> TokenSt
 
         #default_impl
 
-        impl fory_core::StructSerializer for #name {
+        impl #impl_generics fory_core::StructSerializer for #name #ty_generics #where_clause {
             #[inline(always)]
             fn fory_type_index() -> u32 {
                 #type_idx
             }
 
             #[inline(always)]
-            fn fory_actual_type_id(type_id: u32, register_by_name: bool, compatible: bool) -> u32 {
+            fn fory_actual_type_id(type_id: u32, register_by_name: bool, compatible: bool, xlang: bool) -> u32 {
                 #actual_type_id_ts
             }
 
@@ -171,7 +187,7 @@ pub fn derive_serializer(ast: &syn::DeriveInput, debug_enabled: bool) -> TokenSt
             }
         }
 
-        impl fory_core::Serializer for #name {
+        impl #impl_generics fory_core::Serializer for #name #ty_generics #where_clause {
             #[inline(always)]
             fn fory_get_type_id(type_resolver: &fory_core::resolver::type_resolver::TypeResolver) -> Result<u32, fory_core::error::Error> {
                 type_resolver.get_type_id(&std::any::TypeId::of::<Self>(), #type_idx)
@@ -202,7 +218,7 @@ pub fn derive_serializer(ast: &syn::DeriveInput, debug_enabled: bool) -> TokenSt
             }
 
             #[inline(always)]
-            fn fory_write(&self, context: &mut fory_core::resolver::context::WriteContext, write_ref_info: bool, write_type_info: bool, _: bool) -> Result<(), fory_core::error::Error> {
+            fn fory_write(&self, context: &mut fory_core::resolver::context::WriteContext, ref_mode: fory_core::RefMode, write_type_info: bool, _: bool) -> Result<(), fory_core::error::Error> {
                 #write_ts
             }
 
@@ -217,12 +233,12 @@ pub fn derive_serializer(ast: &syn::DeriveInput, debug_enabled: bool) -> TokenSt
             }
 
             #[inline(always)]
-            fn fory_read(context: &mut fory_core::resolver::context::ReadContext, read_ref_info: bool, read_type_info: bool) -> Result<Self, fory_core::error::Error> {
+            fn fory_read(context: &mut fory_core::resolver::context::ReadContext, ref_mode: fory_core::RefMode, read_type_info: bool) -> Result<Self, fory_core::error::Error> {
                 #read_ts
             }
 
             #[inline(always)]
-            fn fory_read_with_type_info(context: &mut fory_core::resolver::context::ReadContext, read_ref_info: bool, type_info: std::rc::Rc<fory_core::TypeInfo>) -> Result<Self, fory_core::error::Error> {
+            fn fory_read_with_type_info(context: &mut fory_core::resolver::context::ReadContext, ref_mode: fory_core::RefMode, type_info: std::rc::Rc<fory_core::TypeInfo>) -> Result<Self, fory_core::error::Error> {
                 #read_with_type_info_ts
             }
 
@@ -242,79 +258,95 @@ pub fn derive_serializer(ast: &syn::DeriveInput, debug_enabled: bool) -> TokenSt
     code
 }
 
-fn generate_default_impl(ast: &syn::DeriveInput) -> proc_macro2::TokenStream {
+fn generate_default_impl(
+    ast: &syn::DeriveInput,
+    generate_default: bool,
+) -> proc_macro2::TokenStream {
     let name = &ast.ident;
-    let has_existing_default = has_existing_default(ast, "Default");
+    let (impl_generics, ty_generics, where_clause) = ast.generics.split_for_impl();
+
+    // By default, we don't generate Default impl to avoid conflicts.
+    // Only generate if generate_default is true AND there's no existing Default.
+    let should_generate_default = generate_default && !has_existing_default(ast, "Default");
 
     match &ast.data {
         Data::Struct(s) => {
-            let fields = sorted_fields(&s.fields);
+            let source_fields = source_fields(&s.fields);
+            let is_tuple_struct = source_fields
+                .first()
+                .map(|sf| sf.is_tuple_struct)
+                .unwrap_or(false);
 
             use super::util::{
                 classify_trait_object_field, create_wrapper_types_arc, create_wrapper_types_rc,
                 StructField,
             };
 
-            let field_inits = fields.iter().map(|field| {
-                let ident = &field.ident;
-                let ty = &field.ty;
-
-                match classify_trait_object_field(ty) {
-                    StructField::RcDyn(trait_name) => {
-                        let types = create_wrapper_types_rc(&trait_name);
-                        let wrapper_ty = types.wrapper_ty;
-                        let trait_ident = types.trait_ident;
-                        quote! {
-                            #ident: {
-                                let wrapper = #wrapper_ty::default();
-                                std::rc::Rc::<dyn #trait_ident>::from(wrapper)
+            // Generate field initializations with original index for sorting
+            let mut indexed: Vec<_> = source_fields
+                .iter()
+                .map(|sf| {
+                    let ty = &sf.field.ty;
+                    let value = match classify_trait_object_field(ty) {
+                        StructField::RcDyn(trait_name) => {
+                            let types = create_wrapper_types_rc(&trait_name);
+                            let wrapper_ty = types.wrapper_ty;
+                            let trait_ident = types.trait_ident;
+                            quote! {
+                                {
+                                    let wrapper = #wrapper_ty::default();
+                                    std::rc::Rc::<dyn #trait_ident>::from(wrapper)
+                                }
                             }
                         }
-                    }
-                    StructField::ArcDyn(trait_name) => {
-                        let types = create_wrapper_types_arc(&trait_name);
-                        let wrapper_ty = types.wrapper_ty;
-                        let trait_ident = types.trait_ident;
-                        quote! {
-                            #ident: {
-                                let wrapper = #wrapper_ty::default();
-                                std::sync::Arc::<dyn #trait_ident>::from(wrapper)
+                        StructField::ArcDyn(trait_name) => {
+                            let types = create_wrapper_types_arc(&trait_name);
+                            let wrapper_ty = types.wrapper_ty;
+                            let trait_ident = types.trait_ident;
+                            quote! {
+                                {
+                                    let wrapper = #wrapper_ty::default();
+                                    std::sync::Arc::<dyn #trait_ident>::from(wrapper)
+                                }
                             }
                         }
-                    }
-                    StructField::Forward => {
-                        quote! {
-                            #ident: <#ty as fory_core::ForyDefault>::fory_default()
+                        _ => {
+                            quote! { <#ty as fory_core::ForyDefault>::fory_default() }
                         }
-                    }
-                    _ => {
-                        quote! {
-                            #ident: <#ty as fory_core::ForyDefault>::fory_default()
-                        }
-                    }
-                }
-            });
+                    };
+                    (sf.original_index, sf.field_init(value))
+                })
+                .collect();
 
-            if has_existing_default {
+            // For tuple structs, sort by original index
+            if is_tuple_struct {
+                indexed.sort_by_key(|(idx, _)| *idx);
+            }
+
+            let field_inits: Vec<_> = indexed.into_iter().map(|(_, ts)| ts).collect();
+            let self_construction = crate::util::self_construction(is_tuple_struct, &field_inits);
+
+            if should_generate_default {
+                // User requested Default generation via #[fory(generate_default)]
                 quote! {
-                   impl fory_core::ForyDefault for #name {
+                    impl #impl_generics fory_core::ForyDefault for #name #ty_generics #where_clause {
                         fn fory_default() -> Self {
-                            Self::default()
+                            #self_construction
+                        }
+                    }
+                    impl #impl_generics std::default::Default for #name #ty_generics #where_clause {
+                        fn default() -> Self {
+                            Self::fory_default()
                         }
                     }
                 }
             } else {
+                // Default case: only generate ForyDefault, not Default
+                // This avoids conflicts with existing Default implementations
                 quote! {
-                    impl fory_core::ForyDefault for #name {
+                   impl #impl_generics fory_core::ForyDefault for #name #ty_generics #where_clause {
                         fn fory_default() -> Self {
-                            Self {
-                                #(#field_inits),*
-                            }
-                        }
-                    }
-                    impl std::default::Default for #name {
-                        fn default() -> Self {
-                            Self::fory_default()
+                            #self_construction
                         }
                     }
                 }
@@ -327,54 +359,67 @@ fn generate_default_impl(ast: &syn::DeriveInput) -> proc_macro2::TokenStream {
                 .iter()
                 .any(|v| v.attrs.iter().any(|attr| attr.path().is_ident("default")));
 
-            // For C-like enums, implement Default by returning the first variant
-            // Only if there's no #[default] attribute (which means Default is being derived)
-            if !has_default_variant {
-                if let Some(first_variant) = e.variants.first() {
-                    let variant_ident = &first_variant.ident;
-                    let field_defaults = match &first_variant.fields {
-                        syn::Fields::Unit => quote! {},
-                        syn::Fields::Unnamed(fields) => {
-                            let defaults =
-                                (0..fields.unnamed.len()).map(|_| quote! { Default::default() });
-                            quote! { (#(#defaults),*) }
-                        }
-                        syn::Fields::Named(fields) => {
-                            let field_idents = fields.named.iter().map(|f| &f.ident);
-                            let defaults =
-                                fields.named.iter().map(|_| quote! { Default::default() });
-                            quote! { { #(#field_idents: #defaults),* } }
-                        }
-                    };
+            // Check if user has #[derive(Default)] on the enum
+            let has_derived_default = has_existing_default(ast, "Default");
+
+            if let Some(first_variant) = e.variants.first() {
+                let variant_ident = &first_variant.ident;
+                let field_defaults = match &first_variant.fields {
+                    syn::Fields::Unit => quote! {},
+                    syn::Fields::Unnamed(fields) => {
+                        let defaults = fields.unnamed.iter().map(|f| {
+                            let ty = &f.ty;
+                            quote! { <#ty as fory_core::ForyDefault>::fory_default() }
+                        });
+                        quote! { (#(#defaults),*) }
+                    }
+                    syn::Fields::Named(fields) => {
+                        let field_inits = fields.named.iter().map(|f| {
+                            let ident = &f.ident;
+                            let ty = &f.ty;
+                            quote! { #ident: <#ty as fory_core::ForyDefault>::fory_default() }
+                        });
+                        quote! { { #(#field_inits),* } }
+                    }
+                };
+
+                if has_derived_default || has_default_variant {
+                    // User has #[derive(Default)] or #[default] attribute
+                    // Only generate ForyDefault that delegates to Default
                     quote! {
-                        impl fory_core::ForyDefault for #name {
+                        impl #impl_generics fory_core::ForyDefault for #name #ty_generics #where_clause {
+                            fn fory_default() -> Self {
+                                Self::default()
+                            }
+                        }
+                    }
+                } else if should_generate_default {
+                    // User requested Default generation via #[fory(generate_default)]
+                    quote! {
+                        impl #impl_generics fory_core::ForyDefault for #name #ty_generics #where_clause {
                             fn fory_default() -> Self {
                                 Self::#variant_ident #field_defaults
                             }
                         }
 
-                        impl std::default::Default for #name {
+                        impl #impl_generics std::default::Default for #name #ty_generics #where_clause {
                             fn default() -> Self {
                                 Self::#variant_ident #field_defaults
                             }
                         }
                     }
                 } else {
-                    // impl fory_core::ForyDefault for #name {
-                    //     fn fory_default() -> Self {
-                    //         panic!("No unit-like variants found in enum {}", stringify!(#name));
-                    //     }
-                    // }
-                    quote! {}
-                }
-            } else {
-                quote! {
-                    impl fory_core::ForyDefault for #name {
-                        fn fory_default() -> Self {
-                            Self::default()
+                    // Default case: only generate ForyDefault, not Default
+                    quote! {
+                        impl #impl_generics fory_core::ForyDefault for #name #ty_generics #where_clause {
+                            fn fory_default() -> Self {
+                                Self::#variant_ident #field_defaults
+                            }
                         }
                     }
                 }
+            } else {
+                quote! {}
             }
         }
         Data::Union(_) => quote! {},

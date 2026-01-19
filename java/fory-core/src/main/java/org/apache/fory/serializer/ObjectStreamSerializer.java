@@ -19,8 +19,6 @@
 
 package org.apache.fory.serializer;
 
-import static org.apache.fory.resolver.ClassResolver.NO_CLASS_ID;
-
 import java.io.Externalizable;
 import java.io.IOException;
 import java.io.InvalidObjectException;
@@ -34,31 +32,32 @@ import java.io.ObjectStreamField;
 import java.io.Serializable;
 import java.io.UnsupportedEncodingException;
 import java.lang.invoke.MethodHandles;
+import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.List;
 import java.util.TreeMap;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import org.apache.fory.Fory;
 import org.apache.fory.builder.CodecUtils;
-import org.apache.fory.builder.Generated;
+import org.apache.fory.builder.LayerMarkerClassGenerator;
 import org.apache.fory.collection.ObjectArray;
 import org.apache.fory.collection.ObjectIntMap;
 import org.apache.fory.logging.Logger;
 import org.apache.fory.logging.LoggerFactory;
 import org.apache.fory.memory.MemoryBuffer;
 import org.apache.fory.memory.Platform;
+import org.apache.fory.meta.ClassDef;
+import org.apache.fory.reflect.ObjectCreator;
+import org.apache.fory.reflect.ObjectCreators;
 import org.apache.fory.reflect.ReflectionUtils;
-import org.apache.fory.resolver.ClassInfo;
-import org.apache.fory.resolver.FieldResolver;
-import org.apache.fory.resolver.FieldResolver.ClassField;
+import org.apache.fory.type.Descriptor;
 import org.apache.fory.util.ExceptionUtils;
 import org.apache.fory.util.GraalvmSupport;
 import org.apache.fory.util.Preconditions;
@@ -80,10 +79,61 @@ import org.apache.fory.util.unsafe._JDKAccess;
 public class ObjectStreamSerializer extends AbstractObjectSerializer {
   private static final Logger LOG = LoggerFactory.getLogger(ObjectStreamSerializer.class);
 
-  private final SlotsInfo[] slotsInfos;
+  private final SlotInfo[] slotsInfos;
+
+  /**
+   * Interface for slot information used in ObjectStreamSerializer. This allows both full SlotsInfo
+   * and minimal MinimalSlotsInfo implementations.
+   */
+  private interface SlotInfo {
+    Class<?> getCls();
+
+    StreamClassInfo getStreamClassInfo();
+
+    MetaSharedLayerSerializerBase getSlotsSerializer();
+
+    ForyObjectOutputStream getObjectOutputStream();
+
+    ForyObjectInputStream getObjectInputStream();
+
+    ObjectArray getFieldPool();
+
+    ObjectIntMap<String> getFieldIndexMap();
+
+    int getNumPutFields();
+
+    /** Get field types for putFields/writeFields support, in index order. */
+    Class<?>[] getPutFieldTypes();
+  }
+
+  /**
+   * Safe wrapper for ObjectStreamClass.lookup that handles GraalVM native image limitations. In
+   * GraalVM native image, ObjectStreamClass.lookup may fail for certain classes like Throwable due
+   * to missing SerializationConstructorAccessor. This method catches such errors and returns null,
+   * allowing the serializer to use alternative approaches like Unsafe.allocateInstance.
+   */
+  private static ObjectStreamClass safeObjectStreamClassLookup(Class<?> type) {
+    if (GraalvmSupport.IN_GRAALVM_NATIVE_IMAGE) {
+      try {
+        return ObjectStreamClass.lookup(type);
+      } catch (Throwable e) {
+        // In GraalVM native image, ObjectStreamClass.lookup may fail for certain classes
+        // due to missing SerializationConstructorAccessor. We catch this and return null
+        // to allow fallback to Unsafe-based object creation.
+        LOG.warn(
+            "ObjectStreamClass.lookup failed for {} in GraalVM native image: {}",
+            type.getName(),
+            e.getMessage());
+        return null;
+      }
+    } else {
+      // In regular JVM, use normal lookup
+      return ObjectStreamClass.lookup(type);
+    }
+  }
 
   public ObjectStreamSerializer(Fory fory, Class<?> type) {
-    super(fory, type);
+    super(fory, type, createObjectCreatorForGraalVM(type));
     if (!Serializable.class.isAssignableFrom(type)) {
       throw new IllegalArgumentException(
           String.format("Class %s should implement %s.", type, Serializable.class));
@@ -96,7 +146,7 @@ public class ObjectStreamSerializer extends AbstractObjectSerializer {
         Externalizable.class.getName());
     // stream serializer may be data serializer of ReplaceResolver serializer.
     fory.getClassResolver().setSerializerIfAbsent(type, this);
-    List<SlotsInfo> slotsInfoList = new ArrayList<>();
+    List<SlotInfo> slotsInfoList = new ArrayList<>();
     Class<?> end = type;
     // locate closest non-serializable superclass
     while (end != null && Serializable.class.isAssignableFrom(end)) {
@@ -107,23 +157,37 @@ public class ObjectStreamSerializer extends AbstractObjectSerializer {
       type = type.getSuperclass();
     }
     Collections.reverse(slotsInfoList);
-    slotsInfos = slotsInfoList.toArray(new SlotsInfo[0]);
+    slotsInfos = slotsInfoList.toArray(new SlotInfo[0]);
+  }
+
+  /**
+   * Creates an appropriate ObjectCreator for GraalVM native image environment. In GraalVM, we
+   * prefer UnsafeObjectCreator to avoid serialization constructor issues.
+   */
+  private static <T> ObjectCreator<T> createObjectCreatorForGraalVM(Class<T> type) {
+    if (GraalvmSupport.IN_GRAALVM_NATIVE_IMAGE) {
+      // In GraalVM native image, use Unsafe to avoid serialization constructor issues
+      return new ObjectCreators.UnsafeObjectCreator<>(type);
+    } else {
+      // In regular JVM, use the standard object creator
+      return ObjectCreators.getObjectCreator(type);
+    }
   }
 
   @Override
   public void write(MemoryBuffer buffer, Object value) {
     buffer.writeInt16((short) slotsInfos.length);
     try {
-      for (SlotsInfo slotsInfo : slotsInfos) {
+      for (SlotInfo slotsInfo : slotsInfos) {
         // create a classinfo to avoid null class bytes when class id is a
         // replacement id.
-        classResolver.writeClassInternal(buffer, slotsInfo.classInfo.getCls());
-        StreamClassInfo streamClassInfo = slotsInfo.streamClassInfo;
+        classResolver.writeClassInternal(buffer, slotsInfo.getCls());
+        StreamClassInfo streamClassInfo = slotsInfo.getStreamClassInfo();
         Method writeObjectMethod = streamClassInfo.writeObjectMethod;
         if (writeObjectMethod == null) {
-          slotsInfo.slotsSerializer.write(buffer, value);
+          slotsInfo.getSlotsSerializer().write(buffer, value);
         } else {
-          ForyObjectOutputStream objectOutputStream = slotsInfo.objectOutputStream;
+          ForyObjectOutputStream objectOutputStream = slotsInfo.getObjectOutputStream();
           Object oldObject = objectOutputStream.targetObject;
           MemoryBuffer oldBuffer = objectOutputStream.buffer;
           ForyObjectOutputStream.PutFieldImpl oldPutField = objectOutputStream.curPut;
@@ -161,9 +225,9 @@ public class ObjectStreamSerializer extends AbstractObjectSerializer {
       TreeMap<Integer, ObjectInputValidation> callbacks = new TreeMap<>(Collections.reverseOrder());
       for (int i = 0; i < numClasses; i++) {
         Class<?> currentClass = classResolver.readClassInternal(buffer);
-        SlotsInfo slotsInfo = slotsInfos[slotIndex++];
-        StreamClassInfo streamClassInfo = slotsInfo.streamClassInfo;
-        while (currentClass != slotsInfo.cls) {
+        SlotInfo slotsInfo = slotsInfos[slotIndex++];
+        StreamClassInfo streamClassInfo = slotsInfo.getStreamClassInfo();
+        while (currentClass != slotsInfo.getCls()) {
           // the receiver's version extends classes that are not extended by the sender's version.
           Method readObjectNoData = streamClassInfo.readObjectNoData;
           if (readObjectNoData != null) {
@@ -177,14 +241,14 @@ public class ObjectStreamSerializer extends AbstractObjectSerializer {
         }
         Method readObjectMethod = streamClassInfo.readObjectMethod;
         if (readObjectMethod == null) {
-          slotsInfo.slotsSerializer.readAndSetFields(buffer, obj);
+          slotsInfo.getSlotsSerializer().readAndSetFields(buffer, obj);
         } else {
-          ForyObjectInputStream objectInputStream = slotsInfo.objectInputStream;
+          ForyObjectInputStream objectInputStream = slotsInfo.getObjectInputStream();
           MemoryBuffer oldBuffer = objectInputStream.buffer;
           Object oldObject = objectInputStream.targetObject;
           ForyObjectInputStream.GetFieldImpl oldGetField = objectInputStream.getField;
           ForyObjectInputStream.GetFieldImpl getField =
-              (ForyObjectInputStream.GetFieldImpl) slotsInfo.getFieldPool.popOrNull();
+              (ForyObjectInputStream.GetFieldImpl) slotsInfo.getFieldPool().popOrNull();
           if (getField == null) {
             getField = new ForyObjectInputStream.GetFieldImpl(slotsInfo);
           }
@@ -205,7 +269,7 @@ public class ObjectStreamSerializer extends AbstractObjectSerializer {
             objectInputStream.buffer = oldBuffer;
             objectInputStream.targetObject = oldObject;
             objectInputStream.getField = oldGetField;
-            slotsInfo.getFieldPool.add(getField);
+            slotsInfo.getFieldPool().add(getField);
             objectInputStream.callbacks = null;
             Arrays.fill(getField.vals, ForyObjectInputStream.NO_VALUE_STUB);
           }
@@ -239,6 +303,37 @@ public class ObjectStreamSerializer extends AbstractObjectSerializer {
         e);
   }
 
+  /**
+   * Ensures serializers are generated for all field types of a class during GraalVM build time.
+   * This is necessary because when a new Fory instance is created at runtime in GraalVM native
+   * images, it needs to reuse the serializers that were generated at build time.
+   *
+   * @param fory the Fory instance
+   * @param layerClassDef the ClassDef for this layer
+   * @param type the target class type
+   */
+  private static void ensureFieldSerializersGenerated(
+      Fory fory, ClassDef layerClassDef, Class<?> type) {
+    Collection<Descriptor> descriptors =
+        layerClassDef.getDescriptors(fory.getClassResolver(), type);
+    for (Descriptor descriptor : descriptors) {
+      Class<?> fieldType = descriptor.getRawType();
+      if (fieldType != null && !fieldType.isPrimitive()) {
+        try {
+          // Trigger serializer generation for this field type
+          fory.getClassResolver().getSerializerClass(fieldType);
+        } catch (Exception e) {
+          // Ignore errors - some types may not need serializers or may be handled specially
+          ExceptionUtils.ignore(e);
+        }
+      }
+    }
+  }
+
+  /**
+   * Information about a class's stream methods (writeObject, readObject, readObjectNoData) and
+   * their optimized MethodHandle equivalents for fast invocation.
+   */
   private static class StreamClassInfo {
     private final Method writeObjectMethod;
     private final Method readObjectMethod;
@@ -249,15 +344,23 @@ public class ObjectStreamSerializer extends AbstractObjectSerializer {
 
     private StreamClassInfo(Class<?> type) {
       // ObjectStreamClass.lookup has cache inside, invocation cost won't be big.
-      ObjectStreamClass objectStreamClass = ObjectStreamClass.lookup(type);
+      ObjectStreamClass objectStreamClass = safeObjectStreamClassLookup(type);
       // In JDK17, set private jdk method accessible will fail by default, use ObjectStreamClass
       // instead, since it set accessible.
-      writeObjectMethod =
-          (Method) ReflectionUtils.getObjectFieldValue(objectStreamClass, "writeObjectMethod");
-      readObjectMethod =
-          (Method) ReflectionUtils.getObjectFieldValue(objectStreamClass, "readObjectMethod");
-      readObjectNoData =
-          (Method) ReflectionUtils.getObjectFieldValue(objectStreamClass, "readObjectNoData");
+      Method writeMethod = null;
+      Method readMethod = null;
+      Method noDataMethod = null;
+      if (objectStreamClass != null) {
+        writeMethod =
+            (Method) ReflectionUtils.getObjectFieldValue(objectStreamClass, "writeObjectMethod");
+        readMethod =
+            (Method) ReflectionUtils.getObjectFieldValue(objectStreamClass, "readObjectMethod");
+        noDataMethod =
+            (Method) ReflectionUtils.getObjectFieldValue(objectStreamClass, "readObjectNoData");
+      }
+      this.writeObjectMethod = writeMethod;
+      this.readObjectMethod = readMethod;
+      this.readObjectNoData = noDataMethod;
       MethodHandles.Lookup lookup = _JDKAccess._trustedLookup(type);
       BiConsumer writeObjectFunc = null, readObjectFunc = null;
       Consumer readObjectNoDataFunc = null;
@@ -290,76 +393,95 @@ public class ObjectStreamSerializer extends AbstractObjectSerializer {
         }
       };
 
-  private static class SlotsInfo {
+  /**
+   * Full implementation of SlotInfo for handling object stream serialization. This class manages
+   * all the details of serializing and deserializing a single class in the class hierarchy using
+   * Java's ObjectInputStream/ObjectOutputStream protocol.
+   */
+  private static class SlotsInfo implements SlotInfo {
     private final Class<?> cls;
-    private final ClassInfo classInfo;
     private final StreamClassInfo streamClassInfo;
     // mark non-final for async-jit to update it to jit-serializer.
-    private CompatibleSerializerBase slotsSerializer;
+    private MetaSharedLayerSerializerBase slotsSerializer;
     private final ObjectIntMap<String> fieldIndexMap;
-    private final FieldResolver putFieldsResolver;
-    private final CompatibleSerializer compatibleStreamSerializer;
+    private final int numPutFields;
+    private final Class<?>[] putFieldTypes;
     private final ForyObjectOutputStream objectOutputStream;
     private final ForyObjectInputStream objectInputStream;
     private final ObjectArray getFieldPool;
 
     public SlotsInfo(Fory fory, Class<?> type) {
       this.cls = type;
-      classInfo = fory.getClassResolver().newClassInfo(type, null, NO_CLASS_ID);
-      ObjectStreamClass objectStreamClass = ObjectStreamClass.lookup(type);
+      ObjectStreamClass objectStreamClass = safeObjectStreamClassLookup(type);
       streamClassInfo = STREAM_CLASS_INFO_CACHE.get(type);
-      // `putFields/writeFields` will convert to fields value to be written by
-      // `CompatibleSerializer`,
-      // since `put` values may not exist in current class, which means container generic type are
-      // unavailable.
-      // (`serialPersistentFields` field can't provide generics.)
-      // So we need to mark all container fields type to `Object` to avoid reader deserialize data
-      // using field generic types.
-      Class<? extends Serializer> sc = CompatibleSerializer.class;
-      FieldResolver fieldResolver = FieldResolver.of(fory, type, false, true);
-      if (fory.getConfig().isCodeGenEnabled()
-          && CodegenSerializer.supportCodegenForJavaSerialization(cls)) {
-        sc =
-            fory.getJITContext()
-                .registerSerializerJITCallback(
-                    () -> CompatibleSerializer.class,
-                    () ->
-                        CodecUtils.loadOrGenCompatibleCodecClass(
-                            cls,
-                            fory,
-                            fieldResolver,
-                            Generated.GeneratedCompatibleSerializer.class),
-                    c ->
-                        this.slotsSerializer =
-                            (CompatibleSerializerBase) Serializers.newSerializer(fory, type, c));
+
+      // Build single-layer ClassDef (resolveParent=false)
+      ClassDef layerClassDef = fory.getClassResolver().getTypeDef(type, false);
+      // Generate marker class for this layer. Use 0 as layer index since each class
+      // has its own SlotsInfo, and the (class, 0) pair is unique for each class.
+      Class<?> layerMarkerClass = LayerMarkerClassGenerator.getOrCreate(fory, type, 0);
+
+      // Create interpreter-mode serializer first
+      MetaSharedLayerSerializer interpreterSerializer =
+          new MetaSharedLayerSerializer(fory, type, layerClassDef, layerMarkerClass);
+      this.slotsSerializer = interpreterSerializer;
+
+      // Register JIT callback to replace with JIT serializer when ready
+      if (fory.getConfig().isCodeGenEnabled()) {
+        SlotsInfo thisInfo = this;
+        fory.getJITContext()
+            .registerSerializerJITCallback(
+                () -> MetaSharedLayerSerializer.class,
+                () ->
+                    CodecUtils.loadOrGenMetaSharedLayerCodecClass(
+                        type, fory, layerClassDef, layerMarkerClass),
+                c ->
+                    thisInfo.slotsSerializer =
+                        (MetaSharedLayerSerializerBase) Serializers.newSerializer(fory, type, c));
       }
+
+      // In GraalVM, ensure serializers are generated for all field types at build time
+      // so they're available when new Fory instances are created at runtime
       if (GraalvmSupport.isGraalBuildtime()) {
-        // trigger serializer constructor method handle generate.
-        Serializers.newSerializer(fory, type, sc);
+        ensureFieldSerializersGenerated(fory, layerClassDef, type);
       }
-      if (sc == CompatibleSerializer.class || GraalvmSupport.isGraalBuildtime()) {
-        // skip init generated serializer at graalvm build time
-        this.slotsSerializer = new CompatibleSerializer(fory, type, fieldResolver);
-      } else {
-        this.slotsSerializer = (CompatibleSerializerBase) Serializers.newSerializer(fory, type, sc);
-      }
+
       fieldIndexMap = new ObjectIntMap<>(4, 0.4f);
-      List<ClassField> allFields = new ArrayList<>();
-      for (ObjectStreamField serialField : objectStreamClass.getFields()) {
-        allFields.add(new ClassField(serialField.getName(), serialField.getType(), cls));
-      }
-      if (streamClassInfo.writeObjectMethod != null || streamClassInfo.readObjectMethod != null) {
-        putFieldsResolver = new FieldResolver(fory, cls, true, allFields, new HashSet<>());
-        AtomicInteger idx = new AtomicInteger(0);
-        for (FieldResolver.FieldInfo fieldInfo : putFieldsResolver.getAllFieldsList()) {
-          fieldIndexMap.put(fieldInfo.getName(), idx.getAndIncrement());
+      // Build field list from ObjectStreamClass or class fields
+      List<PutFieldInfo> putFieldInfos = new ArrayList<>();
+      if (objectStreamClass != null) {
+        for (ObjectStreamField serialField : objectStreamClass.getFields()) {
+          putFieldInfos.add(new PutFieldInfo(serialField.getName(), serialField.getType(), type));
         }
-        compatibleStreamSerializer = new CompatibleSerializer(fory, cls, putFieldsResolver);
       } else {
-        putFieldsResolver = null;
-        compatibleStreamSerializer = null;
+        // Fallback when ObjectStreamClass is not available
+        Collection<Descriptor> descriptors =
+            layerClassDef.getDescriptors(fory.getClassResolver(), type);
+        for (Descriptor descriptor : descriptors) {
+          Field field = descriptor.getField();
+          if (field != null) {
+            putFieldInfos.add(new PutFieldInfo(field.getName(), field.getType(), type));
+          }
+        }
       }
-      if (streamClassInfo.writeObjectMethod != null) {
+
+      if (streamClassInfo != null
+          && (streamClassInfo.writeObjectMethod != null
+              || streamClassInfo.readObjectMethod != null)) {
+        this.numPutFields = putFieldInfos.size();
+        this.putFieldTypes = new Class<?>[numPutFields];
+        AtomicInteger idx = new AtomicInteger(0);
+        for (PutFieldInfo fieldInfo : putFieldInfos) {
+          int index = idx.getAndIncrement();
+          fieldIndexMap.put(fieldInfo.name, index);
+          putFieldTypes[index] = fieldInfo.type;
+        }
+      } else {
+        this.numPutFields = 0;
+        this.putFieldTypes = null;
+      }
+
+      if (streamClassInfo != null && streamClassInfo.writeObjectMethod != null) {
         try {
           objectOutputStream = new ForyObjectOutputStream(this);
         } catch (IOException e) {
@@ -369,7 +491,7 @@ public class ObjectStreamSerializer extends AbstractObjectSerializer {
       } else {
         objectOutputStream = null;
       }
-      if (streamClassInfo.readObjectMethod != null) {
+      if (streamClassInfo != null && streamClassInfo.readObjectMethod != null) {
         try {
           objectInputStream = new ForyObjectInputStream(this);
         } catch (IOException e) {
@@ -383,8 +505,66 @@ public class ObjectStreamSerializer extends AbstractObjectSerializer {
     }
 
     @Override
+    public Class<?> getCls() {
+      return cls;
+    }
+
+    @Override
+    public StreamClassInfo getStreamClassInfo() {
+      return streamClassInfo;
+    }
+
+    @Override
+    public MetaSharedLayerSerializerBase getSlotsSerializer() {
+      return slotsSerializer;
+    }
+
+    @Override
+    public ForyObjectOutputStream getObjectOutputStream() {
+      return objectOutputStream;
+    }
+
+    @Override
+    public ForyObjectInputStream getObjectInputStream() {
+      return objectInputStream;
+    }
+
+    @Override
+    public ObjectArray getFieldPool() {
+      return getFieldPool;
+    }
+
+    @Override
+    public ObjectIntMap<String> getFieldIndexMap() {
+      return fieldIndexMap;
+    }
+
+    @Override
+    public int getNumPutFields() {
+      return numPutFields;
+    }
+
+    @Override
+    public Class<?>[] getPutFieldTypes() {
+      return putFieldTypes;
+    }
+
+    @Override
     public String toString() {
       return "SlotsInfo{" + "cls=" + cls + '}';
+    }
+  }
+
+  /** Simple field info for putFields/writeFields support. */
+  private static class PutFieldInfo {
+    final String name;
+    final Class<?> type;
+    final Class<?> declaringClass;
+
+    PutFieldInfo(String name, Class<?> type, Class<?> declaringClass) {
+      this.name = name;
+      this.type = type;
+      this.declaringClass = declaringClass;
     }
   }
 
@@ -398,15 +578,15 @@ public class ObjectStreamSerializer extends AbstractObjectSerializer {
   private static class ForyObjectOutputStream extends ObjectOutputStream {
     private final Fory fory;
     private final boolean compressInt;
-    private final SlotsInfo slotsInfo;
+    private final SlotInfo slotsInfo;
     private MemoryBuffer buffer;
     private Object targetObject;
     private boolean fieldsWritten;
 
-    protected ForyObjectOutputStream(SlotsInfo slotsInfo) throws IOException {
+    protected ForyObjectOutputStream(SlotInfo slotsInfo) throws IOException {
       super();
       this.slotsInfo = slotsInfo;
-      this.fory = slotsInfo.slotsSerializer.fory;
+      this.fory = slotsInfo.getSlotsSerializer().fory;
       this.compressInt = fory.compressInt();
     }
 
@@ -426,23 +606,22 @@ public class ObjectStreamSerializer extends AbstractObjectSerializer {
      *
      * @see <a
      *     href="https://docs.oracle.com/en/java/javase/18/docs/specs/serialization/input.html#the-objectinputstream.getfield-class">ObjectInputStream.GetField</a>
-     * @see ConcurrentHashMap
+     * @see java.util.concurrent.ConcurrentHashMap
      */
-    // See `defaultReadObject` in ConcurrentHashMap#readObject skip fields written by
-    // `writeFields()`.
     private class PutFieldImpl extends PutField {
       private final Object[] vals;
 
       PutFieldImpl() {
-        vals = new Object[slotsInfo.putFieldsResolver.getNumFields()];
+        vals = new Object[slotsInfo.getNumPutFields()];
       }
 
       private void putValue(String name, Object val) {
-        int index = slotsInfo.fieldIndexMap.get(name, -1);
+        int index = slotsInfo.getFieldIndexMap().get(name, -1);
         if (index == -1) {
           throw new IllegalArgumentException(
               String.format(
-                  "Field name %s not exist in class %s", name, slotsInfo.slotsSerializer.type));
+                  "Field name %s not exist in class %s",
+                  name, slotsInfo.getSlotsSerializer().type));
         }
         vals[index] = val;
       }
@@ -495,7 +674,7 @@ public class ObjectStreamSerializer extends AbstractObjectSerializer {
       @Deprecated
       @Override
       public void write(ObjectOutput out) throws IOException {
-        Class cls = slotsInfo.slotsSerializer.type;
+        Class cls = slotsInfo.getSlotsSerializer().getType();
         throwUnsupportedEncodingException(cls);
       }
     }
@@ -524,11 +703,45 @@ public class ObjectStreamSerializer extends AbstractObjectSerializer {
       if (curPut == null) {
         throw new NotActiveException("no current PutField object");
       }
-      slotsInfo.compatibleStreamSerializer.writeFieldsValues(buffer, curPut.vals);
+      // Write field values directly by their types
+      Class<?>[] fieldTypes = slotsInfo.getPutFieldTypes();
+      Object[] vals = curPut.vals;
+      for (int i = 0; i < vals.length; i++) {
+        Class<?> fieldType = fieldTypes[i];
+        Object value = vals[i];
+        writePutFieldValue(buffer, fieldType, value);
+      }
       Arrays.fill(curPut.vals, null);
       putFieldsCache.add(curPut);
       this.curPut = null;
       fieldsWritten = true;
+    }
+
+    private void writePutFieldValue(MemoryBuffer buffer, Class<?> fieldType, Object value) {
+      if (fieldType == boolean.class) {
+        buffer.writeBoolean(value == null ? false : (Boolean) value);
+      } else if (fieldType == byte.class) {
+        buffer.writeByte(value == null ? (byte) 0 : (Byte) value);
+      } else if (fieldType == char.class) {
+        buffer.writeChar(value == null ? (char) 0 : (Character) value);
+      } else if (fieldType == short.class) {
+        buffer.writeInt16(value == null ? (short) 0 : (Short) value);
+      } else if (fieldType == int.class) {
+        if (compressInt) {
+          buffer.writeVarInt32(value == null ? 0 : (Integer) value);
+        } else {
+          buffer.writeInt32(value == null ? 0 : (Integer) value);
+        }
+      } else if (fieldType == long.class) {
+        fory.writeInt64(buffer, value == null ? 0L : (Long) value);
+      } else if (fieldType == float.class) {
+        buffer.writeFloat32(value == null ? 0f : (Float) value);
+      } else if (fieldType == double.class) {
+        buffer.writeFloat64(value == null ? 0d : (Double) value);
+      } else {
+        // Object reference
+        fory.writeRef(buffer, value);
+      }
     }
 
     @Override
@@ -536,13 +749,30 @@ public class ObjectStreamSerializer extends AbstractObjectSerializer {
       if (fieldsWritten) {
         throw new NotActiveException("not in writeObject invocation or fields already written");
       }
-      slotsInfo.slotsSerializer.write(buffer, targetObject);
+      // Write field values in the same format as writeFields (for compatibility with readFields)
+      Class<?>[] fieldTypes = slotsInfo.getPutFieldTypes();
+      if (fieldTypes != null && fieldTypes.length > 0) {
+        // Write using putField format (for compatibility with readFields)
+        ObjectIntMap<String> fieldIndexMap = slotsInfo.getFieldIndexMap();
+        MetaSharedLayerSerializerBase slotsSerializer = slotsInfo.getSlotsSerializer();
+        Object[] vals =
+            slotsSerializer.getFieldValuesForPutFields(
+                targetObject, fieldIndexMap, fieldTypes.length);
+        for (int i = 0; i < vals.length; i++) {
+          Class<?> fieldType = fieldTypes[i];
+          Object value = vals[i];
+          writePutFieldValue(buffer, fieldType, value);
+        }
+      } else {
+        // No custom writeObject/readObject, use normal serialization
+        slotsInfo.getSlotsSerializer().write(buffer, targetObject);
+      }
       fieldsWritten = true;
     }
 
     @Override
     public void reset() throws IOException {
-      Class cls = slotsInfo.slotsSerializer.getType();
+      Class cls = slotsInfo.getSlotsSerializer().getType();
       // Fory won't invoke this method, throw exception if the user invokes it.
       throwUnsupportedEncodingException(cls);
     }
@@ -659,7 +889,7 @@ public class ObjectStreamSerializer extends AbstractObjectSerializer {
 
     @Override
     public void useProtocolVersion(int version) throws IOException {
-      Class cls = slotsInfo.cls;
+      Class cls = slotsInfo.getCls();
       throwUnsupportedEncodingException(cls);
     }
 
@@ -683,15 +913,15 @@ public class ObjectStreamSerializer extends AbstractObjectSerializer {
   private static class ForyObjectInputStream extends ObjectInputStream {
     private final Fory fory;
     private final boolean compressInt;
-    private final SlotsInfo slotsInfo;
+    private final SlotInfo slotsInfo;
     private MemoryBuffer buffer;
     private Object targetObject;
     private GetFieldImpl getField;
     private boolean fieldsRead;
     private TreeMap<Integer, ObjectInputValidation> callbacks;
 
-    protected ForyObjectInputStream(SlotsInfo slotsInfo) throws IOException {
-      this.fory = slotsInfo.slotsSerializer.fory;
+    protected ForyObjectInputStream(SlotInfo slotsInfo) throws IOException {
+      this.fory = slotsInfo.getSlotsSerializer().fory;
       this.compressInt = fory.compressInt();
       this.slotsInfo = slotsInfo;
     }
@@ -708,24 +938,28 @@ public class ObjectStreamSerializer extends AbstractObjectSerializer {
 
     private static final Object NO_VALUE_STUB = new Object();
 
+    /**
+     * Implementation of ObjectInputStream.GetField for reading fields that may not exist in the
+     * current class version.
+     */
     private static class GetFieldImpl extends GetField {
-      private final SlotsInfo slotsInfo;
+      private final SlotInfo slotsInfo;
       private final Object[] vals;
 
-      GetFieldImpl(SlotsInfo slotsInfo) {
+      GetFieldImpl(SlotInfo slotsInfo) {
         this.slotsInfo = slotsInfo;
-        vals = new Object[slotsInfo.putFieldsResolver.getNumFields()];
+        vals = new Object[slotsInfo.getNumPutFields()];
         Arrays.fill(vals, NO_VALUE_STUB);
       }
 
       @Override
       public ObjectStreamClass getObjectStreamClass() {
-        return ObjectStreamClass.lookup(slotsInfo.cls);
+        return safeObjectStreamClassLookup(slotsInfo.getCls());
       }
 
       @Override
       public boolean defaulted(String name) throws IOException {
-        int index = slotsInfo.fieldIndexMap.get(name, -1);
+        int index = slotsInfo.getFieldIndexMap().get(name, -1);
         checkFieldExists(name, index);
         return vals[index] == NO_VALUE_STUB;
       }
@@ -812,7 +1046,7 @@ public class ObjectStreamSerializer extends AbstractObjectSerializer {
       }
 
       private Object getFieldValue(String name) {
-        int index = slotsInfo.fieldIndexMap.get(name, -1);
+        int index = slotsInfo.getFieldIndexMap().get(name, -1);
         checkFieldExists(name, index);
         return vals[index];
       }
@@ -821,7 +1055,8 @@ public class ObjectStreamSerializer extends AbstractObjectSerializer {
         if (index == -1) {
           throw new IllegalArgumentException(
               String.format(
-                  "Field name %s not exist in class %s", name, slotsInfo.slotsSerializer.type));
+                  "Field name %s not exist in class %s",
+                  name, slotsInfo.getSlotsSerializer().getType()));
         }
       }
     }
@@ -833,9 +1068,41 @@ public class ObjectStreamSerializer extends AbstractObjectSerializer {
       if (fieldsRead) {
         throw new NotActiveException("not in readObject invocation or fields already read");
       }
-      slotsInfo.compatibleStreamSerializer.readFields(buffer, getField.vals);
+      // Read field values directly by their types
+      Class<?>[] fieldTypes = slotsInfo.getPutFieldTypes();
+      Object[] vals = getField.vals;
+      for (int i = 0; i < vals.length; i++) {
+        vals[i] = readPutFieldValue(buffer, fieldTypes[i]);
+      }
       fieldsRead = true;
       return getField;
+    }
+
+    private Object readPutFieldValue(MemoryBuffer buffer, Class<?> fieldType) {
+      if (fieldType == boolean.class) {
+        return buffer.readBoolean();
+      } else if (fieldType == byte.class) {
+        return buffer.readByte();
+      } else if (fieldType == char.class) {
+        return buffer.readChar();
+      } else if (fieldType == short.class) {
+        return buffer.readInt16();
+      } else if (fieldType == int.class) {
+        if (compressInt) {
+          return buffer.readVarInt32();
+        } else {
+          return buffer.readInt32();
+        }
+      } else if (fieldType == long.class) {
+        return fory.readInt64(buffer);
+      } else if (fieldType == float.class) {
+        return buffer.readFloat32();
+      } else if (fieldType == double.class) {
+        return buffer.readFloat64();
+      } else {
+        // Object reference
+        return fory.readRef(buffer);
+      }
     }
 
     @Override
@@ -843,7 +1110,22 @@ public class ObjectStreamSerializer extends AbstractObjectSerializer {
       if (fieldsRead) {
         throw new NotActiveException("not in readObject invocation or fields already read");
       }
-      slotsInfo.slotsSerializer.readAndSetFields(buffer, targetObject);
+      // Read field values in the same format as writeFields, but set to actual class fields
+      Class<?>[] fieldTypes = slotsInfo.getPutFieldTypes();
+      if (fieldTypes != null && fieldTypes.length > 0) {
+        // Read using putField format (for compatibility with writeFields)
+        ObjectIntMap<String> fieldIndexMap = slotsInfo.getFieldIndexMap();
+        Object[] vals = new Object[fieldTypes.length];
+        for (int i = 0; i < vals.length; i++) {
+          vals[i] = readPutFieldValue(buffer, fieldTypes[i]);
+        }
+        // Now set matching fields on the target object
+        MetaSharedLayerSerializerBase slotsSerializer = slotsInfo.getSlotsSerializer();
+        slotsSerializer.setFieldValuesFromPutFields(targetObject, fieldIndexMap, vals);
+      } else {
+        // No custom writeObject/readObject, use normal serialization
+        slotsInfo.getSlotsSerializer().readAndSetFields(buffer, targetObject);
+      }
       fieldsRead = true;
     }
 

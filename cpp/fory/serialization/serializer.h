@@ -21,6 +21,7 @@
 
 #include "fory/meta/type_traits.h"
 #include "fory/serialization/context.h"
+#include "fory/serialization/ref_mode.h"
 #include "fory/serialization/ref_resolver.h"
 #include "fory/serialization/serializer_traits.h"
 #include "fory/type/type.h"
@@ -34,84 +35,45 @@ namespace fory {
 namespace serialization {
 
 // ============================================================================
+// Error Handling Macros for Serialization
+// ============================================================================
+
+/// Return early if the error pointer indicates an error.
+/// Use this macro when reading struct fields with the Error* pattern.
+/// The macro checks the error state and returns an Unexpected with the error.
+///
+/// Example usage:
+/// ```cpp
+/// Error error;
+/// int32_t value = buffer.ReadVarInt32(error);
+/// FORY_RETURN_IF_SERDE_ERROR(error);
+/// // Use value...
+/// ```
+#define FORY_RETURN_IF_SERDE_ERROR(error_ptr)                                  \
+  do {                                                                         \
+    if (FORY_PREDICT_FALSE(!(error_ptr)->ok())) {                              \
+      return ::fory::Unexpected(std::move(*(error_ptr)));                      \
+    }                                                                          \
+  } while (0)
+
+// ============================================================================
 // Protocol Constants
 // ============================================================================
 
-/// Fory protocol magic number (0x62d4)
-constexpr uint16_t MAGIC_NUMBER = 0x62d4;
-
 /// Language identifiers
+/// Must match Java's Language enum ordinal values
 enum class Language : uint8_t {
-  JAVA = 0,
-  PYTHON = 1,
-  CPP = 2,
-  GO = 3,
-  JAVASCRIPT = 4,
-  RUST = 5,
-  DART = 6,
-  SCALA = 7,
-  KOTLIN = 8,
+  XLANG = 0,
+  JAVA = 1,
+  PYTHON = 2,
+  CPP = 3,
+  GO = 4,
+  JAVASCRIPT = 5,
+  RUST = 6,
+  DART = 7,
+  SCALA = 8,
+  KOTLIN = 9,
 };
-
-// ============================================================================
-// Header Writing
-// ============================================================================
-
-/// Write Fory protocol header to buffer.
-///
-/// Header format:
-/// ```
-/// |  2 bytes  |    4 bits   | 1 bit | 1 bit | 1 bit  | 1 bit |  1 byte  |
-/// optional 4 bytes |
-/// +-----------+-------------+-------+-------+--------+-------+----------+------------------+
-/// |   magic   |  reserved   |  oob  | xlang | endian | null  | language |
-/// meta start offset|
-/// ```
-///
-/// @param buffer Output buffer
-/// @param is_null Whether object is null
-/// @param is_xlang Whether to use xlang format
-/// @param is_little_endian Whether data is little endian
-/// @param is_oob Whether out-of-band data is present
-/// @param language Language identifier
-inline void write_header(Buffer &buffer, bool is_null, bool is_xlang,
-                         bool is_little_endian, bool is_oob,
-                         Language language) {
-  // Ensure buffer has space for header (4 bytes minimum)
-  buffer.Grow(4);
-  uint32_t start_pos = buffer.writer_index();
-
-  // Write magic number (2 bytes, little endian)
-  buffer.UnsafePut<uint16_t>(start_pos, MAGIC_NUMBER);
-
-  // Build flags byte
-  uint8_t flags = 0;
-  if (is_null) {
-    flags |= (1 << 0); // bit 0: null flag
-  }
-  if (is_little_endian) {
-    flags |= (1 << 1); // bit 1: endian flag
-  }
-  if (is_xlang) {
-    flags |= (1 << 2); // bit 2: xlang flag
-  }
-  if (is_oob) {
-    flags |= (1 << 3); // bit 3: oob flag
-  }
-  // bits 4-7: reserved (set to 0)
-
-  // Write flags byte
-  buffer.UnsafePutByte(start_pos + 2, flags);
-
-  // Write language byte
-  buffer.UnsafePutByte(start_pos + 3, static_cast<uint8_t>(language));
-
-  // Update writer index
-  buffer.IncreaseWriterIndex(4);
-
-  // Note: Meta start offset would be written here if meta share mode is
-  // enabled For now, we skip it as meta share mode is not implemented
-}
 
 /// Detect if system is little endian
 inline bool is_little_endian_system() {
@@ -125,9 +87,7 @@ inline bool is_little_endian_system() {
 
 /// Fory header information
 struct HeaderInfo {
-  uint16_t magic;
   bool is_null;
-  bool is_little_endian;
   bool is_xlang;
   bool is_oob;
   Language language;
@@ -139,36 +99,35 @@ struct HeaderInfo {
 /// @param buffer Input buffer
 /// @return Header information or error
 inline Result<HeaderInfo, Error> read_header(Buffer &buffer) {
-  // Check minimum header size (4 bytes)
-  if (buffer.reader_index() + 4 > buffer.size()) {
+  // Check minimum header size (1 byte: flags)
+  if (buffer.reader_index() + 1 > buffer.size()) {
     return Unexpected(
-        Error::buffer_out_of_bound(buffer.reader_index(), 4, buffer.size()));
+        Error::buffer_out_of_bound(buffer.reader_index(), 1, buffer.size()));
   }
 
   HeaderInfo info;
   uint32_t start_pos = buffer.reader_index();
 
-  // Read magic number
-  info.magic = buffer.Get<uint16_t>(start_pos);
-  if (info.magic != MAGIC_NUMBER) {
-    return Unexpected(
-        Error::invalid_data("Invalid magic number: expected 0x62d4, got 0x" +
-                            std::to_string(info.magic)));
-  }
-
   // Read flags byte
-  uint8_t flags = buffer.GetByteAs<uint8_t>(start_pos + 2);
+  uint8_t flags = buffer.GetByteAs<uint8_t>(start_pos);
   info.is_null = (flags & (1 << 0)) != 0;
-  info.is_little_endian = (flags & (1 << 1)) != 0;
-  info.is_xlang = (flags & (1 << 2)) != 0;
-  info.is_oob = (flags & (1 << 3)) != 0;
+  info.is_xlang = (flags & (1 << 1)) != 0;
+  info.is_oob = (flags & (1 << 2)) != 0;
 
-  // Read language byte
-  uint8_t lang_byte = buffer.GetByteAs<uint8_t>(start_pos + 3);
-  info.language = static_cast<Language>(lang_byte);
+  // Update reader index (1 byte consumed: flags)
+  buffer.IncreaseReaderIndex(1);
 
-  // Update reader index
-  buffer.IncreaseReaderIndex(4);
+  // Language byte after header in xlang mode
+  if (info.is_xlang) {
+    Error error;
+    uint8_t lang_byte = buffer.ReadUint8(error);
+    if (FORY_PREDICT_FALSE(!error.ok())) {
+      return Unexpected(std::move(error));
+    }
+    info.language = static_cast<Language>(lang_byte);
+  } else {
+    info.language = Language::JAVA;
+  }
 
   // Note: Meta start offset would be read here if present
   info.meta_start_offset = 0;
@@ -180,43 +139,68 @@ inline Result<HeaderInfo, Error> read_header(Buffer &buffer) {
 // Reference Metadata Helpers
 // ============================================================================
 
-/// Write a NOT_NULL reference flag when reference metadata is requested.
-///
-/// According to the xlang specification, when reference tracking is disabled
-/// but reference metadata is requested, serializers must still emit the
-/// NOT_NULL flag so deserializers can consume the ref prefix consistently.
-inline void write_not_null_ref_flag(WriteContext &ctx, bool write_ref) {
-  if (write_ref) {
+/// Write ref flag for NullOnly mode (not null case).
+/// Fast path: primitives, strings, time types use this.
+FORY_ALWAYS_INLINE void write_not_null_ref_flag(WriteContext &ctx,
+                                                RefMode ref_mode) {
+  if (ref_mode != RefMode::None) {
     ctx.write_int8(NOT_NULL_VALUE_FLAG);
   }
 }
 
-/// Consume a reference flag from the read context when reference metadata is
-/// expected.
-///
-/// @param ctx Read context
-/// @param read_ref Whether the caller requested reference metadata
-/// @return True if the upcoming value payload is present, false if it was null
-inline Result<bool, Error> consume_ref_flag(ReadContext &ctx, bool read_ref) {
-  if (!read_ref) {
+/// Read ref flag for NullOnly mode.
+/// Returns true if value present, false if null or error.
+/// Fast path: primitives, strings, time types use this.
+FORY_ALWAYS_INLINE bool read_null_only_flag(ReadContext &ctx,
+                                            RefMode ref_mode) {
+  if (ref_mode == RefMode::None) {
     return true;
   }
-  FORY_TRY(flag, ctx.read_int8());
+  int8_t flag = ctx.read_int8(ctx.error());
+  if (FORY_PREDICT_FALSE(ctx.has_error())) {
+    return false;
+  }
   if (flag == NULL_FLAG) {
     return false;
   }
+  // NotNullValue or RefValue both mean "continue reading" for non-trackable
+  // types
   if (flag == NOT_NULL_VALUE_FLAG || flag == REF_VALUE_FLAG) {
     return true;
   }
   if (flag == REF_FLAG) {
-    FORY_TRY(ref_id, ctx.read_varuint32());
-    return Unexpected(Error::invalid_ref(
+    uint32_t ref_id = ctx.read_varuint32(ctx.error());
+    if (FORY_PREDICT_FALSE(ctx.has_error())) {
+      return false;
+    }
+    ctx.set_error(Error::invalid_ref(
         "Unexpected reference flag for non-referencable value, ref id: " +
         std::to_string(ref_id)));
+    return false;
   }
 
-  return Unexpected(Error::invalid_data(
-      "Unknown reference flag: " + std::to_string(static_cast<int>(flag))));
+  ctx.set_error(Error::invalid_data("Unknown reference flag: " +
+                                    std::to_string(static_cast<int>(flag))));
+  return false;
+}
+
+// ============================================================================
+// Type Info Helpers
+// ============================================================================
+
+/// Check if a type ID matches, allowing struct variants to match STRUCT.
+inline bool type_id_matches(uint32_t actual, uint32_t expected) {
+  if (actual == expected)
+    return true;
+  uint32_t low_actual = actual & 0xffu;
+  // For structs, allow STRUCT/COMPATIBLE_STRUCT/NAMED_*/etc.
+  if (expected == static_cast<uint32_t>(TypeId::STRUCT)) {
+    return low_actual == static_cast<uint32_t>(TypeId::STRUCT) ||
+           low_actual == static_cast<uint32_t>(TypeId::COMPATIBLE_STRUCT) ||
+           low_actual == static_cast<uint32_t>(TypeId::NAMED_STRUCT) ||
+           low_actual == static_cast<uint32_t>(TypeId::NAMED_COMPATIBLE_STRUCT);
+  }
+  return low_actual == expected;
 }
 
 // ============================================================================
@@ -241,3 +225,5 @@ template <typename T, typename Enable> struct Serializer {
 // Include all specialized serializers
 #include "fory/serialization/basic_serializer.h"
 #include "fory/serialization/enum_serializer.h"
+#include "fory/serialization/string_serializer.h"
+#include "fory/serialization/unsigned_serializer.h"

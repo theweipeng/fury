@@ -20,29 +20,20 @@
 package org.apache.fory.meta;
 
 import static org.apache.fory.meta.ClassDefEncoder.buildFields;
-import static org.apache.fory.type.TypeUtils.COLLECTION_TYPE;
-import static org.apache.fory.type.TypeUtils.MAP_TYPE;
-import static org.apache.fory.type.TypeUtils.collectionOf;
-import static org.apache.fory.type.TypeUtils.mapOf;
 
 import java.io.ObjectStreamClass;
 import java.io.Serializable;
-import java.lang.reflect.Array;
 import java.lang.reflect.Field;
-import java.lang.reflect.Member;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.SortedMap;
 import java.util.stream.Collectors;
 import org.apache.fory.Fory;
 import org.apache.fory.builder.MetaSharedCodecBuilder;
-import org.apache.fory.collection.Tuple2;
 import org.apache.fory.config.CompatibleMode;
 import org.apache.fory.config.ForyBuilder;
 import org.apache.fory.logging.Logger;
@@ -50,21 +41,11 @@ import org.apache.fory.logging.LoggerFactory;
 import org.apache.fory.memory.MemoryBuffer;
 import org.apache.fory.memory.Platform;
 import org.apache.fory.reflect.ReflectionUtils;
-import org.apache.fory.reflect.TypeRef;
-import org.apache.fory.resolver.ClassInfo;
 import org.apache.fory.resolver.ClassResolver;
 import org.apache.fory.resolver.TypeResolver;
-import org.apache.fory.resolver.XtypeResolver;
-import org.apache.fory.serializer.CompatibleSerializer;
-import org.apache.fory.serializer.NonexistentClass;
-import org.apache.fory.serializer.converter.FieldConverter;
-import org.apache.fory.serializer.converter.FieldConverters;
+import org.apache.fory.serializer.MetaSharedSerializer;
 import org.apache.fory.type.Descriptor;
-import org.apache.fory.type.FinalObjectTypeStub;
-import org.apache.fory.type.GenericType;
-import org.apache.fory.type.TypeUtils;
-import org.apache.fory.type.Types;
-import org.apache.fory.util.Preconditions;
+import org.apache.fory.util.StringUtils;
 
 /**
  * Serializable class definition to be sent to other process. So if sender peer and receiver peer
@@ -79,17 +60,18 @@ import org.apache.fory.util.Preconditions;
  *
  * @see MetaSharedCodecBuilder
  * @see CompatibleMode#COMPATIBLE
- * @see CompatibleSerializer
+ * @see MetaSharedSerializer
  * @see ForyBuilder#withMetaShare
  * @see ReflectionUtils#getFieldOffset
  */
 public class ClassDef implements Serializable {
+  private static final Logger LOG = LoggerFactory.getLogger(ClassDef.class);
+
   static final int COMPRESS_META_FLAG = 0b1 << 13;
   static final int HAS_FIELDS_META_FLAG = 0b1 << 12;
   // low 12 bits
   static final int META_SIZE_MASKS = 0xfff;
   static final int NUM_HASH_BITS = 50;
-  private static final Logger LOG = LoggerFactory.getLogger(ClassDef.class);
 
   // TODO use field offset to sort field, which will hit l1-cache more. Since
   // `objectFieldOffset` is not part of jvm-specification, it may change between different jdk
@@ -212,6 +194,108 @@ public class ClassDef implements Serializable {
         + '}';
   }
 
+  /**
+   * Compute diff between this (decoded/remote) ClassDef and a local ClassDef. Returns a string
+   * describing the differences, or null if they are identical.
+   */
+  public String computeDiff(ClassDef localDef) {
+    if (localDef == null) {
+      return "Local TypeDef is null (type not registered locally)";
+    }
+    StringBuilder diff = new StringBuilder();
+
+    // Compare class names
+    if (!Objects.equals(this.classSpec.entireClassName, localDef.classSpec.entireClassName)) {
+      diff.append("  className: remote=")
+          .append(this.classSpec.entireClassName)
+          .append(", local=")
+          .append(localDef.classSpec.entireClassName)
+          .append("\n");
+    }
+
+    // Build field maps for comparison
+    Map<String, FieldInfo> remoteFields = new HashMap<>();
+    for (FieldInfo fi : this.fieldsInfo) {
+      remoteFields.put(fi.getFieldName(), fi);
+    }
+    Map<String, FieldInfo> localFields = new HashMap<>();
+    for (FieldInfo fi : localDef.fieldsInfo) {
+      localFields.put(fi.getFieldName(), fi);
+    }
+
+    // Find fields only in remote
+    for (String fieldName : remoteFields.keySet()) {
+      if (!localFields.containsKey(fieldName)) {
+        diff.append("  field '")
+            .append(fieldName)
+            .append("': only in remote, type=")
+            .append(remoteFields.get(fieldName).getFieldType())
+            .append("\n");
+      }
+    }
+
+    // Find fields only in local
+    for (String fieldName : localFields.keySet()) {
+      if (!remoteFields.containsKey(fieldName)) {
+        diff.append("  field '")
+            .append(fieldName)
+            .append("': only in local, type=")
+            .append(localFields.get(fieldName).getFieldType())
+            .append("\n");
+      }
+    }
+
+    // Compare common fields
+    for (String fieldName : remoteFields.keySet()) {
+      if (localFields.containsKey(fieldName)) {
+        FieldInfo remoteField = remoteFields.get(fieldName);
+        FieldInfo localField = localFields.get(fieldName);
+        if (!Objects.equals(remoteField.getFieldType(), localField.getFieldType())) {
+          diff.append("  field '")
+              .append(fieldName)
+              .append("': type mismatch, remote=")
+              .append(remoteField.getFieldType())
+              .append(", local=")
+              .append(localField.getFieldType())
+              .append("\n");
+        }
+      }
+    }
+
+    // Compare field order
+    if (this.fieldsInfo.size() == localDef.fieldsInfo.size()) {
+      boolean orderDifferent = false;
+      for (int i = 0; i < this.fieldsInfo.size(); i++) {
+        if (!Objects.equals(
+            this.fieldsInfo.get(i).getFieldName(), localDef.fieldsInfo.get(i).getFieldName())) {
+          orderDifferent = true;
+          break;
+        }
+      }
+      if (orderDifferent) {
+        diff.append("  field order differs:\n");
+        diff.append("    remote: [");
+        for (int i = 0; i < this.fieldsInfo.size(); i++) {
+          if (i > 0) {
+            diff.append(", ");
+          }
+          diff.append(this.fieldsInfo.get(i).getFieldName());
+        }
+        diff.append("]\n");
+        diff.append("    local:  [");
+        for (int i = 0; i < localDef.fieldsInfo.size(); i++) {
+          if (i > 0) {
+            diff.append(", ");
+          }
+          diff.append(localDef.fieldsInfo.get(i).getFieldName());
+        }
+        diff.append("]\n");
+      }
+    }
+
+    return diff.length() > 0 ? diff.toString() : null;
+  }
+
   /** Write class definition to buffer. */
   public void writeClassDef(MemoryBuffer buffer) {
     buffer.writeBytes(encoded, 0, encoded.length);
@@ -243,806 +327,57 @@ public class ClassDef implements Serializable {
    */
   public List<Descriptor> getDescriptors(TypeResolver resolver, Class<?> cls) {
     if (descriptors == null) {
-      SortedMap<Member, Descriptor> allDescriptorsMap =
-          resolver.getFory().getClassResolver().getAllDescriptorsMap(cls, true);
+      // getFieldDescriptors already handles ref tracking computation and cache update
+      Collection<Descriptor> fieldDescriptors = resolver.getFieldDescriptors(cls, true);
       Map<String, Descriptor> descriptorsMap = new HashMap<>();
-      for (Map.Entry<Member, Descriptor> e : allDescriptorsMap.entrySet()) {
-        if (descriptorsMap.put(
-                e.getKey().getDeclaringClass().getName() + "." + e.getKey().getName(), e.getValue())
-            != null) {
+      Map<Short, Descriptor> fieldIdToDescriptorMap = new HashMap<>();
+
+      for (Descriptor desc : fieldDescriptors) {
+        String fullName = desc.getDeclaringClass() + "." + desc.getName();
+        if (descriptorsMap.put(fullName, desc) != null) {
           throw new IllegalStateException("Duplicate key");
+        }
+        // If the field has @ForyField annotation with field ID, index by field ID
+        if (desc.getForyField() != null) {
+          int fieldId = desc.getForyField().id();
+          if (fieldId >= 0) {
+            if (fieldIdToDescriptorMap.containsKey((short) fieldId)) {
+              throw new IllegalArgumentException(
+                  "Duplicate field id "
+                      + fieldId
+                      + " for field "
+                      + desc.getName()
+                      + " in class "
+                      + cls.getName());
+            }
+            fieldIdToDescriptorMap.put((short) fieldId, desc);
+          }
         }
       }
       descriptors = new ArrayList<>(fieldsInfo.size());
+      boolean isXlang = resolver.getFory().isCrossLanguage();
       for (FieldInfo fieldInfo : fieldsInfo) {
-        Descriptor descriptor =
-            descriptorsMap.get(fieldInfo.getDefinedClass() + "." + fieldInfo.getFieldName());
-        Descriptor newDesc = fieldInfo.toDescriptor(resolver, descriptor);
-        Class<?> rawType = newDesc.getRawType();
-        FieldType fieldType = fieldInfo.getFieldType();
-        if (fieldType instanceof RegisteredFieldType) {
-          String typeAlias = String.valueOf(((RegisteredFieldType) fieldType).getClassId());
-          if (!typeAlias.equals(newDesc.getTypeName())) {
-            newDesc = newDesc.copyWithTypeName(typeAlias);
-          }
-        }
-        if (descriptor != null) {
-          // Make DescriptorGrouper have consistent order whether field exist or not
-          // fory builtin types skip
-          if (useFieldType(rawType, descriptor)) {
-            descriptor = descriptor.copyWithTypeName(newDesc.getTypeName());
-            descriptors.add(descriptor);
-          } else {
-            FieldConverter<?> converter =
-                FieldConverters.getConverter(rawType, descriptor.getField());
-            if (converter != null) {
-              newDesc.setFieldConverter(converter);
-            }
-            descriptors.add(newDesc);
-          }
+        Descriptor descriptor;
+        // Try to match by field ID first if the FieldInfo has an ID
+        if (fieldInfo.hasFieldId()) {
+          descriptor = fieldIdToDescriptorMap.get(fieldInfo.getFieldId());
         } else {
-          descriptors.add(newDesc);
+          String fieldName = fieldInfo.getFieldName();
+          String definedClass = fieldInfo.getDefinedClass();
+          // First try camelCase field name (decoded name from TypeDefDecoder)
+          descriptor = descriptorsMap.get(definedClass + "." + fieldName);
+          // If not found and in xlang mode, also try snake_case field name
+          // This supports users who use snake_case field names in Java for xlang compatibility
+          if (descriptor == null && isXlang) {
+            String snakeCaseName = StringUtils.lowerCamelToLowerUnderscore(fieldName);
+            descriptor = descriptorsMap.get(definedClass + "." + snakeCaseName);
+          }
         }
+        Descriptor newDesc = fieldInfo.toDescriptor(resolver, descriptor);
+        descriptors.add(newDesc);
       }
     }
     return descriptors;
-  }
-
-  /** Returns true if can use current field type. */
-  private static boolean useFieldType(Class<?> parsedType, Descriptor descriptor) {
-    if (parsedType.isEnum()
-        || parsedType.isAssignableFrom(descriptor.getRawType())
-        || parsedType == FinalObjectTypeStub.class) {
-      return true;
-    }
-    if (parsedType.isArray()) {
-      Tuple2<Class<?>, Integer> info = TypeUtils.getArrayComponentInfo(parsedType);
-      Field field = descriptor.getField();
-      if (!field.getType().isArray() || TypeUtils.getArrayDimensions(field.getType()) != info.f1) {
-        return false;
-      }
-      return info.f0 == FinalObjectTypeStub.class || info.f0.isEnum();
-    }
-    return false;
-  }
-
-  /**
-   * FieldInfo contains all necessary info of a field to execute serialization/deserialization
-   * logic.
-   */
-  public static class FieldInfo implements Serializable {
-    /** where are current field defined. */
-    private final String definedClass;
-
-    /** Name of a field. */
-    private final String fieldName;
-
-    private final FieldType fieldType;
-
-    FieldInfo(String definedClass, String fieldName, FieldType fieldType) {
-      this.definedClass = definedClass;
-      this.fieldName = fieldName;
-      this.fieldType = fieldType;
-    }
-
-    /** Returns classname of current field defined. */
-    public String getDefinedClass() {
-      return definedClass;
-    }
-
-    /** Returns name of current field. */
-    public String getFieldName() {
-      return fieldName;
-    }
-
-    /** Returns whether field is annotated by an unsigned int id. */
-    public boolean hasTag() {
-      return false;
-    }
-
-    /** Returns annotated tag id for the field. */
-    public short getTag() {
-      return -1;
-    }
-
-    /** Returns type of current field. */
-    public FieldType getFieldType() {
-      return fieldType;
-    }
-
-    /**
-     * Convert this field into a {@link Descriptor}, the corresponding {@link Field} field will be
-     * null. Don't invoke this method if class does have <code>fieldName</code> field. In such case,
-     * reflection should be used to get the descriptor.
-     */
-    Descriptor toDescriptor(TypeResolver resolver, Descriptor descriptor) {
-      TypeRef<?> declared = descriptor != null ? descriptor.getTypeRef() : null;
-      TypeRef<?> typeRef = fieldType.toTypeToken(resolver, declared);
-      if (descriptor != null) {
-        if (typeRef.equals(declared)) {
-          return descriptor;
-        } else {
-          descriptor.copyWithTypeName(typeRef.getType().getTypeName());
-        }
-      }
-      // This field doesn't exist in peer class, so any legal modifier will be OK.
-      int stubModifiers = ReflectionUtils.getField(getClass(), "fieldName").getModifiers();
-      return new Descriptor(typeRef, fieldName, stubModifiers, definedClass);
-    }
-
-    @Override
-    public boolean equals(Object o) {
-      if (this == o) {
-        return true;
-      }
-      if (o == null || getClass() != o.getClass()) {
-        return false;
-      }
-      FieldInfo fieldInfo = (FieldInfo) o;
-      return Objects.equals(definedClass, fieldInfo.definedClass)
-          && Objects.equals(fieldName, fieldInfo.fieldName)
-          && Objects.equals(fieldType, fieldInfo.fieldType);
-    }
-
-    @Override
-    public int hashCode() {
-      return Objects.hash(definedClass, fieldName, fieldType);
-    }
-
-    @Override
-    public String toString() {
-      return "FieldInfo{"
-          + "definedClass='"
-          + definedClass
-          + '\''
-          + ", fieldName='"
-          + fieldName
-          + '\''
-          + ", fieldType="
-          + fieldType
-          + '}';
-    }
-  }
-
-  public abstract static class FieldType implements Serializable {
-    protected final int xtypeId;
-    protected final boolean isMonomorphic;
-    protected final boolean nullable;
-    protected final boolean trackingRef;
-
-    public FieldType(int xtypeId, boolean isMonomorphic, boolean nullable, boolean trackingRef) {
-      this.isMonomorphic = isMonomorphic;
-      this.trackingRef = trackingRef;
-      this.nullable = nullable;
-      this.xtypeId = xtypeId;
-    }
-
-    public boolean isMonomorphic() {
-      return isMonomorphic;
-    }
-
-    public boolean trackingRef() {
-      return trackingRef;
-    }
-
-    public boolean nullable() {
-      return nullable;
-    }
-
-    /**
-     * Convert a serializable field type to type token. If field type is a generic type with
-     * generics, the generics will be built up recursively. The final leaf object type will be built
-     * from class id or class stub.
-     *
-     * @see FinalObjectTypeStub
-     */
-    public abstract TypeRef<?> toTypeToken(TypeResolver classResolver, TypeRef<?> declared);
-
-    @Override
-    public boolean equals(Object o) {
-      if (o == null || getClass() != o.getClass()) {
-        return false;
-      }
-      FieldType fieldType = (FieldType) o;
-      return isMonomorphic == fieldType.isMonomorphic && trackingRef == fieldType.trackingRef;
-    }
-
-    @Override
-    public int hashCode() {
-      return Objects.hash(isMonomorphic, trackingRef);
-    }
-
-    /** Write field type info. */
-    public void write(MemoryBuffer buffer, boolean writeHeader) {
-      byte header = (byte) ((isMonomorphic ? 1 : 0) << 1);
-      // header of nested generic fields in collection/map will be written independently
-      header |= (byte) (trackingRef ? 1 : 0);
-      if (this instanceof RegisteredFieldType) {
-        short classId = ((RegisteredFieldType) this).getClassId();
-        buffer.writeVarUint32Small7(writeHeader ? ((5 + classId) << 2) | header : 5 + classId);
-      } else if (this instanceof EnumFieldType) {
-        buffer.writeVarUint32Small7(writeHeader ? ((4) << 2) | header : 4);
-      } else if (this instanceof ArrayFieldType) {
-        ArrayFieldType arrayFieldType = (ArrayFieldType) this;
-        buffer.writeVarUint32Small7(writeHeader ? ((3) << 2) | header : 3);
-        buffer.writeVarUint32Small7(arrayFieldType.getDimensions());
-        (arrayFieldType).getComponentType().write(buffer);
-      } else if (this instanceof CollectionFieldType) {
-        buffer.writeVarUint32Small7(writeHeader ? ((2) << 2) | header : 2);
-        // TODO remove it when new collection deserialization jit finished.
-        ((CollectionFieldType) this).getElementType().write(buffer);
-      } else if (this instanceof MapFieldType) {
-        buffer.writeVarUint32Small7(writeHeader ? ((1) << 2) | header : 1);
-        // TODO remove it when new map deserialization jit finished.
-        MapFieldType mapFieldType = (MapFieldType) this;
-        mapFieldType.getKeyType().write(buffer);
-        mapFieldType.getValueType().write(buffer);
-      } else {
-        Preconditions.checkArgument(this instanceof ObjectFieldType);
-        buffer.writeVarUint32Small7(writeHeader ? header : 0);
-      }
-    }
-
-    public void write(MemoryBuffer buffer) {
-      write(buffer, true);
-    }
-
-    public static FieldType read(MemoryBuffer buffer, TypeResolver resolver) {
-      int header = buffer.readVarUint32Small7();
-      boolean isMonomorphic = (header & 0b10) != 0;
-      boolean trackingRef = (header & 0b1) != 0;
-      return read(buffer, resolver, isMonomorphic, trackingRef, header >>> 2);
-    }
-
-    /** Read field type info. */
-    public static FieldType read(
-        MemoryBuffer buffer,
-        TypeResolver resolver,
-        boolean isFinal,
-        boolean trackingRef,
-        int typeId) {
-      if (typeId == 0) {
-        return new ObjectFieldType(-1, isFinal, true, trackingRef);
-      } else if (typeId == 1) {
-        return new MapFieldType(
-            -1, isFinal, true, trackingRef, read(buffer, resolver), read(buffer, resolver));
-      } else if (typeId == 2) {
-        return new CollectionFieldType(-1, isFinal, true, trackingRef, read(buffer, resolver));
-      } else if (typeId == 3) {
-        int dims = buffer.readVarUint32Small7();
-        return new ArrayFieldType(isFinal, trackingRef, read(buffer, resolver), dims);
-      } else if (typeId == 4) {
-        return new EnumFieldType(true, -1);
-      } else {
-        boolean nullable = ((ClassResolver) resolver).isPrimitive((short) typeId);
-        return new RegisteredFieldType(isFinal, nullable, trackingRef, (typeId - 5));
-      }
-    }
-
-    public final void xwrite(MemoryBuffer buffer, boolean writeFlags) {
-      int xtypeId = this.xtypeId;
-      if (writeFlags) {
-        xtypeId = (xtypeId << 2);
-        if (nullable) {
-          xtypeId |= 0b10;
-        }
-        if (trackingRef) {
-          xtypeId |= 0b1;
-        }
-      }
-      buffer.writeVarUint32Small7(xtypeId);
-      switch (xtypeId) {
-        case Types.LIST:
-          ((CollectionFieldType) this).getElementType().xwrite(buffer, true);
-          break;
-        case Types.MAP:
-          MapFieldType mapFieldType = (MapFieldType) this;
-          mapFieldType.getKeyType().xwrite(buffer, true);
-          mapFieldType.getValueType().xwrite(buffer, true);
-          break;
-        default:
-          {
-          }
-      }
-    }
-
-    public static FieldType xread(MemoryBuffer buffer, XtypeResolver resolver) {
-      int xtypeId = buffer.readVarUint32Small7();
-      boolean trackingRef = (xtypeId & 0b1) != 0;
-      boolean nullable = (xtypeId & 0b10) != 0;
-      xtypeId = xtypeId >>> 2;
-      return xread(buffer, resolver, xtypeId, nullable, trackingRef);
-    }
-
-    public static FieldType xread(
-        MemoryBuffer buffer,
-        XtypeResolver resolver,
-        int xtypeId,
-        boolean nullable,
-        boolean trackingRef) {
-      switch (xtypeId & 0xff) {
-        case Types.LIST:
-        case Types.SET:
-          return new CollectionFieldType(
-              xtypeId, true, nullable, trackingRef, xread(buffer, resolver));
-        case Types.MAP:
-          return new MapFieldType(
-              xtypeId,
-              true,
-              nullable,
-              trackingRef,
-              xread(buffer, resolver),
-              xread(buffer, resolver));
-        case Types.ENUM:
-        case Types.NAMED_ENUM:
-          return new EnumFieldType(nullable, xtypeId);
-        case Types.UNKNOWN:
-          return new ObjectFieldType(xtypeId, false, nullable, trackingRef);
-        default:
-          {
-            if (!Types.isUserDefinedType((byte) xtypeId)) {
-              ClassInfo classInfo = resolver.getXtypeInfo(xtypeId);
-              Preconditions.checkNotNull(classInfo);
-              Class<?> cls = classInfo.getCls();
-              return new RegisteredFieldType(
-                  resolver.isMonomorphic(cls), nullable, trackingRef, xtypeId);
-            } else {
-              return new ObjectFieldType(xtypeId, false, nullable, trackingRef);
-            }
-          }
-      }
-    }
-  }
-
-  /** Class for field type which is registered. */
-  public static class RegisteredFieldType extends FieldType {
-    private final short classId;
-
-    public RegisteredFieldType(
-        boolean isFinal, boolean nullable, boolean trackingRef, int classId) {
-      super(classId, isFinal, nullable, trackingRef);
-      this.classId = (short) classId;
-    }
-
-    public short getClassId() {
-      return classId;
-    }
-
-    @Override
-    public TypeRef<?> toTypeToken(TypeResolver resolver, TypeRef<?> declared) {
-      Class<?> cls;
-      if (resolver instanceof XtypeResolver) {
-        cls = ((XtypeResolver) resolver).getXtypeInfo(classId).getCls();
-        if (Types.isPrimitiveType(classId)) {
-          // For primitive types, ensure we use the correct primitive/boxed form
-          // based on the nullable flag, not the declared type
-          if (!nullable) {
-            // nullable=false means the source was primitive, use primitive type
-            cls = TypeUtils.unwrap(cls);
-          } else {
-            // nullable=true means the source was boxed, use boxed type
-            cls = TypeUtils.wrap(cls);
-          }
-        }
-      } else {
-        cls = ((ClassResolver) resolver).getRegisteredClass(classId);
-      }
-      if (cls == null) {
-        LOG.warn("Class {} not registered, take it as Struct type for deserialization.", classId);
-        cls = NonexistentClass.NonexistentMetaShared.class;
-      }
-      return TypeRef.of(cls, new TypeExtMeta(nullable, trackingRef));
-    }
-
-    @Override
-    public boolean equals(Object o) {
-      if (this == o) {
-        return true;
-      }
-      if (o == null || getClass() != o.getClass()) {
-        return false;
-      }
-      if (!super.equals(o)) {
-        return false;
-      }
-      RegisteredFieldType that = (RegisteredFieldType) o;
-      return classId == that.classId;
-    }
-
-    @Override
-    public int hashCode() {
-      return Objects.hash(super.hashCode(), classId);
-    }
-
-    @Override
-    public String toString() {
-      return "RegisteredFieldType{"
-          + "isMonomorphic="
-          + isMonomorphic()
-          + ", trackingRef="
-          + trackingRef()
-          + ", classId="
-          + classId
-          + '}';
-    }
-  }
-
-  /**
-   * Class for collection field type, which store collection element type information. Nested
-   * collection/map generics example:
-   *
-   * <pre>{@code
-   * new TypeToken<Collection<Map<String, String>>>() {}
-   * }</pre>
-   */
-  public static class CollectionFieldType extends FieldType {
-    private final FieldType elementType;
-
-    public CollectionFieldType(
-        int xtypeId,
-        boolean isFinal,
-        boolean nullable,
-        boolean trackingRef,
-        FieldType elementType) {
-      super(xtypeId, isFinal, nullable, trackingRef);
-      this.elementType = elementType;
-    }
-
-    public FieldType getElementType() {
-      return elementType;
-    }
-
-    @Override
-    public TypeRef<?> toTypeToken(TypeResolver classResolver, TypeRef<?> declared) {
-      // TODO support preserve element TypeExtMeta
-      TypeRef<? extends Collection<?>> collectionTypeRef =
-          collectionOf(
-              elementType.toTypeToken(classResolver, declared),
-              new TypeExtMeta(nullable, trackingRef));
-      if (declared == null) {
-        return collectionTypeRef;
-      }
-      Class<?> declaredClass = declared.getRawType();
-      if (!declaredClass.isArray()) {
-        return collectionTypeRef;
-      }
-      Tuple2<Class<?>, Integer> info = TypeUtils.getArrayComponentInfo(declaredClass);
-      List<TypeRef<?>> typeRefs = new ArrayList<>(info.f1 + 1);
-      typeRefs.add(collectionTypeRef);
-      for (int i = 0; i < info.f1; i++) {
-        typeRefs.add(TypeUtils.getElementType(typeRefs.get(i)));
-      }
-      Collections.reverse(typeRefs);
-      for (int i = 1; i < typeRefs.size(); i++) {
-        TypeRef<?> arrayType = typeRefs.get(i - 1);
-        TypeRef<?> typeRef =
-            TypeRef.of(
-                Array.newInstance(arrayType.getRawType(), 1).getClass(),
-                typeRefs.get(i).getExtInfo());
-        typeRefs.set(i, typeRef);
-      }
-      return typeRefs.get(typeRefs.size() - 1);
-    }
-
-    @Override
-    public boolean equals(Object o) {
-      if (this == o) {
-        return true;
-      }
-      if (o == null || getClass() != o.getClass()) {
-        return false;
-      }
-      if (!super.equals(o)) {
-        return false;
-      }
-      CollectionFieldType that = (CollectionFieldType) o;
-      return Objects.equals(elementType, that.elementType);
-    }
-
-    @Override
-    public int hashCode() {
-      return Objects.hash(super.hashCode(), elementType);
-    }
-
-    @Override
-    public String toString() {
-      return "CollectionFieldType{"
-          + "elementType="
-          + elementType
-          + ", isFinal="
-          + isMonomorphic()
-          + ", trackingRef="
-          + trackingRef()
-          + '}';
-    }
-  }
-
-  /**
-   * Class for map field type, which store map key/value type information. Nested map generics
-   * example:
-   *
-   * <pre>{@code
-   * new TypeToken<Map<List<String>>, String>() {}
-   * }</pre>
-   */
-  public static class MapFieldType extends FieldType {
-    private final FieldType keyType;
-    private final FieldType valueType;
-
-    public MapFieldType(
-        int xtypeId,
-        boolean isFinal,
-        boolean nullable,
-        boolean trackingRef,
-        FieldType keyType,
-        FieldType valueType) {
-      super(xtypeId, isFinal, nullable, trackingRef);
-      this.keyType = keyType;
-      this.valueType = valueType;
-    }
-
-    public FieldType getKeyType() {
-      return keyType;
-    }
-
-    public FieldType getValueType() {
-      return valueType;
-    }
-
-    @Override
-    public TypeRef<?> toTypeToken(TypeResolver classResolver, TypeRef<?> declared) {
-      // TODO support preserve element TypeExtMeta, it will be lost when building other TypeRef
-      return mapOf(
-          keyType.toTypeToken(classResolver, declared),
-          valueType.toTypeToken(classResolver, declared),
-          new TypeExtMeta(nullable, trackingRef));
-    }
-
-    @Override
-    public boolean equals(Object o) {
-      if (this == o) {
-        return true;
-      }
-      if (o == null || getClass() != o.getClass()) {
-        return false;
-      }
-      if (!super.equals(o)) {
-        return false;
-      }
-      MapFieldType that = (MapFieldType) o;
-      return Objects.equals(keyType, that.keyType) && Objects.equals(valueType, that.valueType);
-    }
-
-    @Override
-    public int hashCode() {
-      return Objects.hash(super.hashCode(), keyType, valueType);
-    }
-
-    @Override
-    public String toString() {
-      return "MapFieldType{"
-          + "keyType="
-          + keyType
-          + ", valueType="
-          + valueType
-          + ", isFinal="
-          + isMonomorphic()
-          + ", trackingRef="
-          + trackingRef()
-          + '}';
-    }
-  }
-
-  public static class EnumFieldType extends FieldType {
-    private EnumFieldType(boolean nullable, int xtypeId) {
-      super(xtypeId, true, nullable, false);
-    }
-
-    @Override
-    public TypeRef<?> toTypeToken(TypeResolver classResolver, TypeRef<?> declared) {
-      return TypeRef.of(NonexistentClass.NonexistentEnum.class);
-    }
-  }
-
-  public static class ArrayFieldType extends FieldType {
-    private final FieldType componentType;
-    private final int dimensions;
-
-    public ArrayFieldType(
-        boolean isMonomorphic, boolean trackingRef, FieldType componentType, int dimensions) {
-      this(-1, isMonomorphic, true, trackingRef, componentType, dimensions);
-    }
-
-    public ArrayFieldType(
-        int xtypeId,
-        boolean isMonomorphic,
-        boolean nullable,
-        boolean trackingRef,
-        FieldType componentType,
-        int dimensions) {
-      super(xtypeId, isMonomorphic, nullable, trackingRef);
-      this.componentType = componentType;
-      this.dimensions = dimensions;
-    }
-
-    @Override
-    public TypeRef<?> toTypeToken(TypeResolver classResolver, TypeRef<?> declared) {
-      while (declared != null && declared.isArray()) {
-        declared = declared.getComponentType();
-      }
-      TypeRef<?> componentTypeRef = componentType.toTypeToken(classResolver, declared);
-      Class<?> componentRawType = componentTypeRef.getRawType();
-      if (NonexistentClass.class.isAssignableFrom(componentRawType)) {
-        return TypeRef.of(
-            // We embed `isMonomorphic` flag in ObjectArraySerializer, so this flag can be ignored
-            // here.
-            NonexistentClass.getNonexistentClass(
-                componentType instanceof EnumFieldType, dimensions, true),
-            new TypeExtMeta(nullable, trackingRef));
-      } else {
-        return TypeRef.of(
-            Array.newInstance(componentRawType, new int[dimensions]).getClass(),
-            new TypeExtMeta(nullable, trackingRef));
-      }
-    }
-
-    public int getDimensions() {
-      return dimensions;
-    }
-
-    public FieldType getComponentType() {
-      return componentType;
-    }
-
-    @Override
-    public boolean equals(Object o) {
-      if (this == o) {
-        return true;
-      }
-      if (o == null || getClass() != o.getClass()) {
-        return false;
-      }
-      if (!super.equals(o)) {
-        return false;
-      }
-      ArrayFieldType that = (ArrayFieldType) o;
-      return dimensions == that.dimensions && Objects.equals(componentType, that.componentType);
-    }
-
-    @Override
-    public int hashCode() {
-      return Objects.hash(super.hashCode(), componentType, dimensions);
-    }
-
-    @Override
-    public String toString() {
-      return "ArrayFieldType{"
-          + "componentType="
-          + componentType
-          + ", dimensions="
-          + dimensions
-          + ", isMonomorphic="
-          + isMonomorphic
-          + ", trackingRef="
-          + trackingRef
-          + '}';
-    }
-  }
-
-  /** Class for field type which isn't registered and not collection/map type too. */
-  public static class ObjectFieldType extends FieldType {
-
-    public ObjectFieldType(int xtypeId, boolean isFinal, boolean nullable, boolean trackingRef) {
-      super(xtypeId, isFinal, nullable, trackingRef);
-    }
-
-    @Override
-    public TypeRef<?> toTypeToken(TypeResolver classResolver, TypeRef<?> declared) {
-      return isMonomorphic()
-          ? TypeRef.of(FinalObjectTypeStub.class, new TypeExtMeta(nullable, trackingRef))
-          : TypeRef.of(Object.class, new TypeExtMeta(nullable, trackingRef));
-    }
-
-    @Override
-    public boolean equals(Object o) {
-      return super.equals(o);
-    }
-
-    @Override
-    public int hashCode() {
-      return super.hashCode();
-    }
-  }
-
-  /** Build field type from generics, nested generics will be extracted too. */
-  static FieldType buildFieldType(TypeResolver resolver, Field field) {
-    Preconditions.checkNotNull(field);
-    GenericType genericType = resolver.buildGenericType(field.getGenericType());
-    return buildFieldType(resolver, genericType);
-  }
-
-  /** Build field type from generics, nested generics will be extracted too. */
-  private static FieldType buildFieldType(TypeResolver resolver, GenericType genericType) {
-    Preconditions.checkNotNull(genericType);
-    Class<?> rawType = genericType.getCls();
-    boolean isXlang = resolver.getFory().isCrossLanguage();
-    int xtypeId = -1;
-    if (isXlang) {
-      ClassInfo info = resolver.getClassInfo(genericType.getCls(), false);
-      if (info != null) {
-        xtypeId = info.getXtypeId();
-      } else {
-        xtypeId = Types.UNKNOWN;
-      }
-    }
-    boolean isMonomorphic = genericType.isMonomorphic();
-    boolean trackingRef = genericType.trackingRef(resolver);
-    // TODO support @Nullable/ForyField annotation
-    boolean nullable = !genericType.getCls().isPrimitive();
-    if (COLLECTION_TYPE.isSupertypeOf(genericType.getTypeRef())) {
-      return new CollectionFieldType(
-          xtypeId,
-          isMonomorphic,
-          nullable,
-          trackingRef,
-          buildFieldType(
-              resolver,
-              genericType.getTypeParameter0() == null
-                  ? GenericType.build(Object.class)
-                  : genericType.getTypeParameter0()));
-    } else if (MAP_TYPE.isSupertypeOf(genericType.getTypeRef())) {
-      return new MapFieldType(
-          xtypeId,
-          isMonomorphic,
-          nullable,
-          trackingRef,
-          buildFieldType(
-              resolver,
-              genericType.getTypeParameter0() == null
-                  ? GenericType.build(Object.class)
-                  : genericType.getTypeParameter0()),
-          buildFieldType(
-              resolver,
-              genericType.getTypeParameter1() == null
-                  ? GenericType.build(Object.class)
-                  : genericType.getTypeParameter1()));
-    } else {
-      if (isXlang
-          && !Types.isUserDefinedType((byte) xtypeId)
-          && resolver.isRegisteredById(rawType)) {
-        return new RegisteredFieldType(isMonomorphic, nullable, trackingRef, xtypeId);
-      } else if (!isXlang && resolver.isRegisteredById(rawType)) {
-        Short classId = ((ClassResolver) resolver).getRegisteredClassId(rawType);
-        return new RegisteredFieldType(isMonomorphic, nullable, trackingRef, classId);
-      } else {
-        if (rawType.isEnum()) {
-          return new EnumFieldType(nullable, xtypeId);
-        }
-        if (rawType.isArray()) {
-          Class<?> elemType = rawType.getComponentType();
-          while (elemType.isArray()) {
-            elemType = elemType.getComponentType();
-          }
-          if (isXlang && !elemType.isPrimitive()) {
-            return new CollectionFieldType(
-                xtypeId,
-                isMonomorphic,
-                nullable,
-                trackingRef,
-                buildFieldType(resolver, GenericType.build(elemType)));
-          }
-          Tuple2<Class<?>, Integer> info = TypeUtils.getArrayComponentInfo(rawType);
-          return new ArrayFieldType(
-              xtypeId,
-              isMonomorphic,
-              nullable,
-              trackingRef,
-              buildFieldType(resolver, GenericType.build(info.f0)),
-              info.f1);
-        }
-        return new ObjectFieldType(xtypeId, isMonomorphic, nullable, trackingRef);
-      }
-    }
   }
 
   public static ClassDef buildClassDef(Fory fory, Class<?> cls) {

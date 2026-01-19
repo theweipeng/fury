@@ -23,7 +23,8 @@ use crate::serializer::collection::{DECL_ELEMENT_TYPE, HAS_NULL, IS_SAME_TYPE};
 use crate::serializer::util;
 use crate::serializer::Serializer;
 use crate::types;
-use crate::types::{is_user_type, RefFlag};
+use crate::types::RefFlag;
+use crate::util::ENABLE_FORY_DEBUG_OUTPUT;
 use chrono::{NaiveDate, NaiveDateTime};
 use std::rc::Rc;
 use std::time::Duration;
@@ -40,6 +41,7 @@ pub fn skip_field_value(
 const UNKNOWN_FIELD_TYPE: FieldType = FieldType {
     type_id: types::UNKNOWN,
     nullable: true,
+    ref_tracking: false,
     generics: vec![],
 };
 
@@ -50,32 +52,106 @@ pub fn skip_any_value(context: &mut ReadContext, read_ref_flag: bool) -> Result<
         if ref_flag == (RefFlag::Null as i8) {
             return Ok(());
         }
+        if ref_flag == (RefFlag::Ref as i8) {
+            // Reference to already-seen object, skip the reference index
+            let _ref_index = context.reader.read_varuint32()?;
+            return Ok(());
+        }
+        // RefValue (0) or NotNullValue (-1) means we need to read the actual object
     }
 
-    // Now read the type ID
-    let mut type_id = context.reader.peek_u8()? as u32;
-    if !is_user_type(type_id) {
-        type_id = context.reader.read_varuint32()?;
+    // Read type_id first
+    let type_id = context.reader.read_varuint32()?;
+    let internal_id = type_id & 0xff;
+
+    // NONE type has no data - return early
+    if internal_id == types::NONE {
+        return Ok(());
     }
-    let field_type = match type_id {
-        types::LIST | types::SET => FieldType {
-            type_id,
-            nullable: true,
-            generics: vec![UNKNOWN_FIELD_TYPE],
-        },
-        types::MAP => FieldType {
-            type_id,
-            nullable: true,
-            generics: vec![UNKNOWN_FIELD_TYPE, UNKNOWN_FIELD_TYPE],
-        },
-        _ => FieldType {
-            type_id,
-            nullable: true,
-            generics: vec![],
-        },
+
+    // For struct-like types, also read meta_index to get type_info
+    // This is critical for polymorphic collections where elements are struct types.
+    let (field_type, type_info_opt) = match internal_id {
+        types::LIST | types::SET => (
+            FieldType {
+                type_id,
+                nullable: true,
+                ref_tracking: false,
+                generics: vec![UNKNOWN_FIELD_TYPE],
+            },
+            None,
+        ),
+        types::MAP => (
+            FieldType {
+                type_id,
+                nullable: true,
+                ref_tracking: false,
+                generics: vec![UNKNOWN_FIELD_TYPE, UNKNOWN_FIELD_TYPE],
+            },
+            None,
+        ),
+        types::COMPATIBLE_STRUCT | types::NAMED_COMPATIBLE_STRUCT => {
+            // For compatible struct types, read meta_index to get type_info
+            let meta_index = context.reader.read_varuint32()? as usize;
+            let type_info = context.get_type_info_by_index(meta_index)?.clone();
+            (
+                FieldType {
+                    type_id,
+                    nullable: true,
+                    ref_tracking: false,
+                    generics: vec![],
+                },
+                Some(type_info),
+            )
+        }
+        types::STRUCT | types::NAMED_STRUCT => {
+            // For non-compatible struct types with share_meta enabled, read meta_index
+            if context.is_share_meta() {
+                let meta_index = context.reader.read_varuint32()? as usize;
+                let type_info = context.get_type_info_by_index(meta_index)?.clone();
+                (
+                    FieldType {
+                        type_id,
+                        nullable: true,
+                        ref_tracking: false,
+                        generics: vec![],
+                    },
+                    Some(type_info),
+                )
+            } else {
+                // Without share_meta, read namespace and type_name
+                let namespace = context.read_meta_string()?.to_owned();
+                let type_name = context.read_meta_string()?.to_owned();
+                let rc_namespace = Rc::from(namespace);
+                let rc_type_name = Rc::from(type_name);
+                let type_info = context
+                    .get_type_resolver()
+                    .get_type_info_by_meta_string_name(rc_namespace, rc_type_name)
+                    .ok_or_else(|| crate::Error::type_error("Name harness not found"))?;
+                (
+                    FieldType {
+                        type_id,
+                        nullable: true,
+                        ref_tracking: false,
+                        generics: vec![],
+                    },
+                    Some(type_info),
+                )
+            }
+        }
+        _ => (
+            FieldType {
+                type_id,
+                nullable: true,
+                ref_tracking: false,
+                generics: vec![],
+            },
+            None,
+        ),
     };
-    // Don't read ref flag again in skip_value since we already handled it
-    skip_value(context, &field_type, false, false, &None)
+    // Don't read ref flag again in skip_value since we already handled it.
+    // Pass type_info so skip_struct doesn't try to read type_id/meta_index again.
+    skip_value(context, &field_type, false, false, &type_info_opt)
 }
 
 fn skip_collection(context: &mut ReadContext, field_type: &FieldType) -> Result<(), Error> {
@@ -95,6 +171,7 @@ fn skip_collection(context: &mut ReadContext, field_type: &FieldType) -> Result<
         elem_field_type = FieldType {
             type_id: type_info_rc.get_type_id(),
             nullable: has_null,
+            ref_tracking: false,
             generics: vec![],
         };
         type_info = Some(type_info_rc);
@@ -139,6 +216,7 @@ fn skip_map(context: &mut ReadContext, field_type: &FieldType) -> Result<(), Err
                 value_field_type = FieldType {
                     type_id: type_info.get_type_id(),
                     nullable: true,
+                    ref_tracking: false,
                     generics: vec![],
                 };
                 value_type_info = Some(type_info);
@@ -162,6 +240,7 @@ fn skip_map(context: &mut ReadContext, field_type: &FieldType) -> Result<(), Err
                 key_field_type = FieldType {
                     type_id: type_info.get_type_id(),
                     nullable: true,
+                    ref_tracking: false,
                     generics: vec![],
                 };
                 key_type_info = Some(type_info);
@@ -188,6 +267,7 @@ fn skip_map(context: &mut ReadContext, field_type: &FieldType) -> Result<(), Err
             key_field_type = FieldType {
                 type_id: type_info.get_type_id(),
                 nullable: true,
+                ref_tracking: false,
                 generics: vec![],
             };
             key_type_info = Some(type_info);
@@ -204,6 +284,7 @@ fn skip_map(context: &mut ReadContext, field_type: &FieldType) -> Result<(), Err
             value_field_type = FieldType {
                 type_id: type_info.get_type_id(),
                 nullable: true,
+                ref_tracking: false,
                 generics: vec![],
             };
             value_type_info = Some(type_info);
@@ -240,9 +321,25 @@ fn skip_struct(
     } else {
         type_info.as_ref().unwrap()
     };
-    let field_infos = type_info_value.get_type_meta().get_field_infos().to_vec();
+    let type_meta = type_info_value.get_type_meta();
+    if ENABLE_FORY_DEBUG_OUTPUT {
+        eprintln!(
+            "[skip_struct] type_name: {:?}, num_fields: {}",
+            type_meta.get_type_name(),
+            type_meta.get_field_infos().len()
+        );
+    }
+    let field_infos = type_meta.get_field_infos().to_vec();
     context.inc_depth()?;
     for field_info in field_infos.iter() {
+        if ENABLE_FORY_DEBUG_OUTPUT {
+            eprintln!(
+                "[skip_struct] field: {:?}, type_id: {}, internal_id: {}",
+                field_info.field_name,
+                field_info.field_type.type_id,
+                field_info.field_type.type_id & 0xff
+            );
+        }
         let read_ref_flag = util::field_need_write_ref_into(
             field_info.field_type.type_id,
             field_info.field_type.nullable,
@@ -328,141 +425,323 @@ fn skip_value(
         if ref_flag == (RefFlag::Null as i8) {
             return Ok(());
         }
+        if ref_flag == (RefFlag::Ref as i8) {
+            // Reference to already-seen object, skip the reference index
+            let _ref_index = context.reader.read_varuint32()?;
+            return Ok(());
+        }
+        // RefValue (0) or NotNullValue (-1) means we need to read the actual object
     }
     let type_id_num = field_type.type_id;
 
     // Check if it's a user-defined type (high bits set, meaning type_id > 255)
     if type_id_num > 255 {
         let internal_id = type_id_num & 0xff;
-        if internal_id == types::COMPATIBLE_STRUCT {
+        // Handle struct-like types including UNKNOWN (0) which is used for polymorphic types
+        if internal_id == types::COMPATIBLE_STRUCT
+            || internal_id == types::STRUCT
+            || internal_id == types::NAMED_STRUCT
+            || internal_id == types::NAMED_COMPATIBLE_STRUCT
+            || internal_id == types::UNKNOWN
+        {
+            // If type_info is provided (from skip_any_value), use skip_struct directly
+            // which won't try to re-read type_id/meta_index. Otherwise use skip_user_struct.
+            if type_info.is_some() {
+                return skip_struct(context, type_id_num, type_info);
+            }
             return skip_user_struct(context, type_id_num);
-        } else if internal_id == types::ENUM {
+        } else if internal_id == types::ENUM || internal_id == types::NAMED_ENUM {
             let _ordinal = context.reader.read_varuint32()?;
             return Ok(());
-        } else if internal_id == types::EXT {
+        } else if internal_id == types::EXT || internal_id == types::NAMED_EXT {
             return skip_user_ext(context, type_id_num);
         } else {
             return Err(Error::type_error(format!(
-                "Unknown type id: {}",
-                type_id_num
+                "Unknown type id: {} (internal_id: {}, type_info provided: {})",
+                type_id_num,
+                internal_id,
+                type_info.is_some()
             )));
         }
     }
 
-    // Match on built-in types
+    // Match on built-in types (ordered by TypeId enum values)
     match type_id_num {
-        // Basic types
+        // ============ UNKNOWN (TypeId = 0) ============
+        types::UNKNOWN => {
+            // UNKNOWN is used for polymorphic types in cross-language serialization
+            return skip_any_value(context, false);
+        }
+
+        // ============ BOOL (TypeId = 1) ============
         types::BOOL => {
             <bool as Serializer>::fory_read_data(context)?;
         }
+
+        // ============ INT8 (TypeId = 2) ============
         types::INT8 => {
             <i8 as Serializer>::fory_read_data(context)?;
         }
+
+        // ============ INT16 (TypeId = 3) ============
         types::INT16 => {
             <i16 as Serializer>::fory_read_data(context)?;
         }
+
+        // ============ INT32 (TypeId = 4) ============
         types::INT32 => {
+            context.reader.read_i32()?;
+        }
+
+        // ============ VARINT32 (TypeId = 5) ============
+        types::VARINT32 => {
             <i32 as Serializer>::fory_read_data(context)?;
         }
+
+        // ============ INT64 (TypeId = 6) ============
         types::INT64 => {
+            context.reader.read_i64()?;
+        }
+
+        // ============ VARINT64 (TypeId = 7) ============
+        types::VARINT64 => {
             <i64 as Serializer>::fory_read_data(context)?;
         }
+
+        // ============ TAGGED_INT64 (TypeId = 8) ============
+        types::TAGGED_INT64 => {
+            context.reader.read_tagged_i64()?;
+        }
+
+        // ============ UINT8 (TypeId = 9) ============
+        types::UINT8 => {
+            <u8 as Serializer>::fory_read_data(context)?;
+        }
+
+        // ============ UINT16 (TypeId = 10) ============
+        types::UINT16 => {
+            <u16 as Serializer>::fory_read_data(context)?;
+        }
+
+        // ============ UINT32 (TypeId = 11) ============
+        types::UINT32 => {
+            context.reader.read_u32()?;
+        }
+
+        // ============ VAR_UINT32 (TypeId = 12) ============
+        types::VAR_UINT32 => {
+            <u32 as Serializer>::fory_read_data(context)?;
+        }
+
+        // ============ UINT64 (TypeId = 13) ============
+        types::UINT64 => {
+            context.reader.read_u64()?;
+        }
+
+        // ============ VAR_UINT64 (TypeId = 14) ============
+        types::VAR_UINT64 => {
+            <u64 as Serializer>::fory_read_data(context)?;
+        }
+
+        // ============ TAGGED_UINT64 (TypeId = 15) ============
+        types::TAGGED_UINT64 => {
+            context.reader.read_tagged_u64()?;
+        }
+
+        // ============ FLOAT32 (TypeId = 17) ============
         types::FLOAT32 => {
             <f32 as Serializer>::fory_read_data(context)?;
         }
+
+        // ============ FLOAT64 (TypeId = 18) ============
         types::FLOAT64 => {
             <f64 as Serializer>::fory_read_data(context)?;
         }
+
+        // ============ STRING (TypeId = 19) ============
         types::STRING => {
             <String as Serializer>::fory_read_data(context)?;
         }
-        types::LOCAL_DATE => {
-            <NaiveDate as Serializer>::fory_read_data(context)?;
-        }
-        types::TIMESTAMP => {
-            <NaiveDateTime as Serializer>::fory_read_data(context)?;
-        }
-        types::DURATION => {
-            <Duration as Serializer>::fory_read_data(context)?;
-        }
-        types::BINARY => {
-            <Vec<u8> as Serializer>::fory_read_data(context)?;
-        }
-        types::BOOL_ARRAY => {
-            <Vec<bool> as Serializer>::fory_read_data(context)?;
-        }
-        types::INT8_ARRAY => {
-            <Vec<i8> as Serializer>::fory_read_data(context)?;
-        }
-        types::INT16_ARRAY => {
-            <Vec<i16> as Serializer>::fory_read_data(context)?;
-        }
-        types::INT32_ARRAY => {
-            <Vec<i32> as Serializer>::fory_read_data(context)?;
-        }
-        types::INT64_ARRAY => {
-            <Vec<i64> as Serializer>::fory_read_data(context)?;
-        }
-        types::FLOAT32_ARRAY => {
-            <Vec<f32> as Serializer>::fory_read_data(context)?;
-        }
-        types::FLOAT64_ARRAY => {
-            <Vec<f64> as Serializer>::fory_read_data(context)?;
-        }
-        types::U8 => {
-            <u8 as Serializer>::fory_read_data(context)?;
-        }
-        types::U16 => {
-            <u16 as Serializer>::fory_read_data(context)?;
-        }
-        types::U32 => {
-            <u32 as Serializer>::fory_read_data(context)?;
-        }
-        types::U64 => {
-            <u64 as Serializer>::fory_read_data(context)?;
-        }
-        types::USIZE => {
-            <usize as Serializer>::fory_read_data(context)?;
-        }
-        types::U128 => {
-            <u128 as Serializer>::fory_read_data(context)?;
-        }
-        types::U16_ARRAY => {
-            <Vec<u16> as Serializer>::fory_read_data(context)?;
-        }
-        types::U32_ARRAY => {
-            <Vec<u32> as Serializer>::fory_read_data(context)?;
-        }
-        types::U64_ARRAY => {
-            <Vec<u64> as Serializer>::fory_read_data(context)?;
-        }
-        types::USIZE_ARRAY => {
-            <Vec<usize> as Serializer>::fory_read_data(context)?;
-        }
-        types::U128_ARRAY => {
-            <Vec<u128> as Serializer>::fory_read_data(context)?;
-        }
 
-        // Container types
+        // ============ LIST (TypeId = 20) ============
+        // ============ SET (TypeId = 21) ============
         types::LIST | types::SET => {
             return skip_collection(context, field_type);
         }
+
+        // ============ MAP (TypeId = 22) ============
         types::MAP => {
             return skip_map(context, field_type);
         }
 
-        // Named types
+        // ============ ENUM (TypeId = 23) ============
+        types::ENUM => {
+            let _ordinal = context.reader.read_varuint32()?;
+        }
+
+        // ============ NAMED_ENUM (TypeId = 24) ============
         types::NAMED_ENUM => {
             let _ordinal = context.reader.read_varuint32()?;
         }
+
+        // ============ STRUCT (TypeId = 25) ============
+        types::STRUCT => {
+            return skip_struct(context, type_id_num, type_info);
+        }
+
+        // ============ COMPATIBLE_STRUCT (TypeId = 26) ============
+        types::COMPATIBLE_STRUCT => {
+            return skip_struct(context, type_id_num, type_info);
+        }
+
+        // ============ NAMED_STRUCT (TypeId = 27) ============
+        types::NAMED_STRUCT => {
+            return skip_struct(context, type_id_num, type_info);
+        }
+
+        // ============ NAMED_COMPATIBLE_STRUCT (TypeId = 28) ============
         types::NAMED_COMPATIBLE_STRUCT => {
             return skip_struct(context, type_id_num, type_info);
         }
+
+        // ============ EXT (TypeId = 29) ============
+        types::EXT => {
+            return skip_ext(context, type_id_num, type_info);
+        }
+
+        // ============ NAMED_EXT (TypeId = 30) ============
         types::NAMED_EXT => {
             return skip_ext(context, type_id_num, type_info);
         }
-        types::UNKNOWN => {
-            return skip_any_value(context, false);
+
+        // ============ UNION (TypeId = 31) ============
+        types::UNION => {
+            // UNION format: index (varuint32) + value (xreadRef)
+            let _ = context.reader.read_varuint32()?;
+            return skip_any_value(context, true);
+        }
+
+        // ============ NONE (TypeId = 32) ============
+        types::NONE => {
+            // NONE represents an empty/unit value with no data - nothing to skip
+            return Ok(());
+        }
+
+        // ============ DURATION (TypeId = 33) ============
+        types::DURATION => {
+            <Duration as Serializer>::fory_read_data(context)?;
+        }
+
+        // ============ TIMESTAMP (TypeId = 34) ============
+        types::TIMESTAMP => {
+            <NaiveDateTime as Serializer>::fory_read_data(context)?;
+        }
+
+        // ============ LOCAL_DATE (TypeId = 35) ============
+        types::LOCAL_DATE => {
+            <NaiveDate as Serializer>::fory_read_data(context)?;
+        }
+
+        // ============ BINARY (TypeId = 37) ============
+        types::BINARY => {
+            <Vec<u8> as Serializer>::fory_read_data(context)?;
+        }
+
+        // ============ BOOL_ARRAY (TypeId = 39) ============
+        types::BOOL_ARRAY => {
+            <Vec<bool> as Serializer>::fory_read_data(context)?;
+        }
+
+        // ============ INT8_ARRAY (TypeId = 40) ============
+        types::INT8_ARRAY => {
+            <Vec<i8> as Serializer>::fory_read_data(context)?;
+        }
+
+        // ============ INT16_ARRAY (TypeId = 41) ============
+        types::INT16_ARRAY => {
+            <Vec<i16> as Serializer>::fory_read_data(context)?;
+        }
+
+        // ============ INT32_ARRAY (TypeId = 42) ============
+        types::INT32_ARRAY => {
+            <Vec<i32> as Serializer>::fory_read_data(context)?;
+        }
+
+        // ============ INT64_ARRAY (TypeId = 43) ============
+        types::INT64_ARRAY => {
+            <Vec<i64> as Serializer>::fory_read_data(context)?;
+        }
+
+        // ============ UINT8_ARRAY (TypeId = 44) ============
+        types::UINT8_ARRAY => {
+            <Vec<u8> as Serializer>::fory_read_data(context)?;
+        }
+
+        // ============ UINT16_ARRAY (TypeId = 45) ============
+        types::UINT16_ARRAY => {
+            <Vec<u16> as Serializer>::fory_read_data(context)?;
+        }
+
+        // ============ UINT32_ARRAY (TypeId = 46) ============
+        types::UINT32_ARRAY => {
+            <Vec<u32> as Serializer>::fory_read_data(context)?;
+        }
+
+        // ============ UINT64_ARRAY (TypeId = 47) ============
+        types::UINT64_ARRAY => {
+            <Vec<u64> as Serializer>::fory_read_data(context)?;
+        }
+
+        // ============ FLOAT32_ARRAY (TypeId = 49) ============
+        types::FLOAT32_ARRAY => {
+            <Vec<f32> as Serializer>::fory_read_data(context)?;
+        }
+
+        // ============ FLOAT64_ARRAY (TypeId = 50) ============
+        types::FLOAT64_ARRAY => {
+            <Vec<f64> as Serializer>::fory_read_data(context)?;
+        }
+
+        // ============ Rust-specific types ============
+
+        // ============ U128 (TypeId = 64) ============
+        types::U128 => {
+            <u128 as Serializer>::fory_read_data(context)?;
+        }
+
+        // ============ INT128 (TypeId = 65) ============
+        types::INT128 => {
+            <i128 as Serializer>::fory_read_data(context)?;
+        }
+
+        // ============ USIZE (TypeId = 66) ============
+        types::USIZE => {
+            <usize as Serializer>::fory_read_data(context)?;
+        }
+
+        // ============ ISIZE (TypeId = 67) ============
+        types::ISIZE => {
+            <isize as Serializer>::fory_read_data(context)?;
+        }
+
+        // ============ U128_ARRAY (TypeId = 68) ============
+        types::U128_ARRAY => {
+            <Vec<u128> as Serializer>::fory_read_data(context)?;
+        }
+
+        // ============ INT128_ARRAY (TypeId = 69) ============
+        types::INT128_ARRAY => {
+            <Vec<i128> as Serializer>::fory_read_data(context)?;
+        }
+
+        // ============ USIZE_ARRAY (TypeId = 70) ============
+        types::USIZE_ARRAY => {
+            <Vec<usize> as Serializer>::fory_read_data(context)?;
+        }
+
+        // ============ ISIZE_ARRAY (TypeId = 71) ============
+        types::ISIZE_ARRAY => {
+            <Vec<isize> as Serializer>::fory_read_data(context)?;
         }
 
         _ => {
@@ -500,6 +779,7 @@ pub fn skip_enum_variant(
             let field_type = FieldType {
                 type_id: types::LIST,
                 nullable: false,
+                ref_tracking: false,
                 generics: vec![UNKNOWN_FIELD_TYPE],
             };
             skip_collection(context, &field_type)

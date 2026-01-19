@@ -18,6 +18,8 @@
  */
 
 #pragma once
+
+#include "fory/util/macros.h"
 #include <chrono>
 #include <cstdint>
 #include <ctime>
@@ -26,47 +28,6 @@
 #include <sstream>
 #include <string>
 #include <type_traits>
-
-#include "fory/meta/type_traits.h"
-
-#ifdef _WIN32
-#define ROW_LITTLE_ENDIAN 1
-#else
-#ifdef __APPLE__
-
-#include <machine/endian.h>
-
-#else
-#include <endian.h>
-#endif
-#
-
-#ifndef __BYTE_ORDER__
-#error "__BYTE_ORDER__ not defined"
-#endif
-#
-
-#ifndef __ORDER_LITTLE_ENDIAN__
-#error "__ORDER_LITTLE_ENDIAN__ not defined"
-#endif
-#
-
-#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-#define ROW_LITTLE_ENDIAN 1
-#else
-#define ROW_LITTLE_ENDIAN 0
-#endif
-#endif
-#if defined(_MSC_VER)
-#include <intrin.h>
-#pragma intrinsic(_BitScanReverse)
-#pragma intrinsic(_BitScanForward)
-#define ROW_BYTE_SWAP64 _byteswap_uint64
-#define ROW_BYTE_SWAP32 _byteswap_ulong
-#else
-#define ROW_BYTE_SWAP64 __builtin_bswap64
-#define ROW_BYTE_SWAP32 __builtin_bswap32
-#endif
 
 namespace fory {
 
@@ -77,16 +38,20 @@ namespace util {
 //
 
 // Swap the byte order (i.e. endianess)
-static inline int64_t ByteSwap(int64_t value) { return ROW_BYTE_SWAP64(value); }
-
-static inline uint64_t ByteSwap(uint64_t value) {
-  return static_cast<uint64_t>(ROW_BYTE_SWAP64(value));
+static inline int64_t ByteSwap(int64_t value) {
+  return FORY_BYTE_SWAP64(value);
 }
 
-static inline int32_t ByteSwap(int32_t value) { return ROW_BYTE_SWAP32(value); }
+static inline uint64_t ByteSwap(uint64_t value) {
+  return static_cast<uint64_t>(FORY_BYTE_SWAP64(value));
+}
+
+static inline int32_t ByteSwap(int32_t value) {
+  return FORY_BYTE_SWAP32(value);
+}
 
 static inline uint32_t ByteSwap(uint32_t value) {
-  return static_cast<uint32_t>(ROW_BYTE_SWAP32(value));
+  return static_cast<uint32_t>(FORY_BYTE_SWAP32(value));
 }
 
 static inline int16_t ByteSwap(int16_t value) {
@@ -100,14 +65,14 @@ static inline uint16_t ByteSwap(uint16_t value) {
 
 static inline float ByteSwap(float value) {
   auto *ptr = reinterpret_cast<uint32_t *>(&value);
-  uint32_t i = ROW_BYTE_SWAP32(*ptr);
+  uint32_t i = FORY_BYTE_SWAP32(*ptr);
   auto *f = reinterpret_cast<float *>(&i);
   return *(f);
 }
 
 static inline double ByteSwap(double value) {
   auto *ptr = reinterpret_cast<uint64_t *>(&value);
-  uint64_t i = ROW_BYTE_SWAP64(*ptr);
+  uint64_t i = FORY_BYTE_SWAP64(*ptr);
   auto *d = reinterpret_cast<double *>(&i);
   return *d;
 }
@@ -144,8 +109,10 @@ static inline void ByteSwap(void *dst, const void *src, int len) {
 // Convert to little/big endian format from the machine's native endian format.
 template <typename T>
 using IsEndianConvertibleType =
-    meta::IsOneOf<T, int64_t, uint64_t, int32_t, uint32_t, int16_t, uint16_t,
-                  float, double>;
+    std::disjunction<std::is_same<T, int64_t>, std::is_same<T, uint64_t>,
+                     std::is_same<T, int32_t>, std::is_same<T, uint32_t>,
+                     std::is_same<T, int16_t>, std::is_same<T, uint16_t>,
+                     std::is_same<T, float>, std::is_same<T, double>>;
 
 template <typename T>
 using EnableIfIsEndianConvertibleType =
@@ -153,7 +120,7 @@ using EnableIfIsEndianConvertibleType =
 
 template <typename T, typename = EnableIfIsEndianConvertibleType<T>>
 static inline T ToBigEndian(T value) {
-  if constexpr (ROW_LITTLE_ENDIAN) {
+  if constexpr (FORY_LITTLE_ENDIAN) {
     return ByteSwap(value);
   } else {
     return value;
@@ -162,7 +129,7 @@ static inline T ToBigEndian(T value) {
 
 template <typename T, typename = EnableIfIsEndianConvertibleType<T>>
 static inline T ToLittleEndian(T value) {
-  if constexpr (ROW_LITTLE_ENDIAN) {
+  if constexpr (FORY_LITTLE_ENDIAN) {
     return value;
   } else {
     return ByteSwap(value);

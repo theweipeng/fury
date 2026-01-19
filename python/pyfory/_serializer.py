@@ -20,11 +20,10 @@ import logging
 import platform
 import time
 from abc import ABC
-from typing import Dict
 
 from pyfory._fory import NOT_NULL_INT64_FLAG
 from pyfory.resolver import NOT_NULL_VALUE_FLAG, NULL_FLAG
-from pyfory.type import is_primitive_type
+from pyfory.types import is_primitive_type
 
 try:
     import numpy as np
@@ -33,32 +32,6 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-MAX_CHUNK_SIZE = 255
-# Whether track key ref.
-TRACKING_KEY_REF = 0b1
-# Whether key has null.
-KEY_HAS_NULL = 0b10
-# Whether key is not declare type.
-KEY_DECL_TYPE = 0b100
-# Whether track value ref.
-TRACKING_VALUE_REF = 0b1000
-# Whether value has null.
-VALUE_HAS_NULL = 0b10000
-# Whether value is not declare type.
-VALUE_DECL_TYPE = 0b100000
-# When key or value is null that entry will be serialized as a new chunk with size 1.
-# In such cases, chunk size will be skipped writing.
-# Both key and value are null.
-KV_NULL = KEY_HAS_NULL | VALUE_HAS_NULL
-# Key is null, value type is declared type, and ref tracking for value is disabled.
-NULL_KEY_VALUE_DECL_TYPE = KEY_HAS_NULL | VALUE_DECL_TYPE
-# Key is null, value type is declared type, and ref tracking for value is enabled.
-NULL_KEY_VALUE_DECL_TYPE_TRACKING_REF = KEY_HAS_NULL | VALUE_DECL_TYPE | TRACKING_VALUE_REF
-# Value is null, key type is declared type, and ref tracking for key is disabled.
-NULL_VALUE_KEY_DECL_TYPE = VALUE_HAS_NULL | KEY_DECL_TYPE
-# Value is null, key type is declared type, and ref tracking for key is enabled.
-NULL_VALUE_KEY_DECL_TYPE_TRACKING_REF = VALUE_HAS_NULL | KEY_DECL_TYPE | TRACKING_VALUE_REF
-
 
 class Serializer(ABC):
     __slots__ = "fory", "type_", "need_to_write_ref"
@@ -66,7 +39,7 @@ class Serializer(ABC):
     def __init__(self, fory, type_: type):
         self.fory = fory
         self.type_: type = type_
-        self.need_to_write_ref = not is_primitive_type(type_)
+        self.need_to_write_ref = fory.ref_tracking and not is_primitive_type(type_)
 
     def write(self, buffer, value):
         raise NotImplementedError
@@ -121,6 +94,8 @@ class Int16Serializer(XlangCompatibleSerializer):
 
 
 class Int32Serializer(XlangCompatibleSerializer):
+    """Serializer for INT32/VARINT32 type - uses variable-length encoding for xlang compatibility."""
+
     def write(self, buffer, value):
         buffer.write_varint32(value)
 
@@ -128,7 +103,19 @@ class Int32Serializer(XlangCompatibleSerializer):
         return buffer.read_varint32()
 
 
+class FixedInt32Serializer(XlangCompatibleSerializer):
+    """Serializer for fixed-width 32-bit signed integer (INT32 type_id=4)."""
+
+    def write(self, buffer, value):
+        buffer.write_int32(value)
+
+    def read(self, buffer):
+        return buffer.read_int32()
+
+
 class Int64Serializer(Serializer):
+    """Serializer for INT64/VARINT64 type - uses variable-length encoding for xlang compatibility."""
+
     def xwrite(self, buffer, value):
         buffer.write_varint64(value)
 
@@ -140,6 +127,116 @@ class Int64Serializer(Serializer):
 
     def read(self, buffer):
         return buffer.read_varint64()
+
+
+class FixedInt64Serializer(XlangCompatibleSerializer):
+    """Serializer for fixed-width 64-bit signed integer (INT64 type_id=6)."""
+
+    def write(self, buffer, value):
+        buffer.write_int64(value)
+
+    def read(self, buffer):
+        return buffer.read_int64()
+
+
+class Varint32Serializer(XlangCompatibleSerializer):
+    """Serializer for VARINT32 type - variable-length encoded signed 32-bit integer."""
+
+    def write(self, buffer, value):
+        buffer.write_varint32(value)
+
+    def read(self, buffer):
+        return buffer.read_varint32()
+
+
+class Varint64Serializer(XlangCompatibleSerializer):
+    """Serializer for VARINT64 type - variable-length encoded signed 64-bit integer."""
+
+    def write(self, buffer, value):
+        buffer.write_varint64(value)
+
+    def read(self, buffer):
+        return buffer.read_varint64()
+
+
+class TaggedInt64Serializer(XlangCompatibleSerializer):
+    """Serializer for TAGGED_INT64 type - tagged encoding for signed 64-bit integer."""
+
+    def write(self, buffer, value):
+        buffer.write_tagged_int64(value)
+
+    def read(self, buffer):
+        return buffer.read_tagged_int64()
+
+
+class Uint8Serializer(XlangCompatibleSerializer):
+    """Serializer for UINT8 type - unsigned 8-bit integer."""
+
+    def write(self, buffer, value):
+        buffer.write_uint8(value)
+
+    def read(self, buffer):
+        return buffer.read_uint8()
+
+
+class Uint16Serializer(XlangCompatibleSerializer):
+    """Serializer for UINT16 type - unsigned 16-bit integer."""
+
+    def write(self, buffer, value):
+        buffer.write_uint16(value)
+
+    def read(self, buffer):
+        return buffer.read_uint16()
+
+
+class Uint32Serializer(XlangCompatibleSerializer):
+    """Serializer for UINT32 type - fixed-size unsigned 32-bit integer."""
+
+    def write(self, buffer, value):
+        buffer.write_uint32(value)
+
+    def read(self, buffer):
+        return buffer.read_uint32()
+
+
+class VarUint32Serializer(XlangCompatibleSerializer):
+    """Serializer for VAR_UINT32 type - variable-length encoded unsigned 32-bit integer."""
+
+    def write(self, buffer, value):
+        buffer.write_varuint32(value)
+
+    def read(self, buffer):
+        return buffer.read_varuint32()
+
+
+class Uint64Serializer(XlangCompatibleSerializer):
+    """Serializer for UINT64 type - fixed-size unsigned 64-bit integer."""
+
+    def write(self, buffer, value):
+        buffer.write_uint64(value)
+
+    def read(self, buffer):
+        return buffer.read_uint64()
+
+
+class VarUint64Serializer(XlangCompatibleSerializer):
+    """Serializer for VAR_UINT64 type - variable-length encoded unsigned 64-bit integer."""
+
+    def write(self, buffer, value):
+        buffer.write_varuint64(value)
+
+    def read(self, buffer):
+        return buffer.read_varuint64()
+
+
+class TaggedUint64Serializer(XlangCompatibleSerializer):
+    """Serializer for TAGGED_UINT64 type - tagged encoding for unsigned 64-bit integer."""
+
+    def write(self, buffer, value):
+        buffer.write_tagged_uint64(value)
+
+    def read(self, buffer):
+        return buffer.read_tagged_uint64()
 
 
 class Float32Serializer(XlangCompatibleSerializer):
@@ -206,469 +303,6 @@ class TimestampSerializer(XlangCompatibleSerializer):
         ts = buffer.read_int64() / 1000000
         # TODO support timezone
         return datetime.datetime.fromtimestamp(ts)
-
-
-COLL_DEFAULT_FLAG = 0b0
-COLL_TRACKING_REF = 0b1
-COLL_HAS_NULL = 0b10
-COLL_IS_DECL_ELEMENT_TYPE = 0b100
-COLL_IS_SAME_TYPE = 0b1000
-COLL_DECL_SAME_TYPE_TRACKING_REF = COLL_IS_DECL_ELEMENT_TYPE | COLL_IS_SAME_TYPE | COLL_TRACKING_REF
-COLL_DECL_SAME_TYPE_NOT_TRACKING_REF = COLL_IS_DECL_ELEMENT_TYPE | COLL_IS_SAME_TYPE
-COLL_DECL_SAME_TYPE_HAS_NULL = COLL_IS_DECL_ELEMENT_TYPE | COLL_IS_SAME_TYPE | COLL_HAS_NULL
-COLL_DECL_SAME_TYPE_NOT_HAS_NULL = COLL_IS_DECL_ELEMENT_TYPE | COLL_IS_SAME_TYPE
-
-
-class CollectionSerializer(Serializer):
-    __slots__ = (
-        "type_resolver",
-        "ref_resolver",
-        "elem_serializer",
-        "is_py",
-        "elem_tracking_ref",
-        "elem_type",
-        "elem_typeinfo",
-    )
-
-    def __init__(self, fory, type_, elem_serializer=None):
-        super().__init__(fory, type_)
-        self.type_resolver = fory.type_resolver
-        self.ref_resolver = fory.ref_resolver
-        self.elem_serializer = elem_serializer
-        if elem_serializer is None:
-            self.elem_type = None
-            self.elem_typeinfo = self.type_resolver.get_typeinfo(None)
-            self.elem_tracking_ref = -1
-        else:
-            self.elem_type = elem_serializer.type_
-            self.elem_typeinfo = fory.type_resolver.get_typeinfo(self.elem_type)
-            self.elem_tracking_ref = int(elem_serializer.need_to_write_ref)
-        self.is_py = fory.is_py
-
-    def write_header(self, buffer, value):
-        collect_flag = COLL_DEFAULT_FLAG
-        elem_type = self.elem_type
-        elem_typeinfo = self.elem_typeinfo
-        has_null = False
-        has_same_type = True
-        if elem_type is None:
-            for s in value:
-                if not has_null and s is None:
-                    has_null = True
-                    continue
-                if elem_type is None:
-                    elem_type = type(s)
-                elif has_same_type and type(s) is not elem_type:
-                    has_same_type = False
-            if has_same_type:
-                collect_flag |= COLL_IS_SAME_TYPE
-                if elem_type is not None:
-                    elem_typeinfo = self.type_resolver.get_typeinfo(elem_type)
-        else:
-            collect_flag |= COLL_IS_DECL_ELEMENT_TYPE | COLL_IS_SAME_TYPE
-            for s in value:
-                if s is None:
-                    has_null = True
-                    break
-
-        if has_null:
-            collect_flag |= COLL_HAS_NULL
-        if self.fory.ref_tracking:
-            if self.elem_tracking_ref == 1:
-                collect_flag |= COLL_TRACKING_REF
-            elif self.elem_tracking_ref == -1:
-                if not has_same_type or elem_typeinfo.serializer.need_to_write_ref:
-                    collect_flag |= COLL_TRACKING_REF
-        buffer.write_varuint32(len(value))
-        buffer.write_int8(collect_flag)
-        if has_same_type and (collect_flag & COLL_IS_DECL_ELEMENT_TYPE) == 0:
-            self.type_resolver.write_typeinfo(buffer, elem_typeinfo)
-        return collect_flag, elem_typeinfo
-
-    def write(self, buffer, value):
-        if len(value) == 0:
-            buffer.write_varuint32(0)
-            return
-        collect_flag, typeinfo = self.write_header(buffer, value)
-        if (collect_flag & COLL_IS_SAME_TYPE) != 0:
-            if (collect_flag & COLL_TRACKING_REF) == 0:
-                self._write_same_type_no_ref(buffer, value, typeinfo)
-            else:
-                self._write_same_type_ref(buffer, value, typeinfo)
-        else:
-            self._write_different_types(buffer, value)
-
-    def _write_same_type_no_ref(self, buffer, value, typeinfo):
-        if self.is_py:
-            for s in value:
-                typeinfo.serializer.write(buffer, s)
-        else:
-            for s in value:
-                typeinfo.serializer.xwrite(buffer, s)
-
-    def _write_same_type_ref(self, buffer, value, typeinfo):
-        if self.is_py:
-            for s in value:
-                if not self.ref_resolver.write_ref_or_null(buffer, s):
-                    typeinfo.serializer.write(buffer, s)
-        else:
-            for s in value:
-                if not self.ref_resolver.write_ref_or_null(buffer, s):
-                    typeinfo.serializer.xwrite(buffer, s)
-
-    def _write_different_types(self, buffer, value):
-        for s in value:
-            if not self.ref_resolver.write_ref_or_null(buffer, s):
-                typeinfo = self.type_resolver.get_typeinfo(type(s))
-                self.type_resolver.write_typeinfo(buffer, typeinfo)
-                if self.is_py:
-                    typeinfo.serializer.write(buffer, s)
-                else:
-                    typeinfo.serializer.xwrite(buffer, s)
-
-    def read(self, buffer):
-        len_ = buffer.read_varuint32()
-        collection_ = self.new_instance(self.type_)
-        if len_ == 0:
-            return collection_
-        collect_flag = buffer.read_int8()
-        if (collect_flag & COLL_IS_SAME_TYPE) != 0:
-            if collect_flag & COLL_IS_DECL_ELEMENT_TYPE == 0:
-                typeinfo = self.type_resolver.read_typeinfo(buffer)
-            else:
-                typeinfo = self.elem_typeinfo
-            if (collect_flag & COLL_TRACKING_REF) == 0:
-                self._read_same_type_no_ref(buffer, len_, collection_, typeinfo)
-            else:
-                self._read_same_type_ref(buffer, len_, collection_, typeinfo)
-        else:
-            self._read_different_types(buffer, len_, collection_)
-        return collection_
-
-    def new_instance(self, type_):
-        raise NotImplementedError
-
-    def _add_element(self, collection_, element):
-        raise NotImplementedError
-
-    def _read_same_type_no_ref(self, buffer, len_, collection_, typeinfo):
-        self.fory.inc_depth()
-        if self.is_py:
-            for _ in range(len_):
-                self._add_element(collection_, typeinfo.serializer.read(buffer))
-        else:
-            for _ in range(len_):
-                self._add_element(collection_, typeinfo.serializer.xread(buffer))
-        self.fory.dec_depth()
-
-    def _read_same_type_ref(self, buffer, len_, collection_, typeinfo):
-        self.fory.inc_depth()
-        for _ in range(len_):
-            ref_id = self.ref_resolver.try_preserve_ref_id(buffer)
-            if ref_id < NOT_NULL_VALUE_FLAG:
-                obj = self.ref_resolver.get_read_object()
-            else:
-                if self.is_py:
-                    obj = typeinfo.serializer.read(buffer)
-                else:
-                    obj = typeinfo.serializer.xread(buffer)
-                self.ref_resolver.set_read_object(ref_id, obj)
-            self._add_element(collection_, obj)
-        self.fory.dec_depth()
-
-    def _read_different_types(self, buffer, len_, collection_):
-        self.fory.inc_depth()
-        for _ in range(len_):
-            self._add_element(
-                collection_,
-                get_next_element(buffer, self.ref_resolver, self.type_resolver, self.is_py),
-            )
-        self.fory.dec_depth()
-
-    def xwrite(self, buffer, value):
-        self.write(buffer, value)
-
-    def xread(self, buffer):
-        return self.read(buffer)
-
-
-class ListSerializer(CollectionSerializer):
-    def new_instance(self, type_):
-        instance = []
-        self.fory.ref_resolver.reference(instance)
-        return instance
-
-    def _add_element(self, collection_, element):
-        collection_.append(element)
-
-
-class TupleSerializer(CollectionSerializer):
-    def new_instance(self, type_):
-        return []
-
-    def _add_element(self, collection_, element):
-        collection_.append(element)
-
-    def read(self, buffer):
-        return tuple(super().read(buffer))
-
-
-class StringArraySerializer(ListSerializer):
-    def __init__(self, fory, type_):
-        super().__init__(fory, type_, StringSerializer(fory, str))
-
-
-class SetSerializer(CollectionSerializer):
-    def new_instance(self, type_):
-        instance = set()
-        self.fory.ref_resolver.reference(instance)
-        return instance
-
-    def _add_element(self, collection_, element):
-        collection_.add(element)
-
-
-def get_next_element(buffer, ref_resolver, type_resolver, is_py):
-    ref_id = ref_resolver.try_preserve_ref_id(buffer)
-    if ref_id < NOT_NULL_VALUE_FLAG:
-        return ref_resolver.get_read_object()
-    typeinfo = type_resolver.read_typeinfo(buffer)
-    if is_py:
-        obj = typeinfo.serializer.read(buffer)
-    else:
-        obj = typeinfo.serializer.xread(buffer)
-    ref_resolver.set_read_object(ref_id, obj)
-    return obj
-
-
-class MapSerializer(Serializer):
-    def __init__(self, fory, type_, key_serializer=None, value_serializer=None):
-        super().__init__(fory, type_)
-        self.type_resolver = fory.type_resolver
-        self.ref_resolver = fory.ref_resolver
-        self.key_serializer = key_serializer
-        self.value_serializer = value_serializer
-
-    def write(self, buffer, o):
-        obj = o
-        length = len(obj)
-        buffer.write_varuint32(length)
-        if length == 0:
-            return
-        fory = self.fory
-        type_resolver = fory.type_resolver
-        ref_resolver = fory.ref_resolver
-        key_serializer = self.key_serializer
-        value_serializer = self.value_serializer
-
-        items_iter = iter(obj.items())
-        key, value = next(items_iter)
-        has_next = True
-        write_ref = fory.write_ref if self.fory.is_py else fory.xwrite_ref
-        while has_next:
-            while True:
-                if key is not None:
-                    if value is not None:
-                        break
-                    if key_serializer is not None:
-                        if key_serializer.need_to_write_ref:
-                            buffer.write_int8(NULL_VALUE_KEY_DECL_TYPE_TRACKING_REF)
-                            if not ref_resolver.write_ref_or_null(buffer, key):
-                                self._write_obj(key_serializer, buffer, key)
-                        else:
-                            buffer.write_int8(NULL_VALUE_KEY_DECL_TYPE)
-                            self._write_obj(key_serializer, buffer, key)
-                    else:
-                        buffer.write_int8(VALUE_HAS_NULL | TRACKING_KEY_REF)
-                        write_ref(buffer, key)
-                else:
-                    if value is not None:
-                        if value_serializer is not None:
-                            if value_serializer.need_to_write_ref:
-                                buffer.write_int8(NULL_KEY_VALUE_DECL_TYPE_TRACKING_REF)
-                                if not ref_resolver.write_ref_or_null(buffer, key):
-                                    value_serializer.write(buffer, key)
-                                if not ref_resolver.write_ref_or_null(buffer, value):
-                                    value_serializer.write(buffer, value)
-                            else:
-                                buffer.write_int8(NULL_KEY_VALUE_DECL_TYPE)
-                                value_serializer.write(buffer, value)
-                        else:
-                            buffer.write_int8(KEY_HAS_NULL | TRACKING_VALUE_REF)
-                            write_ref(buffer, value)
-                    else:
-                        buffer.write_int8(KV_NULL)
-                try:
-                    key, value = next(items_iter)
-                except StopIteration:
-                    has_next = False
-                    break
-
-            if not has_next:
-                break
-
-            key_cls = type(key)
-            value_cls = type(value)
-            buffer.write_int16(-1)
-            chunk_size_offset = buffer.writer_index - 1
-            chunk_header = 0
-
-            if key_serializer is not None:
-                chunk_header |= KEY_DECL_TYPE
-            else:
-                key_typeinfo = self.type_resolver.get_typeinfo(key_cls)
-                type_resolver.write_typeinfo(buffer, key_typeinfo)
-                key_serializer = key_typeinfo.serializer
-
-            if value_serializer is not None:
-                chunk_header |= VALUE_DECL_TYPE
-            else:
-                value_typeinfo = self.type_resolver.get_typeinfo(value_cls)
-                type_resolver.write_typeinfo(buffer, value_typeinfo)
-                value_serializer = value_typeinfo.serializer
-
-            key_write_ref = key_serializer.need_to_write_ref if key_serializer else False
-            value_write_ref = value_serializer.need_to_write_ref if value_serializer else False
-            if key_write_ref:
-                chunk_header |= TRACKING_KEY_REF
-            if value_write_ref:
-                chunk_header |= TRACKING_VALUE_REF
-
-            buffer.put_uint8(chunk_size_offset - 1, chunk_header)
-            chunk_size = 0
-
-            while chunk_size < MAX_CHUNK_SIZE:
-                if key is None or value is None or type(key) is not key_cls or type(value) is not value_cls:
-                    break
-                if not key_write_ref or not ref_resolver.write_ref_or_null(buffer, key):
-                    self._write_obj(key_serializer, buffer, key)
-                if not value_write_ref or not ref_resolver.write_ref_or_null(buffer, value):
-                    value_serializer.write(buffer, value)
-
-                chunk_size += 1
-                try:
-                    key, value = next(items_iter)
-                except StopIteration:
-                    has_next = False
-                    break
-
-            key_serializer = self.key_serializer
-            value_serializer = self.value_serializer
-            buffer.put_uint8(chunk_size_offset, chunk_size)
-
-    def read(self, buffer):
-        fory = self.fory
-        ref_resolver = self.ref_resolver
-        type_resolver = self.type_resolver
-        size = buffer.read_varuint32()
-        map_ = {}
-        ref_resolver.reference(map_)
-        chunk_header = 0
-        if size != 0:
-            chunk_header = buffer.read_uint8()
-        key_serializer, value_serializer = self.key_serializer, self.value_serializer
-        read_ref = fory.read_ref if self.fory.is_py else fory.xread_ref
-        fory.inc_depth()
-        while size > 0:
-            while True:
-                key_has_null = (chunk_header & KEY_HAS_NULL) != 0
-                value_has_null = (chunk_header & VALUE_HAS_NULL) != 0
-                if not key_has_null:
-                    if not value_has_null:
-                        break
-                    else:
-                        track_key_ref = (chunk_header & TRACKING_KEY_REF) != 0
-                        if (chunk_header & KEY_DECL_TYPE) != 0:
-                            if track_key_ref:
-                                ref_id = ref_resolver.try_preserve_ref_id(buffer)
-                                if ref_id < NOT_NULL_VALUE_FLAG:
-                                    key = ref_resolver.get_read_object()
-                                else:
-                                    key = self._read_obj(key_serializer, buffer)
-                                    ref_resolver.set_read_object(ref_id, key)
-                            else:
-                                key = self._read_obj(key_serializer, buffer)
-                        else:
-                            key = read_ref(buffer)
-                        map_[key] = None
-                else:
-                    if not value_has_null:
-                        track_value_ref = (chunk_header & TRACKING_VALUE_REF) != 0
-                        if (chunk_header & VALUE_DECL_TYPE) != 0:
-                            if track_value_ref:
-                                ref_id = ref_resolver.try_preserve_ref_id(buffer)
-                                if ref_id < NOT_NULL_VALUE_FLAG:
-                                    value = ref_resolver.get_read_object()
-                                else:
-                                    value = self._read_obj(value_serializer, buffer)
-                                    ref_resolver.set_read_object(ref_id, value)
-                        else:
-                            value = read_ref(buffer)
-                        map_[None] = value
-                    else:
-                        map_[None] = None
-                size -= 1
-                if size == 0:
-                    fory.dec_depth()
-                    return map_
-                else:
-                    chunk_header = buffer.read_uint8()
-
-            track_key_ref = (chunk_header & TRACKING_KEY_REF) != 0
-            track_value_ref = (chunk_header & TRACKING_VALUE_REF) != 0
-            key_is_declared_type = (chunk_header & KEY_DECL_TYPE) != 0
-            value_is_declared_type = (chunk_header & VALUE_DECL_TYPE) != 0
-            chunk_size = buffer.read_uint8()
-            if not key_is_declared_type:
-                key_serializer = type_resolver.read_typeinfo(buffer).serializer
-            if not value_is_declared_type:
-                value_serializer = type_resolver.read_typeinfo(buffer).serializer
-            for i in range(chunk_size):
-                if track_key_ref:
-                    ref_id = ref_resolver.try_preserve_ref_id(buffer)
-                    if ref_id < NOT_NULL_VALUE_FLAG:
-                        key = ref_resolver.get_read_object()
-                    else:
-                        key = self._read_obj(key_serializer, buffer)
-                        ref_resolver.set_read_object(ref_id, key)
-                else:
-                    key = self._read_obj(key_serializer, buffer)
-                if track_value_ref:
-                    ref_id = ref_resolver.try_preserve_ref_id(buffer)
-                    if ref_id < NOT_NULL_VALUE_FLAG:
-                        value = ref_resolver.get_read_object()
-                    else:
-                        value = self._read_obj(value_serializer, buffer)
-                        ref_resolver.set_read_object(ref_id, value)
-                else:
-                    value = self._read_obj(value_serializer, buffer)
-                map_[key] = value
-                size -= 1
-            if size != 0:
-                chunk_header = buffer.read_uint8()
-        fory.dec_depth()
-        return map_
-
-    def _write_obj(self, serializer, buffer, obj):
-        if self.fory.is_py:
-            serializer.write(buffer, obj)
-        else:
-            serializer.xwrite(buffer, obj)
-
-    def _read_obj(self, serializer, buffer):
-        if self.fory.is_py:
-            return serializer.read(buffer)
-        else:
-            return serializer.xread(buffer)
-
-    def xwrite(self, buffer, value: Dict):
-        self.write(buffer, value)
-
-    def xread(self, buffer):
-        return self.read(buffer)
-
-
-SubMapSerializer = MapSerializer
 
 
 class EnumSerializer(Serializer):
@@ -749,3 +383,101 @@ class SliceSerializer(Serializer):
 
     def xread(self, buffer):
         raise NotImplementedError
+
+
+class UnionSerializer(Serializer):
+    """
+    Serializer for typing.Union types.
+
+    Serializes a Union by storing:
+    1. The index of the active alternative (as varuint32)
+    2. The value of the active alternative
+
+    This allows the deserializer to determine which alternative to use
+    and forward to the appropriate serializer.
+    """
+
+    __slots__ = ("alternative_types", "alternative_serializers", "type_resolver")
+
+    def __init__(self, fory, type_, alternative_types):
+        super().__init__(fory, type_)
+        self.alternative_types = alternative_types
+        self.type_resolver = fory.type_resolver
+        self.alternative_serializers = []
+        for alt_type in alternative_types:
+            serializer = fory.type_resolver.get_serializer(alt_type)
+            self.alternative_serializers.append((alt_type, serializer))
+
+    def write(self, buffer, value):
+        # Find which alternative type matches the value
+        active_index = None
+        active_serializer = None
+
+        for i, (alt_type, serializer) in enumerate(self.alternative_serializers):
+            if isinstance(value, alt_type):
+                active_index = i
+                active_serializer = serializer
+                break
+
+        if active_index is None:
+            raise TypeError(f"Value {value} of type {type(value)} doesn't match any alternative in Union{self.alternative_types}")
+
+        # Write the active variant index
+        buffer.write_varuint32(active_index)
+
+        # Write the alternative's value (no type info in Python mode)
+        active_serializer.write(buffer, value)
+
+    def read(self, buffer):
+        # Read the stored variant index
+        stored_index = buffer.read_varuint32()
+
+        # Validate index is within bounds
+        if stored_index >= len(self.alternative_serializers):
+            raise ValueError(f"Union index out of bounds: {stored_index} (max: {len(self.alternative_serializers) - 1})")
+
+        # Dispatch to the appropriate alternative's serializer
+        _, serializer = self.alternative_serializers[stored_index]
+        return serializer.read(buffer)
+
+    def xwrite(self, buffer, value):
+        # Find which alternative type matches the value
+        active_index = None
+        active_serializer = None
+        active_type = None
+
+        for i, (alt_type, serializer) in enumerate(self.alternative_serializers):
+            if isinstance(value, alt_type):
+                active_index = i
+                active_serializer = serializer
+                active_type = alt_type
+                break
+
+        if active_index is None:
+            raise TypeError(f"Value {value} of type {type(value)} doesn't match any alternative in Union{self.alternative_types}")
+
+        # Write the active variant index
+        buffer.write_varuint32(active_index)
+
+        # In xlang mode, write type info for the alternative
+        # Get the typeinfo for the alternative type and write it
+        typeinfo = self.type_resolver.get_typeinfo(active_type)
+        self.type_resolver.write_typeinfo(buffer, typeinfo)
+
+        # Write the alternative's value data
+        active_serializer.xwrite(buffer, value)
+
+    def xread(self, buffer):
+        # Read the stored variant index
+        stored_index = buffer.read_varuint32()
+
+        # Validate index is within bounds
+        if stored_index >= len(self.alternative_serializers):
+            raise ValueError(f"Union index out of bounds: {stored_index} (max: {len(self.alternative_serializers) - 1})")
+
+        # In xlang mode, read type info for the alternative
+        typeinfo = self.type_resolver.read_typeinfo(buffer)
+
+        # Dispatch to the appropriate alternative's serializer
+        # Use typeinfo's serializer which may be more specific than what we registered
+        return typeinfo.serializer.xread(buffer)

@@ -24,18 +24,13 @@ import (
 )
 
 func TestTypeResolver(t *testing.T) {
-	fory := &Fory{
-		refResolver: newRefResolver(false),
-		refTracking: false,
-		language:    XLANG,
-		buffer:      NewByteBuffer(nil),
-	}
-	typeResolver := newTypeResolver(fory)
+	fory := NewFory(WithTrackRef(false), WithXlang(true))
+	typeResolver := fory.typeResolver
 	type A struct {
 		F1 string
 	}
-	require.Nil(t, typeResolver.RegisterNamedType(reflect.TypeOf(A{}), 0, "", "example.A"))
-	require.Error(t, typeResolver.RegisterNamedType(reflect.TypeOf(A{}), 0, "", "example.A"))
+	require.Nil(t, typeResolver.RegisterNamedStruct(reflect.TypeOf(A{}), 0, "", "example.A"))
+	require.Error(t, typeResolver.RegisterNamedStruct(reflect.TypeOf(A{}), 0, "", "example.A"))
 
 	var tests = []struct {
 		type_    reflect.Type
@@ -44,7 +39,7 @@ func TestTypeResolver(t *testing.T) {
 		{reflect.TypeOf((*int)(nil)), "*int"},
 		{reflect.TypeOf((*[10]int)(nil)), "*[10]int"},
 		{reflect.TypeOf((*[10]int)(nil)).Elem(), "[10]int"},
-		{reflect.TypeOf((*[]map[string][]map[string]*interface{})(nil)).Elem(),
+		{reflect.TypeOf((*[]map[string][]map[string]*any)(nil)).Elem(),
 			"[]map[string][]map[string]*interface {}"},
 		{reflect.TypeOf((*A)(nil)), "*@example.A"},
 		{reflect.TypeOf((*A)(nil)).Elem(), "@example.A"},

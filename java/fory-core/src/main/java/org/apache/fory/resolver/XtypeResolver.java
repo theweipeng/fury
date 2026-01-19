@@ -53,6 +53,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import org.apache.fory.Fory;
+import org.apache.fory.annotation.ForyField;
 import org.apache.fory.annotation.Internal;
 import org.apache.fory.collection.IdentityObjectIntMap;
 import org.apache.fory.collection.LongMap;
@@ -71,7 +72,8 @@ import org.apache.fory.meta.MetaString;
 import org.apache.fory.reflect.ReflectionUtils;
 import org.apache.fory.reflect.TypeRef;
 import org.apache.fory.serializer.ArraySerializers;
-import org.apache.fory.serializer.DeferedLazySerializer.DeferedLazyObjectSerializer;
+import org.apache.fory.serializer.DeferedLazySerializer;
+import org.apache.fory.serializer.DeferedLazySerializer.DeferredLazyObjectSerializer;
 import org.apache.fory.serializer.EnumSerializer;
 import org.apache.fory.serializer.NonexistentClass;
 import org.apache.fory.serializer.NonexistentClass.NonexistentMetaShared;
@@ -82,6 +84,7 @@ import org.apache.fory.serializer.SerializationUtils;
 import org.apache.fory.serializer.Serializer;
 import org.apache.fory.serializer.Serializers;
 import org.apache.fory.serializer.TimeSerializers;
+import org.apache.fory.serializer.UnionSerializer;
 import org.apache.fory.serializer.collection.CollectionLikeSerializer;
 import org.apache.fory.serializer.collection.CollectionSerializer;
 import org.apache.fory.serializer.collection.CollectionSerializers.ArrayListSerializer;
@@ -97,6 +100,7 @@ import org.apache.fory.type.GenericType;
 import org.apache.fory.type.Generics;
 import org.apache.fory.type.TypeUtils;
 import org.apache.fory.type.Types;
+import org.apache.fory.util.GraalvmSupport;
 import org.apache.fory.util.Preconditions;
 
 @SuppressWarnings({"unchecked", "rawtypes"})
@@ -167,6 +171,7 @@ public class XtypeResolver extends TypeResolver {
     ClassInfo classInfo = classInfoMap.get(type);
     if (type.isArray()) {
       buildClassInfo(type);
+      GraalvmSupport.registerClass(type, fory.getConfig().getConfigHash());
       return;
     }
     Serializer<?> serializer = null;
@@ -257,6 +262,7 @@ public class XtypeResolver extends TypeResolver {
     String qualifiedName = qualifiedName(namespace, typeName);
     qualifiedType2ClassInfo.put(qualifiedName, classInfo);
     extRegistry.registeredClasses.put(qualifiedName, type);
+    GraalvmSupport.registerClass(type, fory.getConfig().getConfigHash());
     if (serializer == null) {
       if (type.isEnum()) {
         classInfo.serializer = new EnumSerializer(fory, (Class<Enum>) type);
@@ -264,7 +270,7 @@ public class XtypeResolver extends TypeResolver {
         AtomicBoolean updated = new AtomicBoolean(false);
         AtomicReference<Serializer> ref = new AtomicReference(null);
         classInfo.serializer =
-            new DeferedLazyObjectSerializer(
+            new DeferedLazySerializer.DeferredLazyObjectSerializer(
                 fory,
                 type,
                 () -> {
@@ -315,7 +321,7 @@ public class XtypeResolver extends TypeResolver {
     if (serializer instanceof ObjectSerializer || serializer instanceof GeneratedSerializer) {
       return true;
     }
-    return serializer instanceof DeferedLazyObjectSerializer;
+    return serializer instanceof DeferredLazyObjectSerializer;
   }
 
   private ClassInfo newClassInfo(Class<?> type, Serializer<?> serializer, int xtypeId) {
@@ -430,6 +436,28 @@ public class XtypeResolver extends TypeResolver {
   }
 
   @Override
+  public boolean isMonomorphic(Descriptor descriptor) {
+    ForyField foryField = descriptor.getForyField();
+    ForyField.Dynamic dynamic = foryField != null ? foryField.dynamic() : ForyField.Dynamic.AUTO;
+    switch (dynamic) {
+      case TRUE:
+        return false;
+      case FALSE:
+        return true;
+      default:
+        Class<?> rawType = descriptor.getRawType();
+        if (rawType.isEnum()) {
+          return true;
+        }
+        byte xtypeId = getXtypeId(rawType);
+        if (fory.isCompatible()) {
+          return !Types.isUserDefinedType(xtypeId) && xtypeId != Types.UNKNOWN;
+        }
+        return xtypeId != Types.UNKNOWN;
+    }
+  }
+
+  @Override
   public boolean isMonomorphic(Class<?> clz) {
     if (TypeUtils.unwrap(clz).isPrimitive() || clz.isEnum() || clz == String.class) {
       return true;
@@ -442,7 +470,8 @@ public class XtypeResolver extends TypeResolver {
       Serializer<?> s = classInfo.serializer;
       if (s instanceof TimeSerializers.TimeSerializer
           || s instanceof MapLikeSerializer
-          || s instanceof CollectionLikeSerializer) {
+          || s instanceof CollectionLikeSerializer
+          || s instanceof UnionSerializer) {
         return true;
       }
 
@@ -452,6 +481,12 @@ public class XtypeResolver extends TypeResolver {
       return true;
     }
     return false;
+  }
+
+  public boolean isBuildIn(Descriptor descriptor) {
+    Class<?> rawType = descriptor.getRawType();
+    byte xtypeId = getXtypeId(rawType);
+    return !Types.isUserDefinedType(xtypeId) && xtypeId != Types.UNKNOWN;
   }
 
   @Override
@@ -494,7 +529,7 @@ public class XtypeResolver extends TypeResolver {
   }
 
   public ClassInfo getUserTypeInfo(int userTypeId) {
-    Preconditions.checkArgument((userTypeId & 0xff) < Types.UNKNOWN);
+    Preconditions.checkArgument((userTypeId & 0xff) < Types.BOUND);
     return xtypeIdToClassMap.get(userTypeId);
   }
 
@@ -584,10 +619,19 @@ public class XtypeResolver extends TypeResolver {
 
   private void registerDefaultTypes() {
     registerDefaultTypes(Types.BOOL, Boolean.class, boolean.class, AtomicBoolean.class);
-    registerDefaultTypes(Types.INT8, Byte.class, byte.class);
-    registerDefaultTypes(Types.INT16, Short.class, short.class);
+    registerDefaultTypes(Types.UINT8, Byte.class, byte.class);
+    registerDefaultTypes(Types.UINT16, Short.class, short.class);
+    registerDefaultTypes(Types.UINT32, Integer.class, int.class, AtomicInteger.class);
+    registerDefaultTypes(Types.UINT64, Long.class, long.class, AtomicLong.class);
+    registerDefaultTypes(Types.TAGGED_UINT64, Long.class, long.class, AtomicLong.class);
     registerDefaultTypes(Types.INT32, Integer.class, int.class, AtomicInteger.class);
     registerDefaultTypes(Types.INT64, Long.class, long.class, AtomicLong.class);
+    registerDefaultTypes(Types.TAGGED_INT64, Long.class, long.class, AtomicLong.class);
+
+    registerDefaultTypes(Types.INT8, Byte.class, byte.class);
+    registerDefaultTypes(Types.INT16, Short.class, short.class);
+    registerDefaultTypes(Types.VARINT32, Integer.class, int.class, AtomicInteger.class);
+    registerDefaultTypes(Types.VARINT64, Long.class, long.class, AtomicLong.class);
     registerDefaultTypes(Types.FLOAT32, Float.class, float.class);
     registerDefaultTypes(Types.FLOAT64, Double.class, double.class);
     registerDefaultTypes(Types.STRING, String.class, StringBuilder.class, StringBuffer.class);
@@ -615,6 +659,7 @@ public class XtypeResolver extends TypeResolver {
     registerDefaultTypes(Types.SET, HashSet.class, LinkedHashSet.class, Set.class);
     registerDefaultTypes(Types.MAP, HashMap.class, LinkedHashMap.class, Map.class);
     registerDefaultTypes(Types.LOCAL_DATE, LocalDate.class);
+    registerUnionTypes();
   }
 
   private void registerDefaultTypes(int xtypeId, Class<?> defaultType, Class<?>... otherTypes) {
@@ -640,6 +685,27 @@ public class XtypeResolver extends TypeResolver {
       ClassInfo info = newClassInfo(otherType, serializer, (short) xtypeId);
       classInfoMap.put(otherType, info);
     }
+  }
+
+  private void registerUnionTypes() {
+    Class<?>[] unionClasses =
+        new Class<?>[] {
+          org.apache.fory.type.union.Union.class,
+          org.apache.fory.type.union.Union2.class,
+          org.apache.fory.type.union.Union3.class,
+          org.apache.fory.type.union.Union4.class,
+          org.apache.fory.type.union.Union5.class,
+          org.apache.fory.type.union.Union6.class
+        };
+    for (Class<?> cls : unionClasses) {
+      @SuppressWarnings("unchecked")
+      Class<? extends org.apache.fory.type.union.Union> unionCls =
+          (Class<? extends org.apache.fory.type.union.Union>) cls;
+      UnionSerializer serializer = new UnionSerializer(fory, unionCls);
+      ClassInfo classInfo = newClassInfo(cls, serializer, (short) Types.UNION);
+      classInfoMap.put(cls, classInfo);
+    }
+    xtypeIdToClassMap.put(Types.UNION, classInfoMap.get(org.apache.fory.type.union.Union.class));
   }
 
   public ClassInfo writeClassInfo(MemoryBuffer buffer, Object obj) {
@@ -706,6 +772,7 @@ public class XtypeResolver extends TypeResolver {
     return (Serializer) getClassInfo(cls).serializer;
   }
 
+  @Override
   public Serializer<?> getRawSerializer(Class<?> cls) {
     return getClassInfo(cls).serializer;
   }
@@ -892,40 +959,25 @@ public class XtypeResolver extends TypeResolver {
       boolean descriptorsGroupedOrdered,
       Function<Descriptor, Descriptor> descriptorUpdator) {
     return DescriptorGrouper.createDescriptorGrouper(
-            clz -> {
-              ClassInfo classInfo = getClassInfo(clz, false);
-              if (classInfo == null || clz.isEnum()) {
-                return false;
-              }
-              byte foryTypeId = (byte) (classInfo.xtypeId & 0xff);
-              if (foryTypeId == 0
-                  || foryTypeId == Types.UNKNOWN
-                  || Types.isUserDefinedType(foryTypeId)) {
-                return false;
-              }
-              return foryTypeId != Types.LIST && foryTypeId != Types.SET && foryTypeId != Types.MAP;
-            },
+            this::isBuildIn,
             descriptors,
             descriptorsGroupedOrdered,
             descriptorUpdator,
-            fory.compressInt(),
-            fory.compressLong(),
+            getPrimitiveComparator(),
             (o1, o2) -> {
               int xtypeId = getXtypeId(o1.getRawType());
               int xtypeId2 = getXtypeId(o2.getRawType());
               if (xtypeId == xtypeId2) {
-                return o1.getSnakeCaseName().compareTo(o2.getSnakeCaseName());
+                return getFieldSortKey(o1).compareTo(getFieldSortKey(o2));
               } else {
                 return xtypeId - xtypeId2;
               }
             })
-        .setOtherDescriptorComparator(Comparator.comparing(Descriptor::getSnakeCaseName))
+        .setOtherDescriptorComparator(Comparator.comparing(TypeResolver::getFieldSortKey))
         .sort();
   }
 
-  private static final int UNKNOWN_TYPE_ID = Types.UNKNOWN;
-
-  private int getXtypeId(Class<?> cls) {
+  private byte getXtypeId(Class<?> cls) {
     if (isSet(cls)) {
       return Types.SET;
     }
@@ -938,8 +990,8 @@ public class XtypeResolver extends TypeResolver {
     if (isMap(cls)) {
       return Types.MAP;
     }
-    if (fory.getXtypeResolver().isRegistered(cls)) {
-      return fory.getXtypeResolver().getClassInfo(cls).getXtypeId();
+    if (isRegistered(cls)) {
+      return (byte) (getClassInfo(cls).getXtypeId() & 0xff);
     } else {
       if (cls.isEnum()) {
         return Types.ENUM;
@@ -950,7 +1002,7 @@ public class XtypeResolver extends TypeResolver {
       if (ReflectionUtils.isMonomorphic(cls)) {
         throw new UnsupportedOperationException(cls + " is not supported for xlang serialization");
       }
-      return UNKNOWN_TYPE_ID;
+      return Types.UNKNOWN;
     }
   }
 
@@ -976,5 +1028,36 @@ public class XtypeResolver extends TypeResolver {
 
   private boolean isEnum(int internalTypeId) {
     return internalTypeId == Types.ENUM || internalTypeId == Types.NAMED_ENUM;
+  }
+
+  /**
+   * Ensure all serializers for registered classes are compiled at GraalVM build time. This method
+   * should be called after all classes are registered.
+   */
+  @Override
+  public void ensureSerializersCompiled() {
+    classInfoMap.forEach(
+        (cls, classInfo) -> {
+          GraalvmSupport.registerClass(cls, fory.getConfig().getConfigHash());
+          if (classInfo.serializer != null) {
+            // Trigger serializer initialization and resolution for deferred serializers
+            if (classInfo.serializer
+                instanceof DeferedLazySerializer.DeferredLazyObjectSerializer) {
+              ((DeferedLazySerializer.DeferredLazyObjectSerializer) classInfo.serializer)
+                  .resolveSerializer();
+            } else {
+              classInfo.serializer.getClass();
+            }
+          }
+          // For enums at GraalVM build time, also handle anonymous enum value classes
+          if (cls.isEnum() && GraalvmSupport.isGraalBuildtime()) {
+            for (Object enumConstant : cls.getEnumConstants()) {
+              Class<?> enumValueClass = enumConstant.getClass();
+              if (enumValueClass != cls) {
+                getSerializer(enumValueClass);
+              }
+            }
+          }
+        });
   }
 }

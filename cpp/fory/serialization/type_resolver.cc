@@ -18,7 +18,9 @@
  */
 
 #include "fory/serialization/type_resolver.h"
+#include "fory/meta/meta_string.h"
 #include "fory/serialization/context.h"
+#include "fory/thirdparty/MurmurHash3.h"
 #include "fory/type/type.h"
 #include <algorithm>
 #include <cstring>
@@ -28,10 +30,13 @@
 namespace fory {
 namespace serialization {
 
+using namespace meta;
+
 // Constants from xlang spec
 constexpr size_t SMALL_NUM_FIELDS_THRESHOLD = 0b11111;
 constexpr uint8_t REGISTER_BY_NAME_FLAG = 0b100000;
 constexpr size_t FIELD_NAME_SIZE_THRESHOLD = 0b1111;
+constexpr size_t BIG_NAME_THRESHOLD = 0b111111;
 constexpr int64_t META_SIZE_MASK = 0xfff;
 // constexpr int64_t COMPRESS_META_FLAG = 0b1 << 13;
 constexpr int64_t HAS_FIELDS_META_FLAG = 0b1 << 12;
@@ -74,20 +79,29 @@ Result<void, Error> FieldType::write_to(Buffer &buffer, bool write_flag,
 }
 
 Result<FieldType, Error> FieldType::read_from(Buffer &buffer, bool read_flag,
-                                              bool nullable_val) {
-  FORY_TRY(header, buffer.ReadVarUint32());
+                                              bool nullable_val,
+                                              bool ref_tracking_val) {
+  Error error;
+  uint32_t header = buffer.ReadVarUint32(error);
+  if (FORY_PREDICT_FALSE(!error.ok())) {
+    return Unexpected(std::move(error));
+  }
 
   uint32_t tid;
   bool null;
+  bool ref_track;
   if (read_flag) {
+    // Header layout: type_id:N bits | nullable:1 bit | ref_tracking:1 bit
     tid = header >> 2;
-    null = (header & 2) != 0;
+    null = (header & 0b10) != 0;
+    ref_track = (header & 0b01) != 0;
   } else {
     tid = header;
     null = nullable_val;
+    ref_track = ref_tracking_val;
   }
 
-  FieldType ft(tid, null);
+  FieldType ft(tid, null, ref_track);
 
   // Read generics for list/set/map
   if (tid == static_cast<uint32_t>(TypeId::LIST) ||
@@ -119,8 +133,11 @@ Result<std::vector<uint8_t>, Error> FieldInfo::to_bytes() const {
   uint8_t header =
       (std::min(FIELD_NAME_SIZE_THRESHOLD, name_size - 1) << 2) & 0x3C;
 
+  if (field_type.ref_tracking) {
+    header |= 1; // bit 0 for ref tracking
+  }
   if (field_type.nullable) {
-    header |= 2;
+    header |= 2; // bit 1 for nullable
   }
   header |= (encoding_idx << 6);
 
@@ -144,29 +161,135 @@ Result<std::vector<uint8_t>, Error> FieldInfo::to_bytes() const {
 
 Result<FieldInfo, Error> FieldInfo::from_bytes(Buffer &buffer) {
   // Read field header
-  FORY_TRY(header, buffer.ReadUint8());
+  Error error;
+  uint8_t header = buffer.ReadUint8(error);
+  if (FORY_PREDICT_FALSE(!error.ok())) {
+    return Unexpected(std::move(error));
+  }
 
-  bool nullable = (header & 2) != 0;
+  // Decode header layout:
+  // bit  0: ref tracking flag
+  // bit  1: nullability flag
+  // bits 2-5: size (0-14, 15 means extended)
+  // bits 6-7: field name encoding index
+  uint8_t encoding_idx = static_cast<uint8_t>(header >> 6);
+  bool ref_tracking = (header & 0b01u) != 0;
+  bool nullable = (header & 0b10u) != 0;
   size_t name_size = ((header >> 2) & FIELD_NAME_SIZE_THRESHOLD);
   if (name_size == FIELD_NAME_SIZE_THRESHOLD) {
-    FORY_TRY(extra, buffer.ReadVarUint32());
+    uint32_t extra = buffer.ReadVarUint32(error);
+    if (FORY_PREDICT_FALSE(!error.ok())) {
+      return Unexpected(std::move(error));
+    }
     name_size += extra;
   }
   name_size += 1;
 
-  // Read field type
-  FORY_TRY(field_type, FieldType::read_from(buffer, false, nullable));
+  // Read field type with nullable and ref_tracking from header
+  FORY_TRY(field_type,
+           FieldType::read_from(buffer, false, nullable, ref_tracking));
 
-  // Read field name
-  std::string field_name(name_size, '\0');
-  FORY_RETURN_NOT_OK(buffer.ReadBytes(field_name.data(), name_size));
+  // Read and decode field name. Java encodes field names using
+  // MetaString with encodings:
+  //   UTF8 / ALL_TO_LOWER_SPECIAL / LOWER_UPPER_DIGIT_SPECIAL
+  // and writes the encoding index into the top 2 bits.
+  // We mirror that here using MetaStringDecoder with '$' and '_' as
+  // special characters (same as Encoders.FIELD_NAME_DECODER).
 
-  return FieldInfo(field_name, std::move(field_type));
+  std::vector<uint8_t> name_bytes(name_size);
+  buffer.ReadBytes(name_bytes.data(), static_cast<uint32_t>(name_size), error);
+  if (FORY_PREDICT_FALSE(!error.ok())) {
+    return Unexpected(std::move(error));
+  }
+
+  static const MetaStringDecoder kFieldNameDecoder('$', '_');
+
+  FORY_TRY(encoding, ToMetaEncoding(encoding_idx));
+  FORY_TRY(decoded_name, kFieldNameDecoder.decode(name_bytes.data(),
+                                                  name_bytes.size(), encoding));
+
+  return FieldInfo(decoded_name, std::move(field_type));
 }
 
 // ============================================================================
 // TypeMeta Implementation
 // ============================================================================
+
+namespace {
+
+// Meta string encodings for namespace and type name, aligned with
+// rust/fory-core/src/meta/type_meta.rs and Java Encoders.
+static const MetaEncoding kNamespaceEncodings[] = {
+    MetaEncoding::UTF8, MetaEncoding::ALL_TO_LOWER_SPECIAL,
+    MetaEncoding::LOWER_UPPER_DIGIT_SPECIAL};
+
+static const MetaEncoding kTypeNameEncodings[] = {
+    MetaEncoding::UTF8, MetaEncoding::ALL_TO_LOWER_SPECIAL,
+    MetaEncoding::LOWER_UPPER_DIGIT_SPECIAL,
+    MetaEncoding::FIRST_TO_LOWER_SPECIAL};
+
+inline Result<void, Error> write_meta_name(Buffer &buffer,
+                                           const std::string &name) {
+  const uint8_t encoding_idx = 0; // UTF8 in both encoding tables
+  const size_t len = name.size();
+
+  if (len >= BIG_NAME_THRESHOLD) {
+    uint8_t header =
+        static_cast<uint8_t>((BIG_NAME_THRESHOLD << 2) | encoding_idx);
+    buffer.WriteUint8(header);
+    buffer.WriteVarUint32(static_cast<uint32_t>(len - BIG_NAME_THRESHOLD));
+  } else {
+    uint8_t header = static_cast<uint8_t>((len << 2) | encoding_idx);
+    buffer.WriteUint8(header);
+  }
+
+  if (!name.empty()) {
+    buffer.WriteBytes(reinterpret_cast<const uint8_t *>(name.data()),
+                      static_cast<uint32_t>(name.size()));
+  }
+  return Result<void, Error>();
+}
+
+inline Result<std::string, Error>
+read_meta_name(Buffer &buffer, const MetaStringDecoder &decoder,
+               const MetaEncoding *encodings, size_t enc_count) {
+  Error error;
+  uint8_t header = buffer.ReadUint8(error);
+  if (FORY_PREDICT_FALSE(!error.ok())) {
+    return Unexpected(std::move(error));
+  }
+  uint8_t encoding_idx = header & 0x3u;
+  uint8_t length_prefix = header >> 2;
+
+  if (encoding_idx >= enc_count) {
+    return Unexpected(
+        Error::encoding_error("Invalid meta string encoding index: " +
+                              std::to_string(static_cast<int>(encoding_idx))));
+  }
+
+  size_t length = length_prefix;
+  if (length >= BIG_NAME_THRESHOLD) {
+    uint32_t extra = buffer.ReadVarUint32(error);
+    if (FORY_PREDICT_FALSE(!error.ok())) {
+      return Unexpected(std::move(error));
+    }
+    length = BIG_NAME_THRESHOLD + static_cast<size_t>(extra);
+  }
+
+  std::vector<uint8_t> bytes(length);
+  if (length > 0) {
+    buffer.ReadBytes(bytes.data(), static_cast<uint32_t>(length), error);
+    if (FORY_PREDICT_FALSE(!error.ok())) {
+      return Unexpected(std::move(error));
+    }
+  }
+
+  MetaEncoding encoding = encodings[encoding_idx];
+  FORY_TRY(result, decoder.decode(bytes.data(), bytes.size(), encoding));
+  return result;
+}
+
+} // namespace
 
 TypeMeta TypeMeta::from_fields(uint32_t tid, const std::string &ns,
                                const std::string &name, bool by_name,
@@ -201,18 +324,11 @@ Result<std::vector<uint8_t>, Error> TypeMeta::to_bytes() const {
     layer_buffer.WriteVarUint32(num_fields - SMALL_NUM_FIELDS_THRESHOLD);
   }
 
-  // Write namespace and type name (if registered by name)
-  // For now, use simplified UTF8 encoding
+  // Write namespace and type name (if registered by name) using the
+  // same compact meta string format as Rust/Java.
   if (register_by_name) {
-    // Write namespace
-    layer_buffer.WriteVarUint32(namespace_str.size());
-    layer_buffer.WriteBytes(
-        reinterpret_cast<const uint8_t *>(namespace_str.data()),
-        namespace_str.size());
-    // Write type name
-    layer_buffer.WriteVarUint32(type_name.size());
-    layer_buffer.WriteBytes(reinterpret_cast<const uint8_t *>(type_name.data()),
-                            type_name.size());
+    FORY_RETURN_NOT_OK(write_meta_name(layer_buffer, namespace_str));
+    FORY_RETURN_NOT_OK(write_meta_name(layer_buffer, type_name));
   } else {
     layer_buffer.WriteVarUint32(type_id);
   }
@@ -252,29 +368,44 @@ Result<std::vector<uint8_t>, Error> TypeMeta::to_bytes() const {
                                   result_buffer.writer_index());
 }
 
-Result<std::shared_ptr<TypeMeta>, Error>
+Result<std::unique_ptr<TypeMeta>, Error>
 TypeMeta::from_bytes(Buffer &buffer, const TypeMeta *local_type_info) {
   size_t start_pos = buffer.reader_index();
 
   // Read global binary header
+  Error error;
   int64_t header;
-  FORY_RETURN_NOT_OK(buffer.ReadBytes(&header, sizeof(header)));
+  buffer.ReadBytes(&header, sizeof(header), error);
+  if (FORY_PREDICT_FALSE(!error.ok())) {
+    return Unexpected(std::move(error));
+  }
 
   size_t header_size = sizeof(header);
   int64_t meta_size = header & META_SIZE_MASK;
   if (meta_size == META_SIZE_MASK) {
-    FORY_TRY(extra, buffer.ReadVarUint32());
+    uint32_t before = buffer.reader_index();
+    uint32_t extra = buffer.ReadVarUint32(error);
+    if (FORY_PREDICT_FALSE(!error.ok())) {
+      return Unexpected(std::move(error));
+    }
     meta_size += extra;
-    header_size += 4; // approximate varuint32 size
+    uint32_t after = buffer.reader_index();
+    header_size += (after - before);
   }
   int64_t meta_hash = header >> (64 - NUM_HASH_BITS);
   // Read meta header
-  FORY_TRY(meta_header, buffer.ReadUint8());
+  uint8_t meta_header = buffer.ReadUint8(error);
+  if (FORY_PREDICT_FALSE(!error.ok())) {
+    return Unexpected(std::move(error));
+  }
 
   bool register_by_name = (meta_header & REGISTER_BY_NAME_FLAG) != 0;
   size_t num_fields = meta_header & SMALL_NUM_FIELDS_THRESHOLD;
   if (num_fields == SMALL_NUM_FIELDS_THRESHOLD) {
-    FORY_TRY(extra, buffer.ReadVarUint32());
+    uint32_t extra = buffer.ReadVarUint32(error);
+    if (FORY_PREDICT_FALSE(!error.ok())) {
+      return Unexpected(std::move(error));
+    }
     num_fields += extra;
   }
 
@@ -284,18 +415,23 @@ TypeMeta::from_bytes(Buffer &buffer, const TypeMeta *local_type_info) {
   std::string type_name;
 
   if (register_by_name) {
-    // Read namespace
-    FORY_TRY(ns_len, buffer.ReadVarUint32());
-    namespace_str.resize(ns_len);
-    FORY_RETURN_NOT_OK(
-        buffer.ReadBytes(namespace_str.data(), namespace_str.size()));
+    static const MetaStringDecoder kNamespaceDecoder('.', '_');
+    static const MetaStringDecoder kTypeNameDecoder('$', '_');
 
-    // Read type name
-    FORY_TRY(tn_len, buffer.ReadVarUint32());
-    type_name.resize(tn_len);
-    FORY_RETURN_NOT_OK(buffer.ReadBytes(type_name.data(), type_name.size()));
+    FORY_TRY(ns, read_meta_name(buffer, kNamespaceDecoder, kNamespaceEncodings,
+                                sizeof(kNamespaceEncodings) /
+                                    sizeof(kNamespaceEncodings[0])));
+    namespace_str = std::move(ns);
+
+    FORY_TRY(tn, read_meta_name(buffer, kTypeNameDecoder, kTypeNameEncodings,
+                                sizeof(kTypeNameEncodings) /
+                                    sizeof(kTypeNameEncodings[0])));
+    type_name = std::move(tn);
   } else {
-    FORY_TRY(tid, buffer.ReadVarUint32());
+    uint32_t tid = buffer.ReadVarUint32(error);
+    if (FORY_PREDICT_FALSE(!error.ok())) {
+      return Unexpected(std::move(error));
+    }
     type_id = tid;
   }
 
@@ -307,8 +443,9 @@ TypeMeta::from_bytes(Buffer &buffer, const TypeMeta *local_type_info) {
     field_infos.push_back(std::move(field));
   }
 
-  // Sort fields according to xlang spec
-  field_infos = sort_field_infos(std::move(field_infos));
+  // NOTE: Do NOT sort remote fields! They are already in the sender's sorted
+  // order, which matches the data order. Re-sorting would cause misalignment
+  // with the serialized data.
 
   // Assign field IDs by comparing with local type
   if (local_type_info != nullptr) {
@@ -323,7 +460,98 @@ TypeMeta::from_bytes(Buffer &buffer, const TypeMeta *local_type_info) {
     buffer.IncreaseReaderIndex(remaining);
   }
 
-  auto meta = std::make_shared<TypeMeta>();
+  auto meta = std::make_unique<TypeMeta>();
+  meta->hash = meta_hash;
+  meta->type_id = type_id;
+  meta->namespace_str = std::move(namespace_str);
+  meta->type_name = std::move(type_name);
+  meta->register_by_name = register_by_name;
+  meta->field_infos = std::move(field_infos);
+
+  return meta;
+}
+
+Result<std::unique_ptr<TypeMeta>, Error>
+TypeMeta::from_bytes_with_header(Buffer &buffer, int64_t header) {
+  Error error;
+  int64_t meta_size = header & META_SIZE_MASK;
+  size_t header_size = 0;
+  if (meta_size == META_SIZE_MASK) {
+    uint32_t before = buffer.reader_index();
+    uint32_t extra = buffer.ReadVarUint32(error);
+    if (FORY_PREDICT_FALSE(!error.ok())) {
+      return Unexpected(std::move(error));
+    }
+    meta_size += extra;
+    uint32_t after = buffer.reader_index();
+    header_size = (after - before);
+  }
+  int64_t meta_hash = header >> (64 - NUM_HASH_BITS);
+
+  size_t start_pos = buffer.reader_index();
+
+  // Read meta header
+  uint8_t meta_header = buffer.ReadUint8(error);
+  if (FORY_PREDICT_FALSE(!error.ok())) {
+    return Unexpected(std::move(error));
+  }
+
+  bool register_by_name = (meta_header & REGISTER_BY_NAME_FLAG) != 0;
+  size_t num_fields = meta_header & SMALL_NUM_FIELDS_THRESHOLD;
+  if (num_fields == SMALL_NUM_FIELDS_THRESHOLD) {
+    uint32_t extra = buffer.ReadVarUint32(error);
+    if (FORY_PREDICT_FALSE(!error.ok())) {
+      return Unexpected(std::move(error));
+    }
+    num_fields += extra;
+  }
+
+  // Read type ID or namespace/type name
+  uint32_t type_id = 0;
+  std::string namespace_str;
+  std::string type_name;
+
+  if (register_by_name) {
+    static const MetaStringDecoder kNamespaceDecoder('.', '_');
+    static const MetaStringDecoder kTypeNameDecoder('$', '_');
+
+    FORY_TRY(ns, read_meta_name(buffer, kNamespaceDecoder, kNamespaceEncodings,
+                                sizeof(kNamespaceEncodings) /
+                                    sizeof(kNamespaceEncodings[0])));
+    namespace_str = std::move(ns);
+
+    FORY_TRY(tn, read_meta_name(buffer, kTypeNameDecoder, kTypeNameEncodings,
+                                sizeof(kTypeNameEncodings) /
+                                    sizeof(kTypeNameEncodings[0])));
+    type_name = std::move(tn);
+  } else {
+    uint32_t tid = buffer.ReadVarUint32(error);
+    if (FORY_PREDICT_FALSE(!error.ok())) {
+      return Unexpected(std::move(error));
+    }
+    type_id = tid;
+  }
+
+  // Read field infos
+  std::vector<FieldInfo> field_infos;
+  field_infos.reserve(num_fields);
+  for (size_t i = 0; i < num_fields; ++i) {
+    FORY_TRY(field, FieldInfo::from_bytes(buffer));
+    field_infos.push_back(std::move(field));
+  }
+
+  // NOTE: Do NOT sort remote fields! They are already in the sender's sorted
+  // order, which matches the data order.
+
+  // CRITICAL FIX: Ensure we consume exactly meta_size bytes
+  size_t current_pos = buffer.reader_index();
+  size_t expected_end_pos = start_pos + meta_size - header_size;
+  if (current_pos < expected_end_pos) {
+    size_t remaining = expected_end_pos - current_pos;
+    buffer.IncreaseReaderIndex(remaining);
+  }
+
+  auto meta = std::make_unique<TypeMeta>();
   meta->hash = meta_hash;
   meta->type_id = type_id;
   meta->namespace_str = std::move(namespace_str);
@@ -335,12 +563,20 @@ TypeMeta::from_bytes(Buffer &buffer, const TypeMeta *local_type_info) {
 }
 
 Result<void, Error> TypeMeta::skip_bytes(Buffer &buffer, int64_t header) {
+  Error error;
   int64_t meta_size = header & META_SIZE_MASK;
   if (meta_size == META_SIZE_MASK) {
-    FORY_TRY(extra, buffer.ReadVarUint32());
+    uint32_t extra = buffer.ReadVarUint32(error);
+    if (FORY_PREDICT_FALSE(!error.ok())) {
+      return Unexpected(std::move(error));
+    }
     meta_size += extra;
   }
-  return buffer.Skip(meta_size);
+  buffer.Skip(static_cast<uint32_t>(meta_size), error);
+  if (FORY_PREDICT_FALSE(!error.ok())) {
+    return Unexpected(std::move(error));
+  }
+  return Result<void, Error>();
 }
 
 Result<void, Error>
@@ -371,16 +607,24 @@ int32_t get_primitive_type_size(uint32_t type_id) {
   switch (static_cast<TypeId>(type_id)) {
   case TypeId::BOOL:
   case TypeId::INT8:
+  case TypeId::UINT8:
     return 1;
   case TypeId::INT16:
+  case TypeId::UINT16:
   case TypeId::FLOAT16:
     return 2;
   case TypeId::INT32:
-  case TypeId::VAR_INT32:
+  case TypeId::VARINT32:
+  case TypeId::UINT32:
+  case TypeId::VAR_UINT32:
   case TypeId::FLOAT32:
     return 4;
   case TypeId::INT64:
-  case TypeId::VAR_INT64:
+  case TypeId::VARINT64:
+  case TypeId::TAGGED_INT64:
+  case TypeId::UINT64:
+  case TypeId::VAR_UINT64:
+  case TypeId::TAGGED_UINT64:
   case TypeId::FLOAT64:
     return 8;
   default:
@@ -388,11 +632,18 @@ int32_t get_primitive_type_size(uint32_t type_id) {
   }
 }
 
+/// Check if a type ID represents a compressed (varint/tagged) type.
+/// This must match Java's Types.isCompressedType() exactly for consistent
+/// field ordering. Java only considers VARINT32, VAR_UINT32, VARINT64,
+/// VAR_UINT64, TAGGED_INT64, and TAGGED_UINT64 as compressed.
+/// Note: INT32, INT64, UINT32, UINT64 are NOT compressed - they are fixed-size.
 bool is_compress(uint32_t type_id) {
-  return type_id == static_cast<uint32_t>(TypeId::INT32) ||
-         type_id == static_cast<uint32_t>(TypeId::INT64) ||
-         type_id == static_cast<uint32_t>(TypeId::VAR_INT32) ||
-         type_id == static_cast<uint32_t>(TypeId::VAR_INT64);
+  return type_id == static_cast<uint32_t>(TypeId::VARINT32) ||
+         type_id == static_cast<uint32_t>(TypeId::VARINT64) ||
+         type_id == static_cast<uint32_t>(TypeId::TAGGED_INT64) ||
+         type_id == static_cast<uint32_t>(TypeId::VAR_UINT32) ||
+         type_id == static_cast<uint32_t>(TypeId::VAR_UINT64) ||
+         type_id == static_cast<uint32_t>(TypeId::TAGGED_UINT64);
 }
 
 // Numeric field sorter (for primitive fields)
@@ -407,7 +658,7 @@ bool numeric_sorter(const FieldInfo &a, const FieldInfo &b) {
   int32_t size_b = get_primitive_type_size(b_id);
 
   // Sort by: nullable (false first), compress (false first), size (larger
-  // first), type_id, field_name
+  // first), type_id (descending to match Java), field_name
   if (a_nullable != b_nullable)
     return !a_nullable; // non-nullable first
   if (compress_a != compress_b)
@@ -415,11 +666,12 @@ bool numeric_sorter(const FieldInfo &a, const FieldInfo &b) {
   if (size_a != size_b)
     return size_a > size_b; // larger size first
   if (a_id != b_id)
-    return a_id < b_id; // smaller type id first
+    return a_id > b_id; // type_id descending to match Java
   return a.field_name < b.field_name;
 }
 
-// Type then name sorter (for internal type fields)
+// Type then name sorter (for internal type fields like STRING)
+// Sorts by: type_id (ascending), field_name
 bool type_then_name_sorter(const FieldInfo &a, const FieldInfo &b) {
   if (a.field_type.type_id != b.field_type.type_id) {
     return a.field_type.type_id < b.field_type.type_id;
@@ -428,13 +680,21 @@ bool type_then_name_sorter(const FieldInfo &a, const FieldInfo &b) {
 }
 
 // Name sorter (for list/set/map/other fields)
+// Sorts by: field_name only
 bool name_sorter(const FieldInfo &a, const FieldInfo &b) {
   return a.field_name < b.field_name;
 }
 
-bool is_internal_type(uint32_t type_id) {
-  return type_id >= static_cast<uint32_t>(TypeId::STRING) &&
-         type_id <= static_cast<uint32_t>(TypeId::DECIMAL);
+// Check if a type ID is a "final" type for field group 2 in field ordering.
+// Final types are STRING, DURATION, TIMESTAMP, LOCAL_DATE, DECIMAL, BINARY.
+// These are types with fixed serializers that don't need type info written.
+// Excludes: ENUM (13-14), STRUCT (15-18), EXT (19-20), LIST (21), SET (22), MAP
+// (23) Note: LIST/SET/MAP are checked separately before this function is
+// called.
+bool is_final_type_for_grouping(uint32_t type_id) {
+  return type_id == static_cast<uint32_t>(TypeId::STRING) ||
+         (type_id >= static_cast<uint32_t>(TypeId::DURATION) &&
+          type_id <= static_cast<uint32_t>(TypeId::BINARY));
 }
 
 } // anonymous namespace
@@ -466,7 +726,7 @@ TypeMeta::sort_field_infos(std::vector<FieldInfo> fields) {
       set_fields.push_back(std::move(field));
     } else if (type_id == static_cast<uint32_t>(TypeId::MAP)) {
       map_fields.push_back(std::move(field));
-    } else if (is_internal_type(type_id)) {
+    } else if (is_final_type_for_grouping(type_id)) {
       internal_type_fields.push_back(std::move(field));
     } else {
       other_fields.push_back(std::move(field));
@@ -518,129 +778,357 @@ TypeMeta::sort_field_infos(std::vector<FieldInfo> fields) {
 
 void TypeMeta::assign_field_ids(const TypeMeta *local_type,
                                 std::vector<FieldInfo> &remote_fields) {
-  // Build a map: field_name -> sorted_index in local schema
+  const auto &local_fields = local_type->field_infos;
+
+  // Primary mapping: field name -> sorted index in local schema
   std::unordered_map<std::string, size_t> local_field_index_map;
-  for (size_t i = 0; i < local_type->field_infos.size(); ++i) {
-    local_field_index_map[local_type->field_infos[i].field_name] = i;
+  local_field_index_map.reserve(local_fields.size());
+  for (size_t i = 0; i < local_fields.size(); ++i) {
+    local_field_index_map.emplace(local_fields[i].field_name, i);
   }
+
+  // Track which local fields have already been matched so that each
+  // local field is bound to at most one remote field when we fall
+  // back to type-based matching.
+  std::vector<bool> used(local_fields.size(), false);
+
+  // Normalize user-defined type IDs so that different encodings of the
+  // same logical category (STRUCT vs COMPATIBLE_STRUCT, ENUM vs
+  // NAMED_ENUM, EXT vs NAMED_EXT, and their ID-based variants) are
+  // treated as equal for schema-evolution matching.
+  auto normalize_type_id = [](uint32_t tid) {
+    uint32_t low = tid & 0xffu;
+    switch (static_cast<TypeId>(low)) {
+    case TypeId::STRUCT:
+    case TypeId::COMPATIBLE_STRUCT:
+    case TypeId::NAMED_STRUCT:
+    case TypeId::NAMED_COMPATIBLE_STRUCT:
+    case TypeId::UNKNOWN:
+      // UNKNOWN is used for polymorphic types (e.g., Java interfaces) and
+      // should match STRUCT for cross-language schema evolution.
+      return static_cast<uint32_t>(TypeId::STRUCT);
+    case TypeId::ENUM:
+    case TypeId::NAMED_ENUM:
+      return static_cast<uint32_t>(TypeId::ENUM);
+    case TypeId::EXT:
+    case TypeId::NAMED_EXT:
+      return static_cast<uint32_t>(TypeId::EXT);
+    default:
+      return tid;
+    }
+  };
+
+  // Recursive logical type comparison that ignores language-specific
+  // encoding details (such as embedded user IDs or named vs unnamed
+  // variants) while still matching full generic structure.
+  std::function<bool(const FieldType &, const FieldType &)> types_match;
+  types_match = [&](const FieldType &a, const FieldType &b) -> bool {
+    if (normalize_type_id(a.type_id) != normalize_type_id(b.type_id)) {
+      return false;
+    }
+    if (a.generics.size() != b.generics.size()) {
+      return false;
+    }
+    for (size_t i = 0; i < a.generics.size(); ++i) {
+      if (!types_match(a.generics[i], b.generics[i])) {
+        return false;
+      }
+    }
+    return true;
+  };
 
   // For each remote field, assign field ID (sorted index in local schema)
   for (auto &remote_field : remote_fields) {
+    size_t local_index = static_cast<size_t>(-1);
+
+    // 1) Try exact name + type match first (fast path for same-language
+    //    schemas and most C++-only cases).
     auto it = local_field_index_map.find(remote_field.field_name);
-    if (it == local_field_index_map.end()) {
-      // Field not found in local type -> assign -1 (skip)
+    if (it != local_field_index_map.end()) {
+      size_t idx = it->second;
+      const FieldInfo &local_field = local_fields[idx];
+      if (types_match(remote_field.field_type, local_field.field_type)) {
+        local_index = idx;
+      }
+    }
+
+    // 2) Fallback: match by type signature and position when field names
+    //    are not available or differ across languages.
+    if (local_index == static_cast<size_t>(-1)) {
+      for (size_t i = 0; i < local_fields.size(); ++i) {
+        if (used[i]) {
+          continue;
+        }
+        if (types_match(remote_field.field_type, local_fields[i].field_type)) {
+          local_index = i;
+          break;
+        }
+      }
+    }
+
+    if (local_index == static_cast<size_t>(-1)) {
+      // No suitable local field found -> mark as skipped.
       remote_field.field_id = -1;
     } else {
-      size_t local_sorted_index = it->second;
-      const FieldInfo &local_field =
-          local_type->field_infos[local_sorted_index];
-
-      // Check if field type matches (type_id and generics)
-      if (remote_field.field_type != local_field.field_type) {
-        // Type mismatch -> assign -1 (skip)
-        remote_field.field_id = -1;
-      } else {
-        // Match! -> assign sorted index in local schema
-        remote_field.field_id = static_cast<int16_t>(local_sorted_index);
-      }
+      remote_field.field_id = static_cast<int16_t>(local_index);
+      used[local_index] = true;
     }
   }
 }
 
 int64_t TypeMeta::compute_hash(const std::vector<uint8_t> &meta_bytes) {
-  // Use murmurhash3 to compute hash (simplified for now)
-  // In production, use proper murmurhash3_x64_128 implementation
-  uint64_t hash = 0;
-  for (uint8_t byte : meta_bytes) {
-    hash = hash * 31 + byte;
+  // Compute hash using MurmurHash3_x64_128 to match Rust/Java
+  // TypeMeta implementation. We take the high 64 bits and then
+  // keep only the lower NUM_HASH_BITS bits.
+  int64_t hash_out[2] = {0, 0};
+  MurmurHash3_x64_128(meta_bytes.data(), static_cast<int>(meta_bytes.size()),
+                      47, hash_out);
+
+  // hash_out[0] is the low 64 bits, hash_out[1] the high 64 bits.
+  uint64_t high = static_cast<uint64_t>(hash_out[1]);
+  uint64_t mask = (NUM_HASH_BITS >= 64) ? ~uint64_t{0}
+                                        : ((uint64_t{1} << NUM_HASH_BITS) - 1);
+  return static_cast<int64_t>(high & mask);
+}
+
+namespace {
+
+std::string ToSnakeCase(const std::string &name) {
+  bool all_lower = true;
+  for (char c : name) {
+    unsigned char uc = static_cast<unsigned char>(c);
+    if (!(static_cast<bool>(std::islower(uc)) ||
+          static_cast<bool>(std::isdigit(uc)) || c == '_')) {
+      all_lower = false;
+      break;
+    }
   }
-  return static_cast<int64_t>(hash & ((1ULL << NUM_HASH_BITS) - 1));
-}
+  if (all_lower) {
+    return name;
+  }
 
-// ============================================================================
-// TypeResolver::read_any_typeinfo Implementation
-// ============================================================================
+  std::string result;
+  result.reserve(name.size() * 2);
+  std::optional<char> prev;
 
-Result<std::shared_ptr<TypeInfo>, Error>
-TypeResolver::read_any_typeinfo(ReadContext &ctx) {
-  return read_any_typeinfo(ctx, nullptr);
-}
+  for (size_t i = 0; i < name.size(); ++i) {
+    char ch = name[i];
+    if (ch == '_') {
+      result.push_back('_');
+      prev = ch;
+      continue;
+    }
 
-Result<std::shared_ptr<TypeInfo>, Error>
-TypeResolver::read_any_typeinfo(ReadContext &ctx,
-                                const TypeMeta *local_type_meta) {
-  FORY_TRY(fory_type_id, ctx.read_varuint32());
-  uint32_t type_id_low = fory_type_id & 0xff;
+    if (static_cast<bool>(std::isupper(static_cast<unsigned char>(ch)))) {
+      bool need_underscore = false;
+      if (prev.has_value()) {
+        char prev_ch = *prev;
+        bool prev_lower_or_digit = static_cast<bool>(
+            std::islower(static_cast<unsigned char>(prev_ch)) ||
+            std::isdigit(static_cast<unsigned char>(prev_ch)));
+        bool prev_upper = static_cast<bool>(
+            std::isupper(static_cast<unsigned char>(prev_ch)));
 
-  // Handle compatible struct types (with embedded TypeMeta)
-  if (type_id_low == static_cast<uint32_t>(TypeId::NAMED_COMPATIBLE_STRUCT) ||
-      type_id_low == static_cast<uint32_t>(TypeId::COMPATIBLE_STRUCT)) {
-    // Use provided local_type_meta if available, otherwise try to get from
-    // registry
-    if (local_type_meta == nullptr) {
-      auto local_type_info = get_type_info_by_id(fory_type_id);
-      if (local_type_info && local_type_info->type_meta) {
-        local_type_meta = local_type_info->type_meta.get();
+        bool next_is_lower = false;
+        if (i + 1 < name.size()) {
+          char next = name[i + 1];
+          next_is_lower =
+              static_cast<bool>(std::islower(static_cast<unsigned char>(next)));
+        }
+
+        if (prev_lower_or_digit || (prev_upper && next_is_lower)) {
+          need_underscore = true;
+        }
       }
+      if (need_underscore && !result.empty() && result.back() != '_') {
+        result.push_back('_');
+      }
+      result.push_back(
+          static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+    } else {
+      result.push_back(ch);
     }
-
-    // Read the embedded TypeMeta from stream
-    // Pass local_type_meta so that assign_field_ids is called during parsing
-    FORY_TRY(remote_meta, TypeMeta::from_bytes(ctx.buffer(), local_type_meta));
-
-    // Create a temporary TypeInfo with the remote TypeMeta
-    auto type_info = std::make_shared<TypeInfo>();
-    type_info->type_id = fory_type_id;
-    type_info->type_meta = remote_meta;
-    // Note: We don't have type_def here since this is remote schema
-
-    return type_info;
+    prev = ch;
   }
 
-  // Handle named types (namespace + type name)
-  if (type_id_low == static_cast<uint32_t>(TypeId::NAMED_ENUM) ||
-      type_id_low == static_cast<uint32_t>(TypeId::NAMED_EXT) ||
-      type_id_low == static_cast<uint32_t>(TypeId::NAMED_STRUCT)) {
-    // TODO: If share_meta is enabled, read meta_index instead
-    // For now, read namespace and type name
-    FORY_TRY(ns_len, ctx.read_varuint32());
-    std::string namespace_str(ns_len, '\0');
-    FORY_RETURN_NOT_OK(ctx.read_bytes(namespace_str.data(), ns_len));
+  return result;
+}
 
-    FORY_TRY(name_len, ctx.read_varuint32());
-    std::string type_name(name_len, '\0');
-    FORY_RETURN_NOT_OK(ctx.read_bytes(type_name.data(), name_len));
+} // anonymous namespace
 
-    auto type_info = get_type_info_by_name(namespace_str, type_name);
-    if (type_info) {
-      return type_info;
+std::string TypeMeta::compute_struct_fingerprint(
+    const std::vector<FieldInfo> &field_infos) {
+  // Computes the fingerprint string for a struct type used in schema
+  // versioning.
+  //
+  // Fingerprint Format:
+  //   Each field contributes: <field_name>,<type_id>,<ref>,<nullable>;
+  //   Fields are sorted lexicographically by field name (not by type category).
+  //
+  // Field Components:
+  //   - field_name: snake_case field name (C++ doesn't support field tag IDs
+  //   yet)
+  //   - type_id: Fory TypeId as decimal string (e.g., "4" for INT32)
+  //   - ref: "1" if reference tracking enabled, "0" otherwise (always "0" in
+  //   C++)
+  //   - nullable: "1" if null flag is written, "0" otherwise
+  //
+  // Example fingerprint: "age,4,0,0;name,12,0,1;"
+
+  // Copy fields and sort lexicographically by snake_case name for fingerprint
+  std::vector<FieldInfo> sorted_fields = field_infos;
+  std::sort(sorted_fields.begin(), sorted_fields.end(),
+            [](const FieldInfo &a, const FieldInfo &b) {
+              return ToSnakeCase(a.field_name) < ToSnakeCase(b.field_name);
+            });
+
+  std::string fingerprint;
+  // Reserve a rough estimate to avoid reallocations
+  fingerprint.reserve(sorted_fields.size() * 24);
+
+  for (const auto &fi : sorted_fields) {
+    std::string snake = ToSnakeCase(fi.field_name);
+    fingerprint.append(snake);
+    fingerprint.push_back(',');
+
+    // Java's ObjectSerializer.getTypeId returns Types.UNKNOWN (0) for:
+    // - abstract classes, interfaces, and enum types
+    // - user-defined struct types (in xlang mode)
+    // This aligns the hash computation with Java's behavior.
+    uint32_t effective_type_id = fi.field_type.type_id;
+    if (effective_type_id == static_cast<uint32_t>(TypeId::ENUM) ||
+        effective_type_id == static_cast<uint32_t>(TypeId::NAMED_ENUM) ||
+        effective_type_id == static_cast<uint32_t>(TypeId::STRUCT) ||
+        effective_type_id == static_cast<uint32_t>(TypeId::NAMED_STRUCT)) {
+      effective_type_id = static_cast<uint32_t>(TypeId::UNKNOWN);
     }
-    return Unexpected(Error::type_error("Type info not found for namespace '" +
-                                        namespace_str + "' and type name '" +
-                                        type_name + "'"));
+    fingerprint.append(std::to_string(effective_type_id));
+    fingerprint.push_back(',');
+    // Use field-level ref tracking flag from FORY_FIELD_TAGS or fory::field<>
+    fingerprint.push_back(fi.field_type.ref_tracking ? '1' : '0');
+    fingerprint.push_back(',');
+    fingerprint.append(fi.field_type.nullable ? "1;" : "0;");
   }
 
-  // Handle other types by ID lookup
-  auto type_info = get_type_info_by_id(fory_type_id);
-  if (type_info) {
-    return type_info;
+  return fingerprint;
+}
+
+int32_t TypeMeta::compute_struct_version(const TypeMeta &meta) {
+  std::string fingerprint = compute_struct_fingerprint(meta.field_infos);
+
+  int64_t hash_out[2] = {0, 0};
+  MurmurHash3_x64_128(reinterpret_cast<const uint8_t *>(fingerprint.data()),
+                      static_cast<int>(fingerprint.size()), 47, hash_out);
+
+  // Use the low 64 bits and then keep low 32 bits as i32.
+  uint64_t low = static_cast<uint64_t>(hash_out[0]);
+  uint32_t version = static_cast<uint32_t>(low & 0xFFFF'FFFFu);
+#ifdef FORY_DEBUG
+  // DEBUG: Print fingerprint for debugging version mismatch
+  std::cerr << "[xlang][debug] struct_version type_name=" << meta.type_name
+            << ", fingerprint=\"" << fingerprint
+            << "\" version=" << static_cast<int32_t>(version) << std::endl;
+#endif
+  return static_cast<int32_t>(version);
+}
+
+// ============================================================================
+// TypeInfo::deep_clone Implementation
+// ============================================================================
+
+std::unique_ptr<TypeInfo> TypeInfo::deep_clone() const {
+  auto cloned = std::make_unique<TypeInfo>();
+  cloned->type_id = type_id;
+  cloned->namespace_name = namespace_name;
+  cloned->type_name = type_name;
+  cloned->register_by_name = register_by_name;
+  cloned->is_external = is_external;
+  cloned->sorted_indices = sorted_indices;
+  cloned->name_to_index = name_to_index;
+  cloned->type_def = type_def;
+  cloned->harness = harness;
+
+  // Deep clone unique_ptr members
+  if (type_meta) {
+    cloned->type_meta = std::make_unique<TypeMeta>(*type_meta);
   }
-  return Unexpected(Error::type_error("Type info not found for type_id: " +
-                                      std::to_string(fory_type_id)));
+  if (encoded_namespace) {
+    cloned->encoded_namespace = std::make_unique<CachedMetaString>();
+    cloned->encoded_namespace->original = encoded_namespace->original;
+    cloned->encoded_namespace->bytes = encoded_namespace->bytes;
+    cloned->encoded_namespace->encoding = encoded_namespace->encoding;
+    cloned->encoded_namespace->hash = encoded_namespace->hash;
+  }
+  if (encoded_type_name) {
+    cloned->encoded_type_name = std::make_unique<CachedMetaString>();
+    cloned->encoded_type_name->original = encoded_type_name->original;
+    cloned->encoded_type_name->bytes = encoded_type_name->bytes;
+    cloned->encoded_type_name->encoding = encoded_type_name->encoding;
+    cloned->encoded_type_name->hash = encoded_type_name->hash;
+  }
+
+  return cloned;
+}
+
+// ============================================================================
+// encode_meta_string Implementation
+// ============================================================================
+
+Result<std::unique_ptr<CachedMetaString>, Error>
+encode_meta_string(const std::string &value, bool is_namespace) {
+  auto cached = std::make_unique<CachedMetaString>();
+  cached->original = value;
+
+  if (value.empty()) {
+    // For empty strings, use a minimal encoding
+    cached->encoding = 0; // UTF8
+    cached->bytes.clear();
+    cached->hash = 0;
+    return cached;
+  }
+
+  // Use MetaStringEncoder to encode the string
+  static const MetaStringEncoder kNamespaceEncoder('.', '_');
+  static const MetaStringEncoder kTypeNameEncoder('$', '_');
+
+  static const std::vector<MetaEncoding> kNamespaceEncodings = {
+      MetaEncoding::UTF8, MetaEncoding::ALL_TO_LOWER_SPECIAL,
+      MetaEncoding::LOWER_UPPER_DIGIT_SPECIAL};
+
+  static const std::vector<MetaEncoding> kTypeNameEncodings = {
+      MetaEncoding::UTF8, MetaEncoding::ALL_TO_LOWER_SPECIAL,
+      MetaEncoding::LOWER_UPPER_DIGIT_SPECIAL,
+      MetaEncoding::FIRST_TO_LOWER_SPECIAL};
+
+  if (is_namespace) {
+    FORY_TRY(result, kNamespaceEncoder.encode(value, kNamespaceEncodings));
+    cached->encoding = static_cast<uint8_t>(result.encoding);
+    cached->bytes = std::move(result.bytes);
+  } else {
+    FORY_TRY(result, kTypeNameEncoder.encode(value, kTypeNameEncodings));
+    cached->encoding = static_cast<uint8_t>(result.encoding);
+    cached->bytes = std::move(result.bytes);
+  }
+
+  // Compute hash if needed (for now, just use 0)
+  cached->hash = 0;
+
+  return cached;
 }
 
 Result<const TypeInfo *, Error>
 TypeResolver::get_type_info(const std::type_index &type_index) const {
-  auto it = type_info_cache_.find(type_index);
-  if (it == type_info_cache_.end()) {
+  // For runtime polymorphic lookups (e.g., smart pointers with dynamic types)
+  auto it = type_info_by_runtime_type_.find(type_index);
+  if (it == type_info_by_runtime_type_.end()) {
     return Unexpected(Error::type_error("TypeInfo not found for type_index"));
   }
-  return it->second.get();
+  return it->second;
 }
 
-Result<std::shared_ptr<TypeResolver>, Error>
+Result<std::unique_ptr<TypeResolver>, Error>
 TypeResolver::build_final_type_resolver() {
-  auto final_resolver = std::make_shared<TypeResolver>();
+  auto final_resolver = std::make_unique<TypeResolver>();
 
   // Copy configuration
   final_resolver->compatible_ = compatible_;
@@ -649,15 +1137,40 @@ TypeResolver::build_final_type_resolver() {
   final_resolver->track_ref_ = track_ref_;
   final_resolver->finalized_ = true;
 
-  // Copy all existing type info maps
-  final_resolver->type_info_cache_ = type_info_cache_;
-  final_resolver->type_info_by_id_ = type_info_by_id_;
-  final_resolver->type_info_by_name_ = type_info_by_name_;
+  // Build mapping from old pointers to new pointers for rebuilding lookup maps
+  absl::flat_hash_map<const TypeInfo *, TypeInfo *> ptr_map;
+
+  // Deep clone all existing TypeInfo objects
+  for (const auto &info : type_infos_) {
+    auto cloned = info->deep_clone();
+    TypeInfo *new_ptr = cloned.get();
+    ptr_map[info.get()] = new_ptr;
+    final_resolver->type_infos_.push_back(std::move(cloned));
+  }
+
+  // Rebuild lookup maps with new pointers
+  for (const auto &[key, old_ptr] : type_info_by_ctid_) {
+    final_resolver->type_info_by_ctid_.put(key, ptr_map[old_ptr]);
+  }
+  for (const auto &[key, old_ptr] : type_info_by_id_) {
+    final_resolver->type_info_by_id_.put(key, ptr_map[old_ptr]);
+  }
+  for (const auto &[key, old_ptr] : type_info_by_name_) {
+    final_resolver->type_info_by_name_[key] = ptr_map[old_ptr];
+  }
+  for (const auto &[key, old_ptr] : type_info_by_runtime_type_) {
+    final_resolver->type_info_by_runtime_type_[key] = ptr_map[old_ptr];
+  }
+  for (const auto &[key, old_ptr] : partial_type_infos_) {
+    final_resolver->partial_type_infos_.put(key, ptr_map[old_ptr]);
+  }
 
   // Process all partial type infos to build complete type metadata
-  for (const auto &[rust_type_id, partial_info] : partial_type_infos_) {
+  for (const auto &[rust_type_id, partial_ptr] :
+       final_resolver->partial_type_infos_) {
     // Call the harness's sorted_field_infos function to get complete field info
-    auto fields_result = partial_info->harness.sorted_field_infos_fn(*this);
+    auto fields_result =
+        partial_ptr->harness.sorted_field_infos_fn(*final_resolver);
     if (!fields_result.ok()) {
       return Unexpected(fields_result.error());
     }
@@ -665,8 +1178,8 @@ TypeResolver::build_final_type_resolver() {
 
     // Build complete TypeMeta
     TypeMeta meta = TypeMeta::from_fields(
-        partial_info->type_id, partial_info->namespace_name,
-        partial_info->type_name, partial_info->register_by_name,
+        partial_ptr->type_id, partial_ptr->namespace_name,
+        partial_ptr->type_name, partial_ptr->register_by_name,
         std::move(sorted_fields));
 
     // Serialize TypeMeta to bytes
@@ -675,32 +1188,18 @@ TypeResolver::build_final_type_resolver() {
       return Unexpected(type_def_result.error());
     }
 
-    // Create complete TypeInfo
-    auto complete_info = std::make_shared<TypeInfo>(*partial_info);
-    complete_info->type_def = std::move(type_def_result).value();
+    // Update the TypeInfo in place
+    partial_ptr->type_def = std::move(type_def_result).value();
 
-    // Parse the serialized TypeMeta back to create shared_ptr<TypeMeta>
-    Buffer buffer(complete_info->type_def.data(),
-                  static_cast<uint32_t>(complete_info->type_def.size()), false);
-    buffer.WriterIndex(static_cast<uint32_t>(complete_info->type_def.size()));
+    // Parse the serialized TypeMeta back to create unique_ptr<TypeMeta>
+    Buffer buffer(partial_ptr->type_def.data(),
+                  static_cast<uint32_t>(partial_ptr->type_def.size()), false);
+    buffer.WriterIndex(static_cast<uint32_t>(partial_ptr->type_def.size()));
     auto parsed_meta_result = TypeMeta::from_bytes(buffer, nullptr);
     if (!parsed_meta_result.ok()) {
       return Unexpected(parsed_meta_result.error());
     }
-    complete_info->type_meta = std::move(parsed_meta_result).value();
-
-    // Update all maps with complete info
-    final_resolver->type_info_cache_[rust_type_id] = complete_info;
-
-    if (complete_info->type_id != 0) {
-      final_resolver->type_info_by_id_[complete_info->type_id] = complete_info;
-    }
-
-    if (complete_info->register_by_name) {
-      auto key = make_name_key(complete_info->namespace_name,
-                               complete_info->type_name);
-      final_resolver->type_info_by_name_[key] = complete_info;
-    }
+    partial_ptr->type_meta = std::move(parsed_meta_result).value();
   }
 
   // Clear partial_type_infos in the final resolver since they're all completed
@@ -709,8 +1208,8 @@ TypeResolver::build_final_type_resolver() {
   return final_resolver;
 }
 
-std::shared_ptr<TypeResolver> TypeResolver::clone() const {
-  auto cloned = std::make_shared<TypeResolver>();
+std::unique_ptr<TypeResolver> TypeResolver::clone() const {
+  auto cloned = std::make_unique<TypeResolver>();
 
   // Copy configuration
   cloned->compatible_ = compatible_;
@@ -719,14 +1218,103 @@ std::shared_ptr<TypeResolver> TypeResolver::clone() const {
   cloned->track_ref_ = track_ref_;
   cloned->finalized_ = finalized_;
 
-  // Shallow copy all maps (shared_ptr sharing)
-  cloned->type_info_cache_ = type_info_cache_;
-  cloned->type_info_by_id_ = type_info_by_id_;
-  cloned->type_info_by_name_ = type_info_by_name_;
-  // Don't copy partial_type_infos_ - clone should only be used on finalized
-  // resolvers
+  // Build mapping from old pointers to new pointers
+  absl::flat_hash_map<const TypeInfo *, TypeInfo *> ptr_map;
+
+  // Deep clone all TypeInfo objects
+  for (const auto &info : type_infos_) {
+    auto cloned_info = info->deep_clone();
+    TypeInfo *new_ptr = cloned_info.get();
+    ptr_map[info.get()] = new_ptr;
+    cloned->type_infos_.push_back(std::move(cloned_info));
+  }
+
+  // Rebuild lookup maps with new pointers
+  for (const auto &[key, old_ptr] : type_info_by_ctid_) {
+    cloned->type_info_by_ctid_.put(key, ptr_map[old_ptr]);
+  }
+  for (const auto &[key, old_ptr] : type_info_by_id_) {
+    cloned->type_info_by_id_.put(key, ptr_map[old_ptr]);
+  }
+  for (const auto &[key, old_ptr] : type_info_by_name_) {
+    cloned->type_info_by_name_[key] = ptr_map[old_ptr];
+  }
+  for (const auto &[key, old_ptr] : type_info_by_runtime_type_) {
+    cloned->type_info_by_runtime_type_[key] = ptr_map[old_ptr];
+  }
+  // Note: Don't copy partial_type_infos_ - clone should only be used on
+  // finalized resolvers
 
   return cloned;
+}
+
+void TypeResolver::register_builtin_types() {
+  // Register internal type IDs without harnesses (deserialization is static)
+  // These are needed so read_any_typeinfo can find them by type_id
+  auto register_type_id_only = [this](TypeId type_id) {
+    auto info = std::make_unique<TypeInfo>();
+    info->type_id = static_cast<uint32_t>(type_id);
+    info->register_by_name = false;
+    info->is_external = false;
+    TypeInfo *raw_ptr = info.get();
+    type_infos_.push_back(std::move(info));
+    type_info_by_id_.put(raw_ptr->type_id, raw_ptr);
+  };
+
+  // Primitive types
+  register_type_id_only(TypeId::BOOL);
+  register_type_id_only(TypeId::INT8);
+  register_type_id_only(TypeId::INT16);
+  register_type_id_only(TypeId::INT32);
+  register_type_id_only(TypeId::VARINT32);
+  register_type_id_only(TypeId::INT64);
+  register_type_id_only(TypeId::VARINT64);
+  register_type_id_only(TypeId::TAGGED_INT64);
+  register_type_id_only(TypeId::UINT8);
+  register_type_id_only(TypeId::UINT16);
+  register_type_id_only(TypeId::UINT32);
+  register_type_id_only(TypeId::VAR_UINT32);
+  register_type_id_only(TypeId::UINT64);
+  register_type_id_only(TypeId::VAR_UINT64);
+  register_type_id_only(TypeId::TAGGED_UINT64);
+  register_type_id_only(TypeId::FLOAT16);
+  register_type_id_only(TypeId::FLOAT32);
+  register_type_id_only(TypeId::FLOAT64);
+  register_type_id_only(TypeId::STRING);
+
+  // Primitive array types
+  register_type_id_only(TypeId::BOOL_ARRAY);
+  register_type_id_only(TypeId::INT8_ARRAY);
+  register_type_id_only(TypeId::INT16_ARRAY);
+  register_type_id_only(TypeId::INT32_ARRAY);
+  register_type_id_only(TypeId::INT64_ARRAY);
+  register_type_id_only(TypeId::UINT8_ARRAY);
+  register_type_id_only(TypeId::UINT16_ARRAY);
+  register_type_id_only(TypeId::UINT32_ARRAY);
+  register_type_id_only(TypeId::UINT64_ARRAY);
+  register_type_id_only(TypeId::FLOAT16_ARRAY);
+  register_type_id_only(TypeId::FLOAT32_ARRAY);
+  register_type_id_only(TypeId::FLOAT64_ARRAY);
+  register_type_id_only(TypeId::BINARY);
+
+  // Collection types
+  register_type_id_only(TypeId::LIST);
+  register_type_id_only(TypeId::SET);
+  register_type_id_only(TypeId::MAP);
+
+  // User types (base IDs without registration prefix)
+  register_type_id_only(TypeId::STRUCT);
+  register_type_id_only(TypeId::ENUM);
+  register_type_id_only(TypeId::EXT);
+
+  // Other internal types
+  register_type_id_only(TypeId::UNION);
+  register_type_id_only(TypeId::NONE);
+  register_type_id_only(TypeId::DURATION);
+  register_type_id_only(TypeId::TIMESTAMP);
+  register_type_id_only(TypeId::LOCAL_DATE);
+  register_type_id_only(TypeId::DECIMAL);
+  register_type_id_only(TypeId::ARRAY);
 }
 
 } // namespace serialization

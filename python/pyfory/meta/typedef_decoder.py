@@ -21,8 +21,9 @@ TypeDef decoder for xlang serialization.
 This module implements the decoding of TypeDef objects according to the xlang serialization specification.
 """
 
-from typing import List
-from pyfory._util import Buffer
+from dataclasses import make_dataclass
+from typing import List, Any
+from pyfory.buffer import Buffer
 from pyfory.meta.typedef import TypeDef, FieldInfo, FieldType
 from pyfory.meta.typedef import (
     SMALL_NUM_FIELDS_THRESHOLD,
@@ -35,9 +36,16 @@ from pyfory.meta.typedef import (
     FIELD_NAME_ENCODINGS,
     NAMESPACE_ENCODINGS,
     TYPE_NAME_ENCODINGS,
+    FIELD_NAME_ENCODING_TAG_ID,
+    TAG_ID_SIZE_THRESHOLD,
 )
-from pyfory.type import TypeId, record_class_factory
+from pyfory.types import TypeId
 from pyfory.meta.metastring import MetaStringDecoder, Encoding
+
+
+MAX_GENERATED_CLASSES = 1000
+MAX_FIELDS_PER_CLASS = 256
+_generated_class_count = 0
 
 
 # Meta string decoders
@@ -70,6 +78,8 @@ def decode_typedef(buffer: Buffer, resolver, header=None) -> TypeDef:
     Returns:
         The decoded TypeDef.
     """
+    global _generated_class_count
+
     # Read global binary header
     if header is None:
         header = buffer.read_int64()
@@ -101,6 +111,12 @@ def decode_typedef(buffer: Buffer, resolver, header=None) -> TypeDef:
     if num_fields == SMALL_NUM_FIELDS_THRESHOLD:
         num_fields += meta_buffer.read_varuint32()
 
+    # Check field count limit
+    if num_fields > MAX_FIELDS_PER_CLASS:
+        raise ValueError(
+            f"Class has {num_fields} fields, exceeding the maximum allowed {MAX_FIELDS_PER_CLASS} fields. This may indicate malicious data."
+        )
+
     # Check if registered by name
     is_registered_by_name = (meta_header & REGISTER_BY_NAME_FLAG) != 0
 
@@ -119,8 +135,8 @@ def decode_typedef(buffer: Buffer, resolver, header=None) -> TypeDef:
             type_id = TypeId.COMPATIBLE_STRUCT
     else:
         type_id = meta_buffer.read_varuint32()
-        type_info = resolver.get_typeinfo_by_id(type_id)
-        if type_info is not None:
+        if resolver.is_registered_by_id(type_id=type_id):
+            type_info = resolver.get_typeinfo_by_id(type_id)
             type_cls = type_info.cls
             namespace = type_info.decode_namespace()
             typename = type_info.decode_typename()
@@ -133,10 +149,22 @@ def decode_typedef(buffer: Buffer, resolver, header=None) -> TypeDef:
     if has_fields_meta:
         field_infos = read_fields_info(meta_buffer, resolver, name, num_fields)
     if type_cls is None:
-        type_cls = record_class_factory(name, [field_info.name for field_info in field_infos])
+        # Check generated class count limit
+        if _generated_class_count >= MAX_GENERATED_CLASSES:
+            raise ValueError(
+                f"Exceeded maximum number of dynamically generated classes ({MAX_GENERATED_CLASSES}). "
+                "This may indicate malicious data causing memory issues."
+            )
+        _generated_class_count += 1
+        # Generate dynamic dataclass from field definitions
+        field_definitions = [(field_info.name, Any) for field_info in field_infos]
+        # Use a valid Python identifier for class name
+        class_name = typename.replace(".", "_").replace("$", "_")
+        type_cls = make_dataclass(class_name, field_definitions)
 
     # Create TypeDef object
-    return TypeDef(namespace, typename, type_cls, type_id, field_infos, meta_data, is_compressed)
+    type_def = TypeDef(namespace, typename, type_cls, type_id, field_infos, meta_data, is_compressed)
+    return type_def
 
 
 def read_namespace(buffer: Buffer) -> str:
@@ -185,25 +213,63 @@ def read_fields_info(buffer: Buffer, resolver, defined_class: str, num_fields: i
 
 
 def read_field_info(buffer: Buffer, resolver, defined_class: str) -> FieldInfo:
-    """Read a single field info from the buffer."""
+    """Read a single field info from the buffer.
+
+    Field header format (8 bits) - aligned with Java TypeDefDecoder (for xlang):
+    - bit 0: ref tracking flag
+    - bit 1: nullable flag
+    - bits 2-5: size (4 bits, 0-14 inline, 15 = overflow)
+    - bits 6-7: encoding type (0b00-10 = field name, 0b11 = TAG_ID)
+
+    For TAG_ID encoding:
+    - size field contains tag_id (0-14 inline, 15 = overflow)
+    - No field name bytes to read
+
+    For field name encoding:
+    - size field contains (encoded_size - 1)
+    - Type info followed by field name meta string bytes
+    """
     # Read field header
     header = buffer.read_uint8()
 
-    # Extract field header components
-    field_name_encoding = (header >> 6) & 0b11
-    field_name_size = (header >> 2) & 0b1111
-    if field_name_size == FIELD_NAME_SIZE_THRESHOLD:
-        field_name_size += buffer.read_varuint32()
-    field_name_size += 1
-    encoding = FIELD_NAME_ENCODINGS[field_name_encoding]
+    # Extract common flags from bits 0-1
+    is_tracking_ref = (header & 0b01) != 0
     is_nullable = (header & 0b10) != 0
-    is_tracking_ref = (header & 0b1) != 0
 
-    # Read field type info (without flags since they're in the header)
-    xtype_id = buffer.read_varuint32()
-    field_type = FieldType.xread_with_type(buffer, resolver, xtype_id, is_nullable, is_tracking_ref)
+    # Extract size (bits 2-5) and encoding type (bits 6-7)
+    size_or_tag = (header >> 2) & 0b1111
+    encoding_type = (header >> 6) & 0b11
 
-    # Read field name - it comes AFTER the type info in the encoding
-    field_name_bytes = buffer.read_bytes(field_name_size)
-    field_name = FIELD_NAME_DECODER.decode(field_name_bytes, encoding)
-    return FieldInfo(field_name, field_type, defined_class)
+    if encoding_type == FIELD_NAME_ENCODING_TAG_ID:
+        # TAG_ID encoding
+        if size_or_tag >= TAG_ID_SIZE_THRESHOLD:
+            tag_id = TAG_ID_SIZE_THRESHOLD + buffer.read_varuint32()
+        else:
+            tag_id = size_or_tag
+
+        # Read field type info (no field name to read for TAG_ID)
+        xtype_id = buffer.read_varuint32()
+        field_type = FieldType.xread_with_type(buffer, resolver, xtype_id, is_nullable, is_tracking_ref)
+
+        # For TAG_ID encoding, use tag_id as field name placeholder
+        field_name = f"__tag_{tag_id}__"
+        return FieldInfo(field_name, field_type, defined_class, tag_id)
+    else:
+        # Field name encoding
+        field_name_size = size_or_tag
+        if field_name_size >= FIELD_NAME_SIZE_THRESHOLD:
+            field_name_size = FIELD_NAME_SIZE_THRESHOLD + buffer.read_varuint32()
+        field_name_size += 1  # Add 1 to convert from (size-1) to actual size
+        encoding = FIELD_NAME_ENCODINGS[encoding_type]
+
+        # Read field type info BEFORE field name (matching Java TypeDefDecoder order)
+        xtype_id = buffer.read_varuint32()
+        field_type = FieldType.xread_with_type(buffer, resolver, xtype_id, is_nullable, is_tracking_ref)
+
+        # Read field name meta string
+        # Keep the wire field name as-is; TypeDef._resolve_field_names_from_tag_ids()
+        # will handle matching against the Python class's field names (which may be
+        # snake_case or camelCase depending on Python conventions used)
+        field_name_bytes = buffer.read_bytes(field_name_size)
+        field_name = FIELD_NAME_DECODER.decode(field_name_bytes, encoding)
+        return FieldInfo(field_name, field_type, defined_class, -1)

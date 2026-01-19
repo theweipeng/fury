@@ -24,6 +24,8 @@
 #include <iostream>
 #include <string>
 
+#include "fory/util/macros.h"
+
 namespace fory {
 
 /// This function returns the current call stack information.

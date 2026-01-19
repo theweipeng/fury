@@ -15,16 +15,16 @@
 # specific language governing permissions and limitations
 # under the License.
 
-load("@com_github_grpc_grpc//bazel:cython_library.bzl", "pyx_library")
-load("@compile_commands_extractor//:refresh_compile_commands.bzl", "refresh_compile_commands")
+load("//bazel:cython_library.bzl", "pyx_library")
+load("@hedron_compile_commands//:refresh_compile_commands.bzl", "refresh_compile_commands")
 
 
 pyx_library(
-    name = "_util",
+    name = "buffer",
     srcs = glob([
         "python/pyfory/includes/*.pxd",
-        "python/pyfory/_util.pxd",
-        "python/pyfory/_util.pyx",
+        "python/pyfory/buffer.pxd",
+        "python/pyfory/buffer.pyx",
         "python/pyfory/__init__.py",
     ]),
     cc_kwargs = dict(
@@ -54,8 +54,9 @@ pyx_library(
     name = "serialization",
     srcs = glob([
         "python/pyfory/includes/*.pxd",
-        "python/pyfory/_util.pxd",
+        "python/pyfory/buffer.pxd",
         "python/pyfory/serialization.pyx",
+        "python/pyfory/*.pxi",
         "python/pyfory/__init__.py",
     ]),
     cc_kwargs = dict(
@@ -65,35 +66,36 @@ pyx_library(
         "//cpp/fory/util:fory_util",
         "//cpp/fory/type:fory_type",
         "//cpp/fory/python:_pyfory",
-        "@com_google_absl//absl/container:flat_hash_map",
+        "@abseil-cpp//absl/container:flat_hash_map",
     ],
 )
 
 pyx_library(
     name = "_format",
-    srcs = glob([
-        "python/pyfory/__init__.py",
-        "python/pyfory/includes/*.pxd",
-        "python/pyfory/_util.pxd",
-        "python/pyfory/*.pxi",
-        "python/pyfory/format/_format.pyx",
-        "python/pyfory/format/__init__.py",
-        "python/pyfory/format/*.pxi",
-    ]),
+    srcs = glob(
+        [
+            "python/pyfory/__init__.py",
+            "python/pyfory/includes/*.pxd",
+            "python/pyfory/buffer.pxd",
+            "python/pyfory/*.pxi",
+            "python/pyfory/format/_format.pyx",
+            "python/pyfory/format/__init__.py",
+            "python/pyfory/format/*.pxi",
+        ],
+        allow_empty = True,
+    ),
     cc_kwargs = dict(
         linkstatic = 1,
     ),
     deps = [
         "//cpp/fory:fory",
-        "@local_config_pyarrow//:python_numpy_headers",
-        "@local_config_pyarrow//:arrow_python_shared_library"
     ],
 )
 
 genrule(
     name = "cp_fory_so",
     srcs = [
-        ":python/pyfory/_util.so",
+        ":python/pyfory/buffer.so",
         ":python/pyfory/lib/mmh3/mmh3.so",
         ":python/pyfory/format/_format.so",
         ":python/pyfory/serialization.so",
@@ -108,12 +110,12 @@ genrule(
         u_name=`uname -s`
         if [ "$${u_name: 0: 4}" == "MING" ] || [ "$${u_name: 0: 4}" == "MSYS" ]
         then
-            cp -f $(location python/pyfory/_util.so) "$$WORK_DIR/python/pyfory/_util.pyd"
+            cp -f $(location python/pyfory/buffer.so) "$$WORK_DIR/python/pyfory/buffer.pyd"
             cp -f $(location python/pyfory/lib/mmh3/mmh3.so) "$$WORK_DIR/python/pyfory/lib/mmh3/mmh3.pyd"
             cp -f $(location python/pyfory/format/_format.so) "$$WORK_DIR/python/pyfory/format/_format.pyd"
             cp -f $(location python/pyfory/serialization.so) "$$WORK_DIR/python/pyfory/serialization.pyd"
         else
-            cp -f $(location python/pyfory/_util.so) "$$WORK_DIR/python/pyfory"
+            cp -f $(location python/pyfory/buffer.so) "$$WORK_DIR/python/pyfory"
             cp -f $(location python/pyfory/lib/mmh3/mmh3.so) "$$WORK_DIR/python/pyfory/lib/mmh3"
             cp -f $(location python/pyfory/format/_format.so) "$$WORK_DIR/python/pyfory/format"
             cp -f $(location python/pyfory/serialization.so) "$$WORK_DIR/python/pyfory"

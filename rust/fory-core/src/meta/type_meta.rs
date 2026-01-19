@@ -22,7 +22,37 @@ use crate::meta::{
     FIELD_NAME_ENCODER, NAMESPACE_DECODER, TYPE_NAME_DECODER,
 };
 use crate::resolver::type_resolver::{TypeInfo, TypeResolver};
-use crate::types::{TypeId, PRIMITIVE_TYPES};
+use crate::types::{
+    TypeId, COMPATIBLE_STRUCT, ENUM, EXT, NAMED_COMPATIBLE_STRUCT, NAMED_ENUM, NAMED_EXT,
+    NAMED_STRUCT, PRIMITIVE_TYPES, STRUCT, UNKNOWN,
+};
+use crate::util::to_snake_case;
+
+/// Normalizes a type ID for comparison purposes in cross-language schema evolution.
+/// This treats all struct variants (STRUCT, COMPATIBLE_STRUCT, NAMED_STRUCT,
+/// NAMED_COMPATIBLE_STRUCT) and UNKNOWN as equivalent to STRUCT.
+/// UNKNOWN (0) is used for polymorphic types (interfaces) in cross-language serialization.
+/// Similarly for ENUM and EXT variants.
+fn normalize_type_id_for_eq(type_id: u32) -> u32 {
+    let low = type_id & 0xff;
+    match low {
+        // All struct variants and UNKNOWN normalize to STRUCT
+        _ if low == STRUCT
+            || low == COMPATIBLE_STRUCT
+            || low == NAMED_STRUCT
+            || low == NAMED_COMPATIBLE_STRUCT
+            || low == UNKNOWN =>
+        {
+            STRUCT
+        }
+        // All enum variants normalize to ENUM
+        _ if low == ENUM || low == NAMED_ENUM => ENUM,
+        // All ext variants normalize to EXT
+        _ if low == EXT || low == NAMED_EXT => EXT,
+        // Everything else stays the same
+        _ => type_id,
+    }
+}
 use std::clone::Clone;
 use std::cmp::min;
 use std::collections::HashMap;
@@ -31,6 +61,10 @@ use std::rc::Rc;
 const SMALL_NUM_FIELDS_THRESHOLD: usize = 0b11111;
 const REGISTER_BY_NAME_FLAG: u8 = 0b100000;
 const FIELD_NAME_SIZE_THRESHOLD: usize = 0b1111;
+/// Marker value in encoding bits to indicate field ID mode (instead of field name)
+const FIELD_ID_ENCODING_MARKER: u8 = 0b11;
+/// Threshold for field ID that fits in 4-bit size field
+const SMALL_FIELD_ID_THRESHOLD: i16 = 0b1111;
 
 const BIG_NAME_THRESHOLD: usize = 0b111111;
 
@@ -62,6 +96,7 @@ static FIELD_NAME_ENCODINGS: &[Encoding] = &[
 pub struct FieldType {
     pub type_id: u32,
     pub nullable: bool,
+    pub ref_tracking: bool,
     pub generics: Vec<FieldType>,
 }
 
@@ -70,6 +105,21 @@ impl FieldType {
         FieldType {
             type_id,
             nullable,
+            ref_tracking: false,
+            generics,
+        }
+    }
+
+    pub fn new_with_ref(
+        type_id: u32,
+        nullable: bool,
+        ref_tracking: bool,
+        generics: Vec<FieldType>,
+    ) -> Self {
+        FieldType {
+            type_id,
+            nullable,
+            ref_tracking,
             generics,
         }
     }
@@ -78,9 +128,11 @@ impl FieldType {
         let mut header = self.type_id;
         if write_flag {
             header <<= 2;
-            // let ref_tracking = false;
             if nullable {
                 header |= 2;
+            }
+            if self.ref_tracking {
+                header |= 1;
             }
         }
         writer.write_varuint32(header);
@@ -114,13 +166,15 @@ impl FieldType {
         let header = reader.read_varuint32()?;
         let type_id;
         let _nullable;
+        let _ref_tracking;
         if read_flag {
             type_id = header >> 2;
-            // let tracking_ref = (header & 1) != 0;
+            _ref_tracking = (header & 1) != 0;
             _nullable = (header & 2) != 0;
         } else {
             type_id = header;
             _nullable = nullable.unwrap();
+            _ref_tracking = false;
         }
         Ok(match type_id {
             x if x == TypeId::LIST as u32 || x == TypeId::SET as u32 => {
@@ -128,6 +182,7 @@ impl FieldType {
                 Self {
                     type_id,
                     nullable: _nullable,
+                    ref_tracking: _ref_tracking,
                     generics: vec![generic],
                 }
             }
@@ -137,12 +192,14 @@ impl FieldType {
                 Self {
                     type_id,
                     nullable: _nullable,
+                    ref_tracking: _ref_tracking,
                     generics: vec![key_generic, val_generic],
                 }
             }
             _ => Self {
                 type_id,
                 nullable: _nullable,
+                ref_tracking: _ref_tracking,
                 generics: vec![],
             },
         })
@@ -165,6 +222,14 @@ impl FieldInfo {
         }
     }
 
+    pub fn new_with_id(field_id: i16, field_name: &str, field_type: FieldType) -> FieldInfo {
+        FieldInfo {
+            field_id,
+            field_name: field_name.to_string(),
+            field_type,
+        }
+    }
+
     fn u8_to_encoding(value: u8) -> Result<Encoding, Error> {
         match value {
             0x00 => Ok(Encoding::Utf8),
@@ -179,58 +244,106 @@ impl FieldInfo {
     pub fn from_bytes(reader: &mut Reader) -> Result<FieldInfo, Error> {
         let header = reader.read_u8()?;
         let nullable = (header & 2) != 0;
-        // let ref_tracking = (header & 1) != 0;
-        let encoding = Self::u8_to_encoding((header >> 6) & 0b11)?;
-        let mut name_size = ((header >> 2) & FIELD_NAME_SIZE_THRESHOLD as u8) as usize;
-        if name_size == FIELD_NAME_SIZE_THRESHOLD {
-            name_size += reader.read_varuint32()? as usize;
+        let ref_tracking = (header & 1) != 0;
+        let encoding_bits = (header >> 6) & 0b11;
+
+        // Check if this is field ID mode (encoding bits == 0b11)
+        if encoding_bits == FIELD_ID_ENCODING_MARKER {
+            // Field ID mode: | 0b11:2bits | field_id_low:4bits | nullable:1bit | ref_tracking:1bit |
+            let mut field_id = ((header >> 2) & FIELD_NAME_SIZE_THRESHOLD as u8) as i16;
+            if field_id == SMALL_FIELD_ID_THRESHOLD {
+                field_id += reader.read_varuint32()? as i16;
+            }
+
+            let mut field_type = FieldType::from_bytes(reader, false, Option::from(nullable))?;
+            field_type.ref_tracking = ref_tracking;
+
+            Ok(FieldInfo {
+                field_id,
+                field_name: String::new(), // No field name when using ID encoding
+                field_type,
+            })
+        } else {
+            // Field name mode (original behavior)
+            let encoding = Self::u8_to_encoding(encoding_bits)?;
+            let mut name_size = ((header >> 2) & FIELD_NAME_SIZE_THRESHOLD as u8) as usize;
+            if name_size == FIELD_NAME_SIZE_THRESHOLD {
+                name_size += reader.read_varuint32()? as usize;
+            }
+            name_size += 1;
+
+            let mut field_type = FieldType::from_bytes(reader, false, Option::from(nullable))?;
+            field_type.ref_tracking = ref_tracking;
+
+            let field_name_bytes = reader.read_bytes(name_size)?;
+
+            let field_name = FIELD_NAME_DECODER
+                .decode(field_name_bytes, encoding)
+                .unwrap();
+            Ok(FieldInfo {
+                field_id: -1i16,
+                field_name: field_name.original,
+                field_type,
+            })
         }
-        name_size += 1;
-
-        let field_type = FieldType::from_bytes(reader, false, Option::from(nullable))?;
-
-        let field_name_bytes = reader.read_bytes(name_size)?;
-
-        let field_name = FIELD_NAME_DECODER
-            .decode(field_name_bytes, encoding)
-            .unwrap();
-        Ok(FieldInfo {
-            field_id: -1i16,
-            field_name: field_name.original,
-            field_type,
-        })
     }
 
     fn to_bytes(&self) -> Result<Vec<u8>, Error> {
-        // field_bytes: | header | type_info | field_name |
         let mut buffer = vec![];
         let mut writer = Writer::from_buffer(&mut buffer);
-        // header: | field_name_encoding:2bits | size:4bits | nullability:1bit | ref_tracking:1bit |
-        let meta_string =
-            FIELD_NAME_ENCODER.encode_with_encodings(&self.field_name, FIELD_NAME_ENCODINGS)?;
-        let name_encoded = meta_string.bytes.as_slice();
-        let name_size = name_encoded.len() - 1;
-        let mut header: u8 = (min(FIELD_NAME_SIZE_THRESHOLD, name_size) as u8) << 2;
-        // let ref_tracking = false;
         let nullable = self.field_type.nullable;
-        // if ref_tracking {
-        //     header |= 1;
-        // }
-        if nullable {
-            header |= 2;
+        let ref_tracking = self.field_type.ref_tracking;
+
+        // Use field ID encoding if:
+        // 1. field_id >= 0 (user-set or matched from local type), OR
+        // 2. field_name is empty (ID-encoded field that couldn't be matched - use ID even if -1)
+        if self.field_id >= 0 || self.field_name.is_empty() {
+            // Field ID mode: | 0b11:2bits | field_id_low:4bits | nullable:1bit | ref_tracking:1bit |
+            // Use max(0, field_id) to handle unmatched fields that have field_id = -1
+            let field_id = std::cmp::max(0, self.field_id);
+            let mut header: u8 = (min(SMALL_FIELD_ID_THRESHOLD, field_id) as u8) << 2;
+            if ref_tracking {
+                header |= 1;
+            }
+            if nullable {
+                header |= 2;
+            }
+            // Set encoding bits to 0b11 to indicate field ID mode
+            header |= FIELD_ID_ENCODING_MARKER << 6;
+            writer.write_u8(header);
+            if field_id >= SMALL_FIELD_ID_THRESHOLD {
+                writer.write_varuint32((field_id - SMALL_FIELD_ID_THRESHOLD) as u32);
+            }
+            self.field_type.to_bytes(&mut writer, false, nullable)?;
+            // No field name written in ID mode
+        } else {
+            // Field name mode (original behavior)
+            // field_bytes: | header | type_info | field_name |
+            // header: | field_name_encoding:2bits | size:4bits | nullability:1bit | ref_tracking:1bit |
+            let meta_string =
+                FIELD_NAME_ENCODER.encode_with_encodings(&self.field_name, FIELD_NAME_ENCODINGS)?;
+            let name_encoded = meta_string.bytes.as_slice();
+            let name_size = name_encoded.len() - 1;
+            let mut header: u8 = (min(FIELD_NAME_SIZE_THRESHOLD, name_size) as u8) << 2;
+            if ref_tracking {
+                header |= 1;
+            }
+            if nullable {
+                header |= 2;
+            }
+            let encoding_idx = FIELD_NAME_ENCODINGS
+                .iter()
+                .position(|x| *x == meta_string.encoding)
+                .unwrap() as u8;
+            header |= encoding_idx << 6;
+            writer.write_u8(header);
+            if name_size >= FIELD_NAME_SIZE_THRESHOLD {
+                writer.write_varuint32((name_size - FIELD_NAME_SIZE_THRESHOLD) as u32);
+            }
+            self.field_type.to_bytes(&mut writer, false, nullable)?;
+            // write field_name
+            writer.write_bytes(name_encoded);
         }
-        let encoding_idx = FIELD_NAME_ENCODINGS
-            .iter()
-            .position(|x| *x == meta_string.encoding)
-            .unwrap() as u8;
-        header |= encoding_idx << 6;
-        writer.write_u8(header);
-        if name_size >= FIELD_NAME_SIZE_THRESHOLD {
-            writer.write_varuint32((name_size - FIELD_NAME_SIZE_THRESHOLD) as u32);
-        }
-        self.field_type.to_bytes(&mut writer, false, nullable)?;
-        // write field_name
-        writer.write_bytes(name_encoded);
         Ok(buffer)
     }
 }
@@ -238,8 +351,9 @@ impl FieldInfo {
 /// Sorts field infos according to the provided sorted field names and assigns field IDs.
 ///
 /// This function takes a vector of field infos and a slice of sorted field names,
-/// then reorders the field infos to match the sorted order and assigns sequential
-/// field IDs starting from 0.
+/// then reorders the field infos to match the sorted order. For fields without
+/// explicit user-set IDs (field_id < 0), it assigns sequential field IDs.
+/// Fields with user-set IDs (field_id >= 0) preserve their original IDs.
 ///
 /// # Arguments
 ///
@@ -271,70 +385,127 @@ pub fn sort_fields(
             )));
         }
     }
-    // assign field id in ascending order
-    for (i, field_info) in sorted_field_infos.iter_mut().enumerate() {
-        field_info.field_id = i as i16;
-    }
+    // Keep field IDs as-is:
+    // - Fields with explicit #[fory(id = N)] have field_id >= 0 (use ID encoding)
+    // - Fields without explicit ID have field_id = -1 (use field name encoding)
+    // This ensures schema evolution works correctly with field name matching
     *fields_info = sorted_field_infos;
     Ok(())
 }
 
 impl PartialEq for FieldType {
     fn eq(&self, other: &Self) -> bool {
-        self.type_id == other.type_id && self.generics == other.generics
+        // Normalize type IDs for comparison to handle cross-language schema evolution.
+        // This allows UNKNOWN (0) polymorphic types to match STRUCT (15) in Rust.
+        normalize_type_id_for_eq(self.type_id) == normalize_type_id_for_eq(other.type_id)
+            && self.generics == other.generics
     }
 }
 
 #[derive(Debug)]
-pub struct TypeMetaLayer {
+pub struct TypeMeta {
+    // assigned valid value and used, only during deserializing
+    hash: i64,
     type_id: u32,
     namespace: Rc<MetaString>,
     type_name: Rc<MetaString>,
     register_by_name: bool,
     field_infos: Vec<FieldInfo>,
+    bytes: Vec<u8>,
 }
 
-impl TypeMetaLayer {
+impl TypeMeta {
     pub fn new(
         type_id: u32,
         namespace: MetaString,
         type_name: MetaString,
         register_by_name: bool,
         field_infos: Vec<FieldInfo>,
-    ) -> TypeMetaLayer {
-        TypeMetaLayer {
+    ) -> Result<TypeMeta, Error> {
+        let mut meta = TypeMeta {
+            hash: 0,
             type_id,
             namespace: Rc::from(namespace),
             type_name: Rc::from(type_name),
             register_by_name,
             field_infos,
-        }
+            bytes: vec![],
+        };
+        let (bytes, meta_hash) = meta.to_bytes()?;
+        meta.bytes = bytes;
+        meta.hash = meta_hash;
+        Ok(meta)
     }
 
-    pub fn empty() -> TypeMetaLayer {
-        TypeMetaLayer {
+    #[inline(always)]
+    pub fn get_field_infos(&self) -> &Vec<FieldInfo> {
+        &self.field_infos
+    }
+
+    #[inline(always)]
+    pub fn get_type_id(&self) -> u32 {
+        self.type_id
+    }
+
+    #[inline(always)]
+    pub fn get_hash(&self) -> i64 {
+        self.hash
+    }
+
+    #[inline(always)]
+    pub fn get_type_name(&self) -> Rc<MetaString> {
+        self.type_name.clone()
+    }
+
+    #[inline(always)]
+    pub fn get_namespace(&self) -> Rc<MetaString> {
+        self.namespace.clone()
+    }
+
+    #[inline(always)]
+    pub fn get_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    #[inline(always)]
+    pub fn empty() -> Result<TypeMeta, Error> {
+        let mut meta = TypeMeta {
+            hash: 0,
             type_id: 0,
             namespace: Rc::from(MetaString::get_empty().clone()),
             type_name: Rc::from(MetaString::get_empty().clone()),
             register_by_name: false,
             field_infos: vec![],
+            bytes: vec![],
+        };
+        let (bytes, meta_hash) = meta.to_bytes()?;
+        meta.bytes = bytes;
+        meta.hash = meta_hash;
+        Ok(meta)
+    }
+
+    /// Creates a deep clone with new Rc instances.
+    /// This is safe for concurrent use from multiple threads.
+    pub fn deep_clone(&self) -> TypeMeta {
+        TypeMeta {
+            hash: self.hash,
+            type_id: self.type_id,
+            namespace: Rc::new((*self.namespace).clone()),
+            type_name: Rc::new((*self.type_name).clone()),
+            register_by_name: self.register_by_name,
+            field_infos: self.field_infos.clone(),
+            bytes: self.bytes.clone(),
         }
     }
 
-    pub fn get_type_id(&self) -> u32 {
-        self.type_id
-    }
-
-    pub fn get_type_name(&self) -> Rc<MetaString> {
-        self.type_name.clone()
-    }
-
-    pub fn get_namespace(&self) -> Rc<MetaString> {
-        self.namespace.clone()
-    }
-
-    pub fn get_field_infos(&self) -> &Vec<FieldInfo> {
-        &self.field_infos
+    pub(crate) fn from_fields(
+        type_id: u32,
+        namespace: MetaString,
+        type_name: MetaString,
+        register_by_name: bool,
+        field_infos: Vec<FieldInfo>,
+    ) -> Result<TypeMeta, Error> {
+        TypeMeta::new(type_id, namespace, type_name, register_by_name, field_infos)
     }
 
     fn write_name(writer: &mut Writer, name: &MetaString, encodings: &[Encoding]) {
@@ -383,9 +554,9 @@ impl TypeMetaLayer {
         Self::read_name(reader, &TYPE_NAME_DECODER, TYPE_NAME_ENCODINGS)
     }
 
-    fn to_bytes(&self) -> Result<Vec<u8>, Error> {
+    fn to_meta_bytes(&self) -> Result<Vec<u8>, Error> {
         let mut buffer = vec![];
-        // layer_bytes:| meta_header | fields meta |
+        // meta_bytes:| meta_header | fields meta |
         let mut writer = Writer::from_buffer(&mut buffer);
         let num_fields = self.field_infos.len();
         let _internal_id = self.type_id & 0xff;
@@ -451,27 +622,37 @@ impl TypeMetaLayer {
                 TypeId::INT8 => 1,
                 TypeId::INT16 => 2,
                 TypeId::INT32 => 4,
-                TypeId::VAR_INT32 => 4,
+                TypeId::VARINT32 => 4,
                 TypeId::INT64 => 8,
-                TypeId::VAR_INT64 => 8,
+                TypeId::VARINT64 => 8,
+                TypeId::TAGGED_INT64 => 8,
+                TypeId::UINT8 => 1,
+                TypeId::UINT16 => 2,
+                TypeId::UINT32 => 4,
+                TypeId::VAR_UINT32 => 4,
+                TypeId::UINT64 => 8,
+                TypeId::VAR_UINT64 => 8,
+                TypeId::TAGGED_UINT64 => 8,
                 TypeId::FLOAT16 => 2,
                 TypeId::FLOAT32 => 4,
                 TypeId::FLOAT64 => 8,
-                TypeId::U8 => 1,
-                TypeId::U16 => 2,
-                TypeId::U32 => 4,
-                TypeId::U64 => 8,
-                TypeId::USIZE => 8,
                 TypeId::U128 => 16,
+                TypeId::INT128 => 16,
+                TypeId::USIZE => std::mem::size_of::<usize>() as i32,
+                TypeId::ISIZE => std::mem::size_of::<isize>() as i32,
                 _ => unreachable!(),
             }
         }
         fn is_compress(type_id: u32) -> bool {
+            // Variable-size integer types (both signed and unsigned)
+            // These are sorted after fixed-size types in field ordering
             [
-                TypeId::INT32 as u32,
-                TypeId::INT64 as u32,
-                TypeId::VAR_INT32 as u32,
-                TypeId::VAR_INT64 as u32,
+                TypeId::VARINT32 as u32,
+                TypeId::VARINT64 as u32,
+                TypeId::TAGGED_INT64 as u32,
+                TypeId::VAR_UINT32 as u32,
+                TypeId::VAR_UINT64 as u32,
+                TypeId::TAGGED_UINT64 as u32,
             ]
             .contains(&type_id)
         }
@@ -489,7 +670,7 @@ impl TypeMetaLayer {
                 .cmp(&b_nullable) // non-nullable first
                 .then_with(|| compress_a.cmp(&compress_b)) // fixed-size (false) first, then variable-size (true) last
                 .then_with(|| size_b.cmp(&size_a)) // when same compress status: larger size first
-                .then_with(|| a_id.cmp(&b_id)) // when same size: smaller type id first
+                .then_with(|| b_id.cmp(&a_id)) // when same size: larger type id first
                 .then_with(|| a_field_name.cmp(b_field_name)) // when same id: lexicographic name
         }
         fn type_then_name_sorter(a: &FieldInfo, b: &FieldInfo) -> std::cmp::Ordering {
@@ -519,10 +700,10 @@ impl TypeMetaLayer {
         sorted_field_infos
     }
 
-    fn from_bytes(
+    fn from_meta_bytes(
         reader: &mut Reader,
         type_resolver: &TypeResolver,
-    ) -> Result<TypeMetaLayer, Error> {
+    ) -> Result<TypeMeta, Error> {
         let meta_header = reader.read_u8()?;
         let register_by_name = (meta_header & REGISTER_BY_NAME_FLAG) != 0;
         let mut num_fields = meta_header as usize & SMALL_NUM_FIELDS_THRESHOLD;
@@ -559,93 +740,107 @@ impl TypeMetaLayer {
             Self::assign_field_ids(&type_info_current, &mut sorted_field_infos);
         }
         // if no type found, keep all fields id as -1 to be skipped.
-        Ok(TypeMetaLayer::new(
+        TypeMeta::new(
             type_id,
             namespace,
             type_name,
             register_by_name,
             sorted_field_infos,
-        ))
+        )
     }
 
     fn assign_field_ids(type_info_current: &TypeInfo, field_infos: &mut [FieldInfo]) {
-        // convert to map: fiend_name -> field_info
-        let field_info_map = type_info_current
-            .get_type_meta()
-            .get_field_infos()
+        if crate::util::ENABLE_FORY_DEBUG_OUTPUT {
+            eprintln!(
+                "[fory-debug] assign_field_ids called for type: {:?}",
+                type_info_current.get_type_name()
+            );
+            for f in field_infos.iter() {
+                eprintln!(
+                    "[fory-debug]   remote field before assign: name={}, field_id={}, type={:?}",
+                    f.field_name, f.field_id, f.field_type
+                );
+            }
+        }
+        let type_meta = type_info_current.get_type_meta();
+        let local_field_infos = type_meta.get_field_infos();
+        if crate::util::ENABLE_FORY_DEBUG_OUTPUT {
+            for f in local_field_infos.iter() {
+                eprintln!(
+                    "[fory-debug]   local field: name={}, field_id={}, type={:?}",
+                    f.field_name, f.field_id, f.field_type
+                );
+            }
+        }
+
+        // Build maps for both name-based and ID-based lookup.
+        // The value is the SORTED INDEX (position in local_field_infos), not the field's ID attribute.
+        // This index is used for matching in generated code.
+        let field_index_by_name: HashMap<String, (usize, &FieldInfo)> = local_field_infos
             .iter()
-            .map(|field_info| (field_info.field_name.clone(), field_info.clone()))
-            .collect::<HashMap<String, FieldInfo>>();
+            .enumerate()
+            .filter(|(_, f)| !f.field_name.is_empty())
+            .map(|(i, f)| (f.field_name.clone(), (i, f)))
+            .collect();
+
+        let field_index_by_id: HashMap<i16, (usize, &FieldInfo)> = local_field_infos
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| f.field_id >= 0)
+            .map(|(i, f)| (f.field_id, (i, f)))
+            .collect();
+
         for field in field_infos.iter_mut() {
-            match field_info_map.get(&field.field_name.clone()) {
-                Some(local_field_info) => {
-                    if field.field_type.type_id != local_field_info.field_type.type_id
-                        || field.field_type.generics != local_field_info.field_type.generics
-                    {
-                        field.field_id = -1;
+            // Try to match by field ID first (if the incoming field was encoded with ID)
+            let local_match = if field.field_id >= 0 && field.field_name.is_empty() {
+                // Field was encoded with ID, match by ID
+                field_index_by_id.get(&field.field_id).copied()
+            } else {
+                // Field was encoded with name, match by name
+                // Convert incoming field name to snake_case for cross-language compatibility
+                // (Java uses camelCase, Rust uses snake_case)
+                let snake_case_name = to_snake_case(&field.field_name);
+                field_index_by_name.get(&snake_case_name).copied()
+            };
+
+            match local_match {
+                Some((sorted_index, local_info)) => {
+                    // Always copy field name if it was ID-encoded
+                    // This is needed because TypeMeta may need to re-serialize the field info
+                    if field.field_name.is_empty() {
+                        field.field_name = local_info.field_name.clone();
+                    }
+                    // Use FieldType comparison which normalizes type IDs for cross-language
+                    // schema evolution (e.g., UNKNOWN=0 matches STRUCT variants)
+                    if field.field_type != local_info.field_type {
+                        if crate::util::ENABLE_FORY_DEBUG_OUTPUT {
+                            eprintln!(
+                                "[fory-debug] field type mismatch: name={}, remote_type={:?}, local_type={:?}",
+                                field.field_name, field.field_type, local_info.field_type
+                            );
+                        }
+                        field.field_id = -1; // Type mismatch, skip
                     } else {
-                        field.field_id = local_field_info.field_id;
+                        // Assign SORTED INDEX for matching in generated code
+                        field.field_id = sorted_index as i16;
+                        if crate::util::ENABLE_FORY_DEBUG_OUTPUT {
+                            eprintln!(
+                                "[fory-debug]   matched field: name={}, assigned_field_id={}",
+                                field.field_name, field.field_id
+                            );
+                        }
                     }
                 }
                 None => {
-                    field.field_id = -1;
+                    if crate::util::ENABLE_FORY_DEBUG_OUTPUT {
+                        eprintln!(
+                            "[fory-debug] no local match for field: name={}",
+                            field.field_name
+                        );
+                    }
+                    field.field_id = -1; // No match, skip
                 }
             }
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct TypeMeta {
-    // assigned valid value and used, only during deserializing
-    hash: i64,
-    layer: TypeMetaLayer,
-}
-
-impl TypeMeta {
-    #[inline(always)]
-    pub fn get_field_infos(&self) -> &Vec<FieldInfo> {
-        self.layer.get_field_infos()
-    }
-
-    #[inline(always)]
-    pub fn get_type_id(&self) -> u32 {
-        self.layer.get_type_id()
-    }
-
-    #[inline(always)]
-    pub fn get_hash(&self) -> i64 {
-        self.hash
-    }
-
-    #[inline(always)]
-    pub fn get_type_name(&self) -> Rc<MetaString> {
-        self.layer.get_type_name()
-    }
-
-    #[inline(always)]
-    pub fn get_namespace(&self) -> Rc<MetaString> {
-        self.layer.get_namespace()
-    }
-
-    #[inline(always)]
-    pub fn empty() -> TypeMeta {
-        TypeMeta {
-            hash: 0,
-            layer: TypeMetaLayer::empty(),
-        }
-    }
-
-    pub(crate) fn from_fields(
-        type_id: u32,
-        namespace: MetaString,
-        type_name: MetaString,
-        register_by_name: bool,
-        field_infos: Vec<FieldInfo>,
-    ) -> TypeMeta {
-        TypeMeta {
-            hash: 0,
-            layer: TypeMetaLayer::new(type_id, namespace, type_name, register_by_name, field_infos),
         }
     }
 
@@ -667,11 +862,9 @@ impl TypeMeta {
 
         // let current_meta_size = 0;
         // while current_meta_size < meta_size {}
-        let layer = TypeMetaLayer::from_bytes(reader, type_resolver)?;
-        Ok(TypeMeta {
-            layer,
-            hash: meta_hash,
-        })
+        let mut meta = Self::from_meta_bytes(reader, type_resolver)?;
+        meta.hash = meta_hash;
+        Ok(meta)
     }
 
     pub(crate) fn from_bytes_with_header(
@@ -691,11 +884,9 @@ impl TypeMeta {
 
         // let current_meta_size = 0;
         // while current_meta_size < meta_size {}
-        let layer = TypeMetaLayer::from_bytes(reader, type_resolver)?;
-        Ok(TypeMeta {
-            layer,
-            hash: meta_hash,
-        })
+        let mut meta = Self::from_meta_bytes(reader, type_resolver)?;
+        meta.hash = meta_hash;
+        Ok(meta)
     }
 
     #[inline(always)]
@@ -724,18 +915,15 @@ impl TypeMeta {
         Ok(())
     }
 
-    pub(crate) fn to_bytes(&self) -> Result<Vec<u8>, Error> {
-        // | global_binary_header | layers_bytes |
+    fn to_bytes(&self) -> Result<(Vec<u8>, i64), Error> {
+        // | global_binary_header | meta_bytes |
         let mut buffer = vec![];
         let mut result = Writer::from_buffer(&mut buffer);
-        let mut layers_buffer = vec![];
-        let mut layers_writer = Writer::from_buffer(&mut layers_buffer);
-        // for layer in self.layers.iter() {
-        //     layers_writer.bytes(layer.to_bytes()?.as_slice());
-        // }
-        layers_writer.write_bytes(self.layer.to_bytes()?.as_slice());
+        let mut meta_buffer = vec![];
+        let mut meta_writer = Writer::from_buffer(&mut meta_buffer);
+        meta_writer.write_bytes(self.to_meta_bytes()?.as_slice());
         // global_binary_header:| hash:50bits | is_compressed:1bit | write_fields_meta:1bit | meta_size:12bits |
-        let meta_size = layers_writer.len() as i64;
+        let meta_size = meta_writer.len() as i64;
         let mut header: i64 = min(META_SIZE_MASK, meta_size);
         let write_meta_fields_flag = !self.get_field_infos().is_empty();
         if write_meta_fields_flag {
@@ -745,13 +933,15 @@ impl TypeMeta {
         if is_compressed {
             header |= COMPRESS_META_FLAG;
         }
-        let meta_hash = murmurhash3_x64_128(layers_writer.dump().as_slice(), 47).0 as i64;
-        header |= (meta_hash << (64 - NUM_HASH_BITS)).abs();
+        let hash_value = murmurhash3_x64_128(meta_writer.dump().as_slice(), 47).0 as i64;
+        let meta_hash_shifted = (hash_value << (64 - NUM_HASH_BITS)).abs();
+        let meta_hash = meta_hash_shifted >> (64 - NUM_HASH_BITS);
+        header |= meta_hash_shifted;
         result.write_i64(header);
         if meta_size >= META_SIZE_MASK {
             result.write_varuint32((meta_size - META_SIZE_MASK) as u32);
         }
-        result.write_bytes(layers_buffer.as_slice());
-        Ok(buffer)
+        result.write_bytes(meta_buffer.as_slice());
+        Ok((buffer, meta_hash))
     }
 }

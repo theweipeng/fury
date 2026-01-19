@@ -31,12 +31,16 @@ import static org.apache.fory.meta.TypeDefEncoder.SMALL_NUM_FIELDS_THRESHOLD;
 import java.util.ArrayList;
 import java.util.List;
 import org.apache.fory.collection.Tuple2;
+import org.apache.fory.logging.Logger;
+import org.apache.fory.logging.LoggerFactory;
 import org.apache.fory.memory.MemoryBuffer;
-import org.apache.fory.meta.ClassDef.FieldType;
+import org.apache.fory.meta.FieldTypes.FieldType;
 import org.apache.fory.meta.MetaString.Encoding;
 import org.apache.fory.resolver.ClassInfo;
 import org.apache.fory.resolver.XtypeResolver;
 import org.apache.fory.serializer.NonexistentClass;
+import org.apache.fory.util.StringUtils;
+import org.apache.fory.util.Utils;
 
 /**
  * A decoder which decode binary into {@link ClassDef}. See spec documentation:
@@ -44,18 +48,23 @@ import org.apache.fory.serializer.NonexistentClass;
  * href="https://fory.apache.org/docs/specification/fory_xlang_serialization_spec">...</a>
  */
 class TypeDefDecoder {
+  private static final Logger LOG = LoggerFactory.getLogger(TypeDefDecoder.class);
+
   public static ClassDef decodeClassDef(XtypeResolver resolver, MemoryBuffer inputBuffer, long id) {
     Tuple2<byte[], byte[]> decoded = decodeClassDefBuf(inputBuffer, resolver, id);
     MemoryBuffer buffer = MemoryBuffer.fromByteArray(decoded.f0);
     byte header = buffer.readByte();
     int numFields = header & SMALL_NUM_FIELDS_THRESHOLD;
     if (numFields == SMALL_NUM_FIELDS_THRESHOLD) {
-      numFields += buffer.readVarUint32Small7() + SMALL_NUM_FIELDS_THRESHOLD;
+      numFields += buffer.readVarUint32Small7();
     }
     ClassSpec classSpec;
     if ((header & REGISTER_BY_NAME_FLAG) != 0) {
       String namespace = readPkgName(buffer);
       String typeName = readTypeName(buffer);
+      if (Utils.debugOutputEnabled()) {
+        LOG.info("Decode class {} using namespace {}", typeName, namespace);
+      }
       ClassInfo userTypeInfo = resolver.getUserTypeInfo(namespace, typeName);
       if (userTypeInfo == null) {
         classSpec = new ClassSpec(NonexistentClass.NonexistentMetaShared.class);
@@ -71,16 +80,31 @@ class TypeDefDecoder {
         classSpec = new ClassSpec(userTypeInfo.getCls(), xtypeId);
       }
     }
-    List<ClassDef.FieldInfo> classFields =
+    List<FieldInfo> classFields =
         readFieldsInfo(buffer, resolver, classSpec.entireClassName, numFields);
     boolean hasFieldsMeta = (id & HAS_FIELDS_META_FLAG) != 0;
-    return new ClassDef(classSpec, classFields, hasFieldsMeta, id, decoded.f1);
+    ClassDef classDef = new ClassDef(classSpec, classFields, hasFieldsMeta, id, decoded.f1);
+    if (Utils.debugOutputEnabled()) {
+      LOG.info("[Java TypeDef DECODED] " + classDef);
+      // Compute and print diff with local TypeDef
+      Class<?> cls = classSpec.type;
+      if (cls != null && cls != NonexistentClass.NonexistentMetaShared.class) {
+        ClassDef localDef = ClassDef.buildClassDef(resolver.getFory(), cls);
+        String diff = classDef.computeDiff(localDef);
+        if (diff != null) {
+          LOG.info("[Java TypeDef DIFF] " + classSpec.entireClassName + ":\n" + diff);
+        } else {
+          LOG.info("[Java TypeDef DIFF] " + classSpec.entireClassName + ": identical");
+        }
+      }
+    }
+    return classDef;
   }
 
   // | header + type info + field name | ... | header + type info + field name |
-  private static List<ClassDef.FieldInfo> readFieldsInfo(
+  private static List<FieldInfo> readFieldsInfo(
       MemoryBuffer buffer, XtypeResolver resolver, String className, int numFields) {
-    List<ClassDef.FieldInfo> fieldInfos = new ArrayList<>(numFields);
+    List<FieldInfo> fieldInfos = new ArrayList<>(numFields);
     for (int i = 0; i < numFields; i++) {
       // header: 2 bits field name encoding + 4 bits size + nullability flag + ref tracking flag
       byte header = buffer.readByte();
@@ -94,16 +118,24 @@ class TypeDefDecoder {
       boolean nullable = (header & 0b10) != 0;
       boolean trackingRef = (header & 0b1) != 0;
       int typeId = buffer.readVarUint32Small14();
-      FieldType fieldType = FieldType.xread(buffer, resolver, typeId, nullable, trackingRef);
-      // read field name
+      FieldType fieldType =
+          FieldTypes.FieldType.xread(buffer, resolver, typeId, nullable, trackingRef);
+
+      // read field name or tag ID
       if (useTagID) {
-        throw new UnsupportedOperationException(
-            "Type tag not supported currently, parsed fieldInfos %s " + fieldInfos);
+        // When useTagID is true, fieldNameSize actually contains the tag ID
+        short tagId = (short) (fieldNameSize - 1);
+        // Use a placeholder field name since tag ID is used for identification
+        String fieldName = "$tag" + tagId; // TODO we could use id as String as field name
+        fieldInfos.add(new FieldInfo(className, fieldName, fieldType, tagId));
+      } else {
+        Encoding encoding = fieldNameEncodings[encodingFlags];
+        String wireFieldName =
+            Encoders.FIELD_NAME_DECODER.decode(buffer.readBytes(fieldNameSize), encoding);
+        // Convert snake_case field names back to camelCase for Java field matching
+        String fieldName = StringUtils.lowerUnderscoreToLowerCamelCase(wireFieldName);
+        fieldInfos.add(new FieldInfo(className, fieldName, fieldType));
       }
-      Encoding encoding = fieldNameEncodings[encodingFlags];
-      String fieldName =
-          Encoders.FIELD_NAME_DECODER.decode(buffer.readBytes(fieldNameSize), encoding);
-      fieldInfos.add(new ClassDef.FieldInfo(className, fieldName, fieldType));
     }
     return fieldInfos;
   }

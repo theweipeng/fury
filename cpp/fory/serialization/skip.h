@@ -20,10 +20,10 @@
 #pragma once
 
 #include "fory/serialization/context.h"
+#include "fory/serialization/ref_mode.h"
 #include "fory/serialization/type_resolver.h"
 #include "fory/type/type.h"
 #include "fory/util/error.h"
-#include "fory/util/result.h"
 
 namespace fory {
 namespace serialization {
@@ -32,31 +32,39 @@ namespace serialization {
 /// This is used during schema evolution to skip fields that don't exist in the
 /// local type
 ///
-/// @param ctx Read context
+/// @param ctx Read context (errors are set on ctx.error_)
 /// @param field_type Field type information
-/// @param read_ref_flag Whether to read reference flag
-/// @return Result indicating success or error
-Result<void, Error> skip_field_value(ReadContext &ctx,
-                                     const FieldType &field_type,
-                                     bool read_ref_flag);
+/// @param ref_mode Reference mode for the field
+void skip_field_value(ReadContext &ctx, const FieldType &field_type,
+                      RefMode ref_mode);
 
 /// Skip a varint value
-Result<void, Error> skip_varint(ReadContext &ctx);
+void skip_varint(ReadContext &ctx);
 
 /// Skip a string value
-Result<void, Error> skip_string(ReadContext &ctx);
+void skip_string(ReadContext &ctx);
 
 /// Skip a list value
-Result<void, Error> skip_list(ReadContext &ctx, const FieldType &field_type);
+void skip_list(ReadContext &ctx, const FieldType &field_type);
 
 /// Skip a set value
-Result<void, Error> skip_set(ReadContext &ctx, const FieldType &field_type);
+void skip_set(ReadContext &ctx, const FieldType &field_type);
 
 /// Skip a map value
-Result<void, Error> skip_map(ReadContext &ctx, const FieldType &field_type);
+void skip_map(ReadContext &ctx, const FieldType &field_type);
+
+/// Skip a union (variant) value
+void skip_union(ReadContext &ctx);
 
 /// Skip a struct value
-Result<void, Error> skip_struct(ReadContext &ctx, const FieldType &field_type);
+void skip_struct(ReadContext &ctx, const FieldType &field_type);
+
+/// Skip an ext (extension) value
+void skip_ext(ReadContext &ctx, const FieldType &field_type);
+
+/// Skip an unknown (polymorphic) value
+/// The actual type info is written inline in the buffer
+void skip_unknown(ReadContext &ctx);
 
 } // namespace serialization
 } // namespace fory

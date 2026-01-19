@@ -59,48 +59,70 @@ struct LocalDate {
 template <> struct Serializer<Duration> {
   static constexpr TypeId type_id = TypeId::DURATION;
 
-  static Result<void, Error> write(const Duration &duration, WriteContext &ctx,
-                                   bool write_ref, bool write_type) {
-    write_not_null_ref_flag(ctx, write_ref);
-    if (write_type) {
-      ctx.write_uint8(static_cast<uint8_t>(type_id));
-    }
-    return write_data(duration, ctx);
+  static inline void write_type_info(WriteContext &ctx) {
+    ctx.write_varuint32(static_cast<uint32_t>(type_id));
   }
 
-  static Result<void, Error> write_data(const Duration &duration,
-                                        WriteContext &ctx) {
+  static inline void read_type_info(ReadContext &ctx) {
+    uint32_t actual = ctx.read_varuint32(ctx.error());
+    if (FORY_PREDICT_FALSE(ctx.has_error())) {
+      return;
+    }
+    if (!type_id_matches(actual, static_cast<uint32_t>(type_id))) {
+      ctx.set_error(
+          Error::type_mismatch(actual, static_cast<uint32_t>(type_id)));
+    }
+  }
+
+  static inline void write(const Duration &duration, WriteContext &ctx,
+                           RefMode ref_mode, bool write_type,
+                           bool has_generics = false) {
+    write_not_null_ref_flag(ctx, ref_mode);
+    if (write_type) {
+      ctx.write_varuint32(static_cast<uint32_t>(type_id));
+    }
+    write_data(duration, ctx);
+  }
+
+  static inline void write_data(const Duration &duration, WriteContext &ctx) {
     int64_t nanos = duration.count();
     ctx.write_bytes(&nanos, sizeof(int64_t));
-    return Result<void, Error>();
   }
 
-  static Result<void, Error> write_data_generic(const Duration &duration,
-                                                WriteContext &ctx,
-                                                bool has_generics) {
-    return write_data(duration, ctx);
+  static inline void write_data_generic(const Duration &duration,
+                                        WriteContext &ctx, bool has_generics) {
+    write_data(duration, ctx);
   }
 
-  static Result<Duration, Error> read(ReadContext &ctx, bool read_ref,
-                                      bool read_type) {
-    FORY_TRY(has_value, consume_ref_flag(ctx, read_ref));
-    if (!has_value) {
+  static inline Duration read(ReadContext &ctx, RefMode ref_mode,
+                              bool read_type) {
+    bool has_value = read_null_only_flag(ctx, ref_mode);
+    if (ctx.has_error() || !has_value) {
       return Duration(0);
     }
     if (read_type) {
-      FORY_TRY(type_byte, ctx.read_uint8());
-      if (type_byte != static_cast<uint8_t>(type_id)) {
-        return Unexpected(
-            Error::type_mismatch(type_byte, static_cast<uint8_t>(type_id)));
+      uint32_t type_id_read = ctx.read_varuint32(ctx.error());
+      if (FORY_PREDICT_FALSE(ctx.has_error())) {
+        return Duration(0);
+      }
+      if (type_id_read != static_cast<uint32_t>(type_id)) {
+        ctx.set_error(
+            Error::type_mismatch(type_id_read, static_cast<uint32_t>(type_id)));
+        return Duration(0);
       }
     }
     return read_data(ctx);
   }
 
-  static Result<Duration, Error> read_data(ReadContext &ctx) {
+  static inline Duration read_data(ReadContext &ctx) {
     int64_t nanos;
-    FORY_RETURN_NOT_OK(ctx.read_bytes(&nanos, sizeof(int64_t)));
+    ctx.read_bytes(&nanos, sizeof(int64_t), ctx.error());
     return Duration(nanos);
+  }
+
+  static inline Duration read_with_type_info(ReadContext &ctx, RefMode ref_mode,
+                                             const TypeInfo &type_info) {
+    return read(ctx, ref_mode, false);
   }
 };
 
@@ -113,49 +135,71 @@ template <> struct Serializer<Duration> {
 template <> struct Serializer<Timestamp> {
   static constexpr TypeId type_id = TypeId::TIMESTAMP;
 
-  static Result<void, Error> write(const Timestamp &timestamp,
-                                   WriteContext &ctx, bool write_ref,
-                                   bool write_type) {
-    write_not_null_ref_flag(ctx, write_ref);
-    if (write_type) {
-      ctx.write_uint8(static_cast<uint8_t>(type_id));
-    }
-    return write_data(timestamp, ctx);
+  static inline void write_type_info(WriteContext &ctx) {
+    ctx.write_varuint32(static_cast<uint32_t>(type_id));
   }
 
-  static Result<void, Error> write_data(const Timestamp &timestamp,
-                                        WriteContext &ctx) {
+  static inline void read_type_info(ReadContext &ctx) {
+    uint32_t actual = ctx.read_varuint32(ctx.error());
+    if (FORY_PREDICT_FALSE(ctx.has_error())) {
+      return;
+    }
+    if (!type_id_matches(actual, static_cast<uint32_t>(type_id))) {
+      ctx.set_error(
+          Error::type_mismatch(actual, static_cast<uint32_t>(type_id)));
+    }
+  }
+
+  static inline void write(const Timestamp &timestamp, WriteContext &ctx,
+                           RefMode ref_mode, bool write_type,
+                           bool has_generics = false) {
+    write_not_null_ref_flag(ctx, ref_mode);
+    if (write_type) {
+      ctx.write_varuint32(static_cast<uint32_t>(type_id));
+    }
+    write_data(timestamp, ctx);
+  }
+
+  static inline void write_data(const Timestamp &timestamp, WriteContext &ctx) {
     int64_t nanos = timestamp.time_since_epoch().count();
     ctx.write_bytes(&nanos, sizeof(int64_t));
-    return Result<void, Error>();
   }
 
-  static Result<void, Error> write_data_generic(const Timestamp &timestamp,
-                                                WriteContext &ctx,
-                                                bool has_generics) {
-    return write_data(timestamp, ctx);
+  static inline void write_data_generic(const Timestamp &timestamp,
+                                        WriteContext &ctx, bool has_generics) {
+    write_data(timestamp, ctx);
   }
 
-  static Result<Timestamp, Error> read(ReadContext &ctx, bool read_ref,
-                                       bool read_type) {
-    FORY_TRY(has_value, consume_ref_flag(ctx, read_ref));
-    if (!has_value) {
+  static inline Timestamp read(ReadContext &ctx, RefMode ref_mode,
+                               bool read_type) {
+    bool has_value = read_null_only_flag(ctx, ref_mode);
+    if (ctx.has_error() || !has_value) {
       return Timestamp(Duration(0));
     }
     if (read_type) {
-      FORY_TRY(type_byte, ctx.read_uint8());
-      if (type_byte != static_cast<uint8_t>(type_id)) {
-        return Unexpected(
-            Error::type_mismatch(type_byte, static_cast<uint8_t>(type_id)));
+      uint32_t type_id_read = ctx.read_varuint32(ctx.error());
+      if (FORY_PREDICT_FALSE(ctx.has_error())) {
+        return Timestamp(Duration(0));
+      }
+      if (type_id_read != static_cast<uint32_t>(type_id)) {
+        ctx.set_error(
+            Error::type_mismatch(type_id_read, static_cast<uint32_t>(type_id)));
+        return Timestamp(Duration(0));
       }
     }
     return read_data(ctx);
   }
 
-  static Result<Timestamp, Error> read_data(ReadContext &ctx) {
+  static inline Timestamp read_data(ReadContext &ctx) {
     int64_t nanos;
-    FORY_RETURN_NOT_OK(ctx.read_bytes(&nanos, sizeof(int64_t)));
+    ctx.read_bytes(&nanos, sizeof(int64_t), ctx.error());
     return Timestamp(Duration(nanos));
+  }
+
+  static inline Timestamp read_with_type_info(ReadContext &ctx,
+                                              RefMode ref_mode,
+                                              const TypeInfo &type_info) {
+    return read(ctx, ref_mode, false);
   }
 };
 
@@ -168,47 +212,70 @@ template <> struct Serializer<Timestamp> {
 template <> struct Serializer<LocalDate> {
   static constexpr TypeId type_id = TypeId::LOCAL_DATE;
 
-  static Result<void, Error> write(const LocalDate &date, WriteContext &ctx,
-                                   bool write_ref, bool write_type) {
-    write_not_null_ref_flag(ctx, write_ref);
-    if (write_type) {
-      ctx.write_uint8(static_cast<uint8_t>(type_id));
+  static inline void write_type_info(WriteContext &ctx) {
+    ctx.write_varuint32(static_cast<uint32_t>(type_id));
+  }
+
+  static inline void read_type_info(ReadContext &ctx) {
+    uint32_t actual = ctx.read_varuint32(ctx.error());
+    if (FORY_PREDICT_FALSE(ctx.has_error())) {
+      return;
     }
-    return write_data(date, ctx);
+    if (!type_id_matches(actual, static_cast<uint32_t>(type_id))) {
+      ctx.set_error(
+          Error::type_mismatch(actual, static_cast<uint32_t>(type_id)));
+    }
   }
 
-  static Result<void, Error> write_data(const LocalDate &date,
-                                        WriteContext &ctx) {
+  static inline void write(const LocalDate &date, WriteContext &ctx,
+                           RefMode ref_mode, bool write_type,
+                           bool has_generics = false) {
+    write_not_null_ref_flag(ctx, ref_mode);
+    if (write_type) {
+      ctx.write_varuint32(static_cast<uint32_t>(type_id));
+    }
+    write_data(date, ctx);
+  }
+
+  static inline void write_data(const LocalDate &date, WriteContext &ctx) {
     ctx.write_bytes(&date.days_since_epoch, sizeof(int32_t));
-    return Result<void, Error>();
   }
 
-  static Result<void, Error> write_data_generic(const LocalDate &date,
-                                                WriteContext &ctx,
-                                                bool has_generics) {
-    return write_data(date, ctx);
+  static inline void write_data_generic(const LocalDate &date,
+                                        WriteContext &ctx, bool has_generics) {
+    write_data(date, ctx);
   }
 
-  static Result<LocalDate, Error> read(ReadContext &ctx, bool read_ref,
-                                       bool read_type) {
-    FORY_TRY(has_value, consume_ref_flag(ctx, read_ref));
-    if (!has_value) {
+  static inline LocalDate read(ReadContext &ctx, RefMode ref_mode,
+                               bool read_type) {
+    bool has_value = read_null_only_flag(ctx, ref_mode);
+    if (ctx.has_error() || !has_value) {
       return LocalDate();
     }
     if (read_type) {
-      FORY_TRY(type_byte, ctx.read_uint8());
-      if (type_byte != static_cast<uint8_t>(type_id)) {
-        return Unexpected(
-            Error::type_mismatch(type_byte, static_cast<uint8_t>(type_id)));
+      uint32_t type_id_read = ctx.read_varuint32(ctx.error());
+      if (FORY_PREDICT_FALSE(ctx.has_error())) {
+        return LocalDate();
+      }
+      if (type_id_read != static_cast<uint32_t>(type_id)) {
+        ctx.set_error(
+            Error::type_mismatch(type_id_read, static_cast<uint32_t>(type_id)));
+        return LocalDate();
       }
     }
     return read_data(ctx);
   }
 
-  static Result<LocalDate, Error> read_data(ReadContext &ctx) {
+  static inline LocalDate read_data(ReadContext &ctx) {
     LocalDate date;
-    FORY_RETURN_NOT_OK(ctx.read_bytes(&date.days_since_epoch, sizeof(int32_t)));
+    ctx.read_bytes(&date.days_since_epoch, sizeof(int32_t), ctx.error());
     return date;
+  }
+
+  static inline LocalDate read_with_type_info(ReadContext &ctx,
+                                              RefMode ref_mode,
+                                              const TypeInfo &type_info) {
+    return read(ctx, ref_mode, false);
   }
 };
 

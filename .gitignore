@@ -3,6 +3,8 @@
 **/*.dylib
 **/*.pyd
 bazel-*
+.bazel_user_root/
+**/.bazel_user_root/
 .whl
 python/.cache
 python/pyfory/__pycache__/
@@ -36,12 +38,15 @@ java/**/generated
 javascript/**/dist/
 javascript/**/node_modules/
 javascript/**/build
-MODULE.bazel
 MODULE.bazel.lock
 .DS_Store
 **/.DS_Store
 .vscode/
 go/fory/.gocache
+go/fory/tests/xlang_test_main
+go/fory/tests/xlang/xlang_test_main
+go/fory/xlang_test_main
+go/fory/xlang
 
 # Build directories for all languages
 # Java
@@ -81,3 +86,15 @@ dist/
 **/.pytest_cache
 .venv
 **/.idea
+examples/cpp/cmake_example/build
+
+**/*.pb.go
+**/*.pb.cc
+**/*.pb.h
+
+**/benchmark_results.txt
+**/benchmark_results.json
+**/benchmark_report.md
+**/benchmark_*.png
+**/results/
+benchmarks/**/report/

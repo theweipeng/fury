@@ -62,11 +62,11 @@ func TestValidationDemoXlang(t *testing.T) {
 	}
 
 	// Codegen mode (automatically uses full name)
-	foryForCodegen := forygo.NewFory(true)
+	foryForCodegen := forygo.NewFory(forygo.WithRefTracking(true))
 
 	// Reflect mode (register with full name)
-	foryForReflect := forygo.NewFory(true)
-	err := foryForReflect.RegisterNamedType(ReflectStruct{}, expectedTypeTag)
+	foryForReflect := forygo.NewFory(forygo.WithRefTracking(true))
+	err := foryForReflect.RegisterNamedStruct(ReflectStruct{}, expectedTypeTag)
 	require.NoError(t, err, "Should be able to register ReflectStruct with full name")
 
 	// Serialization test
@@ -127,11 +127,11 @@ func TestSliceDemoXlang(t *testing.T) {
 	}
 
 	// Codegen mode - enable reference tracking
-	foryForCodegen := forygo.NewFory(true)
+	foryForCodegen := forygo.NewFory(forygo.WithRefTracking(true))
 
 	// Reflect mode - enable reference tracking
-	foryForReflect := forygo.NewFory(true)
-	err := foryForReflect.RegisterNamedType(ReflectSliceStruct{}, expectedTypeTag)
+	foryForReflect := forygo.NewFory(forygo.WithRefTracking(true))
+	err := foryForReflect.RegisterNamedStruct(ReflectSliceStruct{}, expectedTypeTag)
 	require.NoError(t, err, "Should be able to register ReflectSliceStruct with full name")
 
 	// Serialization test
@@ -178,33 +178,34 @@ func TestDynamicSliceDemoXlang(t *testing.T) {
 	expectedTypeTag := pkgPath + "." + typeName
 
 	// Create test data with simpler types to avoid reflection issues
+	// Use int64 for interface values since fory deserializes integers to int64 for cross-language compatibility
 	codegenInstance := &DynamicSliceDemo{
-		DynamicSlice: []interface{}{
+		DynamicSlice: []any{
 			"first",
-			200, // Testing mixed types in dynamic slice
+			int64(200), // Testing mixed types in dynamic slice
 			"third",
 		},
 	}
 
 	// Define equivalent struct using reflection
 	type ReflectDynamicStruct struct {
-		DynamicSlice []interface{} `json:"dynamic_slice"`
+		DynamicSlice []any `json:"dynamic_slice"`
 	}
 
 	reflectInstance := &ReflectDynamicStruct{
-		DynamicSlice: []interface{}{
+		DynamicSlice: []any{
 			"first",
-			200, // Testing mixed types in dynamic slice
+			int64(200), // Testing mixed types in dynamic slice
 			"third",
 		},
 	}
 
 	// Codegen mode - enable reference tracking
-	foryForCodegen := forygo.NewFory(true)
+	foryForCodegen := forygo.NewFory(forygo.WithRefTracking(true))
 
 	// Reflect mode - enable reference tracking
-	foryForReflect := forygo.NewFory(true)
-	err := foryForReflect.RegisterNamedType(ReflectDynamicStruct{}, expectedTypeTag)
+	foryForReflect := forygo.NewFory(forygo.WithRefTracking(true))
+	err := foryForReflect.RegisterNamedStruct(ReflectDynamicStruct{}, expectedTypeTag)
 	require.NoError(t, err, "Should be able to register ReflectDynamicStruct with full name")
 
 	// Serialization test
@@ -257,12 +258,12 @@ func TestMapDemoXlang(t *testing.T) {
 	reflectInstance := codegenInstance
 
 	// Create Fory instances with reference tracking enabled
-	foryForCodegen := forygo.NewFory(true)
-	foryForReflect := forygo.NewFory(true)
+	foryForCodegen := forygo.NewFory(forygo.WithRefTracking(true))
+	foryForReflect := forygo.NewFory(forygo.WithRefTracking(true))
 
 	// No need to register MapDemo - it has codegen serializer automatically
 
-	// Serialize both instances
+	// SerializeWithCallback both instances
 	codegenData, err := foryForCodegen.Marshal(codegenInstance)
 	require.NoError(t, err, "Codegen serialization should not fail")
 

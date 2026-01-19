@@ -20,6 +20,7 @@
 package org.apache.fory.resolver;
 
 import static org.apache.fory.Fory.NOT_SUPPORT_XLANG;
+import static org.apache.fory.type.TypeUtils.getSizeOfPrimitiveType;
 
 import com.google.common.collect.BiMap;
 import com.google.common.collect.HashBiMap;
@@ -28,7 +29,7 @@ import java.lang.reflect.Member;
 import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -36,9 +37,10 @@ import java.util.Map;
 import java.util.Set;
 import java.util.SortedMap;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 import java.util.function.Function;
 import org.apache.fory.Fory;
+import org.apache.fory.annotation.CodegenInvoke;
+import org.apache.fory.annotation.ForyField;
 import org.apache.fory.annotation.Internal;
 import org.apache.fory.builder.CodecUtils;
 import org.apache.fory.builder.Generated.GeneratedMetaSharedSerializer;
@@ -72,17 +74,19 @@ import org.apache.fory.serializer.Serializer;
 import org.apache.fory.serializer.SerializerFactory;
 import org.apache.fory.serializer.Serializers;
 import org.apache.fory.type.Descriptor;
+import org.apache.fory.type.DescriptorBuilder;
 import org.apache.fory.type.DescriptorGrouper;
 import org.apache.fory.type.GenericType;
 import org.apache.fory.type.ScalaTypes;
 import org.apache.fory.type.TypeUtils;
+import org.apache.fory.type.Types;
 import org.apache.fory.util.GraalvmSupport;
 import org.apache.fory.util.GraalvmSupport.GraalvmSerializerHolder;
 import org.apache.fory.util.Preconditions;
 import org.apache.fory.util.function.Functions;
 
 // Internal type dispatcher.
-// Do not use this interface outside of fory package
+// Do not use this interface outside fory package
 @Internal
 @SuppressWarnings({"rawtypes", "unchecked"})
 public abstract class TypeResolver {
@@ -97,6 +101,7 @@ public abstract class TypeResolver {
   static final String SET_META__CONTEXT_MSG =
       "Meta context must be set before serialization, "
           + "please set meta context by SerializationContext.setMetaContext";
+  private static final GenericType OBJECT_GENERIC_TYPE = GenericType.build(Object.class);
 
   final Fory fory;
   final boolean metaContextShareEnabled;
@@ -120,26 +125,59 @@ public abstract class TypeResolver {
     }
   }
 
+  /**
+   * Registers a class with an auto-assigned user ID.
+   *
+   * @param type the class to register
+   */
   public abstract void register(Class<?> type);
 
+  /**
+   * Registers a class with a user-specified ID. Valid ID range is [0, 32510].
+   *
+   * @param type the class to register
+   * @param id the user ID to assign (0-based)
+   */
   public abstract void register(Class<?> type, int id);
 
+  /**
+   * Registers a class with a namespace and type name for cross-language serialization.
+   *
+   * @param type the class to register
+   * @param namespace the namespace (can be empty if type name has no conflict)
+   * @param typeName the type name
+   */
   public abstract void register(Class<?> type, String namespace, String typeName);
 
+  /** Registers a class by name with an auto-assigned user ID. */
   public void register(String className) {
     register(loadClass(className));
   }
 
+  /** Registers a class by name with a user-specified ID. */
   public void register(String className, int classId) {
     register(loadClass(className), classId);
   }
 
+  /** Registers a class by name with a namespace and type name. */
   public void register(String className, String namespace, String typeName) {
     register(loadClass(className), namespace, typeName);
   }
 
+  /**
+   * Registers a custom serializer for a type.
+   *
+   * @param type the class to register
+   * @param serializer the serializer instance to use
+   */
   public abstract void registerSerializer(Class<?> type, Serializer<?> serializer);
 
+  /**
+   * Registers a custom serializer class for a type.
+   *
+   * @param type the class to register
+   * @param serializerClass the serializer class (will be instantiated by Fory)
+   */
   public abstract <T> void registerSerializer(
       Class<T> type, Class<? extends Serializer> serializerClass);
 
@@ -148,9 +186,8 @@ public abstract class TypeResolver {
    * ignored too.
    */
   public final boolean needToWriteRef(TypeRef<?> typeRef) {
-    Object extInfo = typeRef.getExtInfo();
-    if (extInfo instanceof TypeExtMeta) {
-      TypeExtMeta meta = (TypeExtMeta) extInfo;
+    TypeExtMeta meta = typeRef.getTypeExtMeta();
+    if (meta != null) {
       return meta.trackingRef();
     }
     Class<?> cls = typeRef.getRawType();
@@ -189,6 +226,10 @@ public abstract class TypeResolver {
   public abstract boolean isRegisteredById(Class<?> cls);
 
   public abstract boolean isRegisteredByName(Class<?> cls);
+
+  public abstract boolean isBuildIn(Descriptor descriptor);
+
+  public abstract boolean isMonomorphic(Descriptor descriptor);
 
   public abstract boolean isMonomorphic(Class<?> clz);
 
@@ -348,8 +389,6 @@ public abstract class TypeResolver {
       MemoryBuffer buffer, ObjectArray<ClassDef> writingClassDefs, int size) {
     for (int i = 0; i < size; i++) {
       buffer.writeBytes(writingClassDefs.get(i).getEncoded());
-      MemoryBuffer memoryBuffer = MemoryBuffer.fromByteArray(writingClassDefs.get(i).getEncoded());
-      ClassDef.readClassDef(fory, memoryBuffer, memoryBuffer.readInt64());
     }
   }
 
@@ -448,11 +487,24 @@ public abstract class TypeResolver {
 
   public abstract GenericType buildGenericType(Type type);
 
+  @CodegenInvoke
+  public GenericType getGenericTypeInStruct(Class<?> cls, String genericTypeStr) {
+    Map<String, GenericType> map =
+        extRegistry.classGenericTypes.computeIfAbsent(cls, this::buildGenericMap);
+    return map.getOrDefault(genericTypeStr, OBJECT_GENERIC_TYPE);
+  }
+
   public abstract void initialize();
+
+  public abstract void ensureSerializersCompiled();
 
   public abstract ClassDef getTypeDef(Class<?> cls, boolean resolveParent);
 
   public final boolean isSerializable(Class<?> cls) {
+    // Enums are always serializable, even if abstract (enums with abstract methods)
+    if (cls.isEnum()) {
+      return true;
+    }
     if (ReflectionUtils.isAbstract(cls) || cls.isInterface()) {
       return false;
     }
@@ -525,7 +577,163 @@ public abstract class TypeResolver {
       boolean descriptorsGroupedOrdered,
       Function<Descriptor, Descriptor> descriptorUpdator);
 
-  public abstract Collection<Descriptor> getFieldDescriptors(Class<?> beanClass, boolean b);
+  public List<Descriptor> getFieldDescriptors(Class<?> clz, boolean searchParent) {
+    SortedMap<Member, Descriptor> allDescriptors = getAllDescriptorsMap(clz, searchParent);
+    List<Descriptor> result = new ArrayList<>(allDescriptors.size());
+
+    Map<Member, Descriptor> newDescriptorMap = new HashMap<>();
+    boolean globalRefTracking = fory.trackingRef();
+    boolean isXlang = fory.isCrossLanguage();
+
+    for (Map.Entry<Member, Descriptor> entry : allDescriptors.entrySet()) {
+      Member member = entry.getKey();
+      Descriptor descriptor = entry.getValue();
+      if (!(member instanceof Field)) {
+        continue;
+      }
+      boolean hasForyField = descriptor.getForyField() != null;
+      // Compute the final isTrackingRef value:
+      // For xlang mode: "Reference tracking is disabled by default" (xlang spec)
+      //   - Only enable ref tracking if explicitly set via @ForyField(ref=true)
+      // For Java mode:
+      //   - If global ref tracking is enabled and no @ForyField, use global setting
+      //   - If @ForyField(ref=true) is set, use that (but can be overridden if global is off)
+      boolean ref = globalRefTracking;
+      if (globalRefTracking) {
+        if (isXlang) {
+          // In xlang mode, only track refs if explicitly annotated with @ForyField(ref=true)
+          ref = hasForyField && descriptor.isTrackingRef();
+        } else {
+          if (hasForyField) {
+            ref = descriptor.isTrackingRef();
+          } else {
+            ref = needToWriteRef(descriptor.getTypeRef());
+          }
+        }
+      }
+      boolean nullable = isFieldNullable(descriptor);
+      boolean needsUpdate =
+          ref != descriptor.isTrackingRef() || nullable != descriptor.isNullable();
+
+      if (needsUpdate) {
+        Descriptor newDescriptor =
+            new DescriptorBuilder(descriptor).trackingRef(ref).nullable(nullable).build();
+        result.add(newDescriptor);
+        newDescriptorMap.put(member, newDescriptor);
+      } else {
+        result.add(descriptor);
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Gets the sort key for a field descriptor.
+   *
+   * <p>If the field has a {@link ForyField} annotation with id >= 0, returns the id as a string.
+   * Otherwise, returns the snake_case field name. This ensures fields are sorted by tag ID when
+   * configured, matching the fingerprint computation order.
+   *
+   * @param descriptor the field descriptor
+   * @return the sort key (tag ID as string or snake_case name)
+   */
+  protected static String getFieldSortKey(Descriptor descriptor) {
+    ForyField foryField = descriptor.getForyField();
+    if (foryField != null && foryField.id() >= 0) {
+      return String.valueOf(foryField.id());
+    }
+    return descriptor.getSnakeCaseName();
+  }
+
+  /**
+   * When compress disabled, sort primitive descriptors from largest to smallest, if size is the
+   * same, sort by field name to fix order.
+   *
+   * <p>When compress enabled, sort primitive descriptors from largest to smallest but let compress
+   * fields ends in tail. if size is the same, sort by field name to fix order.
+   */
+  public Comparator<Descriptor> getPrimitiveComparator() {
+    return (d1, d2) -> {
+      Class<?> t1 = TypeUtils.unwrap(d1.getRawType());
+      Class<?> t2 = TypeUtils.unwrap(d2.getRawType());
+      int typeId1 = Types.getDescriptorTypeId(fory, d1);
+      int typeId2 = Types.getDescriptorTypeId(fory, d2);
+      boolean t1Compress = Types.isCompressedType(typeId1);
+      boolean t2Compress = Types.isCompressedType(typeId2);
+      if ((t1Compress && t2Compress) || (!t1Compress && !t2Compress)) {
+        int c = getSizeOfPrimitiveType(t2) - getSizeOfPrimitiveType(t1);
+        if (c == 0) {
+          c = typeId2 - typeId1;
+          // noinspection Duplicates
+          if (c == 0) {
+            c = getFieldSortKey(d1).compareTo(getFieldSortKey(d2));
+            if (c == 0) {
+              // Field name duplicate in super/child classes.
+              c = d1.getDeclaringClass().compareTo(d2.getDeclaringClass());
+              if (c == 0) {
+                // Final tie-breaker: use actual field name to distinguish fields with same tag ID.
+                // This ensures Comparator contract is satisfied (returns 0 only for same object).
+                c = d1.getName().compareTo(d2.getName());
+              }
+            }
+          }
+          return c;
+        }
+        return c;
+      }
+      if (t1Compress) {
+        return 1;
+      }
+      // t2 compress
+      return -1;
+    };
+  }
+
+  /**
+   * Get the nullable flag for a field, respecting xlang mode.
+   *
+   * <p>For xlang mode (SERIALIZATION): use xlang defaults unless @ForyField annotation overrides:
+   *
+   * <ul>
+   *   <li>If @ForyField annotation is present: use its nullable() value
+   *   <li>Otherwise: return true only for Optional types, false for all other non-primitives
+   * </ul>
+   *
+   * <p>For native mode: use descriptor's nullable which defaults to true for non-primitives.
+   *
+   * <p>Important: This ensures the serialization format matches what the TypeDef metadata says. The
+   * TypeDef uses xlang defaults (nullable=false except for Optional types), so the actual
+   * serialization must use the same defaults to ensure consistency across languages.
+   */
+  private boolean isFieldNullable(Descriptor descriptor) {
+    Class<?> rawType = descriptor.getTypeRef().getRawType();
+    if (rawType.isPrimitive()) {
+      return false;
+    }
+    if (fory.isCrossLanguage()) {
+      // For xlang mode: apply xlang defaults
+      // This must match what TypeDefEncoder.buildFieldType uses for TypeDef metadata
+      ForyField foryField = descriptor.getForyField();
+      if (foryField != null) {
+        // Use explicit annotation value
+        return foryField.nullable();
+      }
+      if (TypeUtils.isBoxed(rawType)) {
+        return true;
+      }
+      // Default for xlang: false for all non-primitives, except Optional types
+      return TypeUtils.isOptionalType(rawType);
+    }
+    // For native mode: use descriptor's nullable (true for non-primitives by default)
+    return descriptor.isNullable();
+  }
+
+  // thread safe
+  private SortedMap<Member, Descriptor> getAllDescriptorsMap(Class<?> clz, boolean searchParent) {
+    // when jit thread query this, it is already built by serialization main thread.
+    return extRegistry.descriptorsCache.computeIfAbsent(
+        Tuple2.of(clz, searchParent), t -> Descriptor.getAllDescriptorsMap(clz, searchParent));
+  }
 
   /**
    * Build a map of nested generic type name to generic type for all fields in the class.
@@ -581,34 +789,18 @@ public abstract class TypeResolver {
     extRegistry.typeChecker = typeChecker;
   }
 
-  private static final ConcurrentMap<Integer, GraalvmClassRegistry> GRAALVM_REGISTRY =
-      new ConcurrentHashMap<>();
-
   // CHECKSTYLE.OFF:MethodName
   public static void _addGraalvmClassRegistry(int foryConfigHash, ClassResolver classResolver) {
     // CHECKSTYLE.ON:MethodName
     if (GraalvmSupport.isGraalBuildtime()) {
-      GraalvmClassRegistry registry =
-          GRAALVM_REGISTRY.computeIfAbsent(foryConfigHash, k -> new GraalvmClassRegistry());
+      GraalvmSupport.GraalvmClassRegistry registry =
+          GraalvmSupport.getClassRegistry(foryConfigHash);
       registry.resolvers.add(classResolver);
     }
   }
 
-  static class GraalvmClassRegistry {
-    final List<ClassResolver> resolvers;
-    final Map<Class<?>, Class<? extends Serializer>> serializerClassMap;
-    final Map<Long, Class<? extends Serializer>> deserializerClassMap;
-
-    private GraalvmClassRegistry() {
-      resolvers = Collections.synchronizedList(new ArrayList<>());
-      serializerClassMap = new ConcurrentHashMap<>();
-      deserializerClassMap = new ConcurrentHashMap<>();
-    }
-  }
-
-  final GraalvmClassRegistry getGraalvmClassRegistry() {
-    return GRAALVM_REGISTRY.computeIfAbsent(
-        fory.getConfig().getConfigHash(), k -> new GraalvmClassRegistry());
+  final GraalvmSupport.GraalvmClassRegistry getGraalvmClassRegistry() {
+    return GraalvmSupport.getClassRegistry(fory.getConfig().getConfigHash());
   }
 
   final Class<? extends Serializer> getGraalvmSerializerClass(Serializer serializer) {
@@ -619,13 +811,13 @@ public abstract class TypeResolver {
   }
 
   final Class<? extends Serializer> getSerializerClassFromGraalvmRegistry(Class<?> cls) {
-    GraalvmClassRegistry registry = getGraalvmClassRegistry();
-    List<ClassResolver> classResolvers = registry.resolvers;
-    if (classResolvers.isEmpty()) {
+    GraalvmSupport.GraalvmClassRegistry registry = getGraalvmClassRegistry();
+    List<TypeResolver> resolvers = registry.resolvers;
+    if (resolvers.isEmpty()) {
       return null;
     }
-    for (ClassResolver classResolver : classResolvers) {
-      if (classResolver != this) {
+    for (TypeResolver resolver : resolvers) {
+      if (resolver != this) {
         ClassInfo classInfo = getClassInfo(cls, false);
         if (classInfo != null && classInfo.serializer != null) {
           return classInfo.serializer.getClass();
@@ -648,9 +840,9 @@ public abstract class TypeResolver {
 
   private Class<? extends Serializer> getMetaSharedDeserializerClassFromGraalvmRegistry(
       Class<?> cls, ClassDef classDef) {
-    GraalvmClassRegistry registry = getGraalvmClassRegistry();
-    List<ClassResolver> classResolvers = registry.resolvers;
-    if (classResolvers.isEmpty()) {
+    GraalvmSupport.GraalvmClassRegistry registry = getGraalvmClassRegistry();
+    List<TypeResolver> resolvers = registry.resolvers;
+    if (resolvers.isEmpty()) {
       return null;
     }
     Class<? extends Serializer> deserializerClass =
@@ -683,6 +875,7 @@ public abstract class TypeResolver {
     // Here we set it to 1 because `NO_CLASS_ID` is 0 to avoid calculating it again in
     // `register(Class<?> cls)`.
     short classIdGenerator = 1;
+    short userIdGenerator = 0;
     SerializerFactory serializerFactory;
     final IdentityMap<Class<?>, Short> registeredClassIdMap =
         new IdentityMap<>(estimatedNumRegistered);
@@ -693,7 +886,6 @@ public abstract class TypeResolver {
     // avoid potential recursive call for seq codec generation.
     // ex. A->field1: B, B.field1: A
     final Set<Class<?>> getClassCtx = new HashSet<>();
-    final Map<Class<?>, FieldResolver> fieldResolverMap = new HashMap<>();
     final LongMap<Tuple2<ClassDef, ClassInfo>> classIdToDef = new LongMap<>();
     final Map<Class<?>, ClassDef> currentLayerClassDef = new HashMap<>();
     // Tuple2<Class, Class>: Tuple2<From Class, To Class>
@@ -701,12 +893,17 @@ public abstract class TypeResolver {
     // TODO(chaokunyang) Better to  use soft reference, see ObjectStreamClass.
     final ConcurrentHashMap<Tuple2<Class<?>, Boolean>, SortedMap<Member, Descriptor>>
         descriptorsCache = new ConcurrentHashMap<>();
-    TypeChecker typeChecker = (resolver, className) -> true;
+    static final TypeChecker DEFAULT_TYPE_CHECKER = (resolver, className) -> true;
+    TypeChecker typeChecker = DEFAULT_TYPE_CHECKER;
     GenericType objectGenericType;
     final IdentityMap<Type, GenericType> genericTypes = new IdentityMap<>();
     final Map<Class, Map<String, GenericType>> classGenericTypes = new HashMap<>();
     final Map<List<ClassLoader>, CodeGenerator> codeGeneratorMap = new HashMap<>();
     final Set<ClassInfo> registeredClassInfos = new HashSet<>();
     boolean ensureSerializersCompiled;
+
+    public boolean isTypeCheckerSet() {
+      return typeChecker != DEFAULT_TYPE_CHECKER;
+    }
   }
 }

@@ -21,11 +21,28 @@ use crate::resolver::context::{ReadContext, WriteContext};
 use crate::resolver::type_resolver::{TypeInfo, TypeResolver};
 use crate::serializer::util::write_dyn_data_generic;
 use crate::serializer::{ForyDefault, Serializer};
-use crate::types::RefFlag;
-use crate::types::TypeId;
+use crate::types::{RefFlag, RefMode, TypeId, LIST, MAP, SET};
 use std::any::Any;
 use std::rc::Rc;
 use std::sync::Arc;
+
+/// Check if the type info represents a generic container type (LIST, SET, MAP).
+/// These types cannot be deserialized polymorphically via `Box<dyn Any>` because
+/// different generic instantiations (e.g., `Vec<A>`, `Vec<B>`) share the same type ID.
+#[inline]
+fn check_generic_container_type(type_info: &TypeInfo) -> Result<(), Error> {
+    let type_id = type_info.get_type_id();
+    if type_id == LIST || type_id == SET || type_id == MAP {
+        return Err(Error::type_error(
+            "Cannot deserialize generic container types (Vec, HashSet, HashMap) polymorphically \
+            via Box/Rc/Arc/Weak<dyn Any>. The serialization protocol does not preserve the element type \
+            information needed to distinguish between different generic instantiations \
+            (e.g., Vec<StructA> vs Vec<StructB>). Consider wrapping the container in a \
+            named struct type instead.",
+        ));
+    }
+    Ok(())
+}
 
 /// Helper function to deserialize to `Box<dyn Any>`
 pub fn deserialize_any_box(context: &mut ReadContext) -> Result<Box<dyn Any>, Error> {
@@ -35,8 +52,11 @@ pub fn deserialize_any_box(context: &mut ReadContext) -> Result<Box<dyn Any>, Er
         return Err(Error::invalid_ref("Expected NotNullValue for Box<dyn Any>"));
     }
     let typeinfo = context.read_any_typeinfo()?;
-    let deserializer_fn = typeinfo.get_harness().get_read_data_fn();
-    let result = deserializer_fn(context);
+    // Check for generic container types which cannot be deserialized polymorphically
+    check_generic_container_type(&typeinfo)?;
+    let result = typeinfo
+        .get_harness()
+        .read_polymorphic_data(context, &typeinfo);
     context.dec_depth();
     result
 }
@@ -51,14 +71,14 @@ impl Serializer for Box<dyn Any> {
     fn fory_write(
         &self,
         context: &mut WriteContext,
-        write_ref_info: bool,
+        ref_mode: RefMode,
         write_typeinfo: bool,
         has_generics: bool,
     ) -> Result<(), Error> {
         write_box_any(
             self.as_ref(),
             context,
-            write_ref_info,
+            ref_mode,
             write_typeinfo,
             has_generics,
         )
@@ -81,21 +101,21 @@ impl Serializer for Box<dyn Any> {
 
     fn fory_read(
         context: &mut ReadContext,
-        read_ref_info: bool,
+        ref_mode: RefMode,
         read_type_info: bool,
     ) -> Result<Self, Error> {
-        read_box_any(context, read_ref_info, read_type_info, None)
+        read_box_any(context, ref_mode, read_type_info, None)
     }
 
     fn fory_read_with_type_info(
         context: &mut ReadContext,
-        read_ref_info: bool,
+        ref_mode: RefMode,
         type_info: Rc<TypeInfo>,
     ) -> Result<Self, Error>
     where
         Self: Sized + ForyDefault,
     {
-        read_box_any(context, read_ref_info, false, Some(type_info))
+        read_box_any(context, ref_mode, false, Some(type_info))
     }
 
     fn fory_read_data(_: &mut ReadContext) -> Result<Self, Error> {
@@ -151,11 +171,11 @@ impl Serializer for Box<dyn Any> {
 pub fn write_box_any(
     value: &dyn Any,
     context: &mut WriteContext,
-    write_ref_info: bool,
+    ref_mode: RefMode,
     write_typeinfo: bool,
     has_generics: bool,
 ) -> Result<(), Error> {
-    if write_ref_info {
+    if ref_mode != RefMode::None {
         context.writer.write_i8(RefFlag::NotNullValue as i8);
     }
     let concrete_type_id = value.type_id();
@@ -170,12 +190,12 @@ pub fn write_box_any(
 
 pub fn read_box_any(
     context: &mut ReadContext,
-    read_ref_info: bool,
+    ref_mode: RefMode,
     read_type_info: bool,
     type_info: Option<Rc<TypeInfo>>,
 ) -> Result<Box<dyn Any>, Error> {
     context.inc_depth()?;
-    let ref_flag = if read_ref_info {
+    let ref_flag = if ref_mode != RefMode::None {
         context.reader.read_i8()?
     } else {
         RefFlag::NotNullValue as i8
@@ -194,8 +214,11 @@ pub fn read_box_any(
         );
         context.read_any_typeinfo()?
     };
-    let deserializer_fn = typeinfo.get_harness().get_read_data_fn();
-    let result = deserializer_fn(context);
+    // Check for generic container types which cannot be deserialized polymorphically
+    check_generic_container_type(&typeinfo)?;
+    let result = typeinfo
+        .get_harness()
+        .read_polymorphic_data(context, &typeinfo);
     context.dec_depth();
     result
 }
@@ -210,11 +233,11 @@ impl Serializer for Rc<dyn Any> {
     fn fory_write(
         &self,
         context: &mut WriteContext,
-        write_ref_info: bool,
+        ref_mode: RefMode,
         write_type_info: bool,
         has_generics: bool,
     ) -> Result<(), Error> {
-        if !write_ref_info
+        if ref_mode == RefMode::None
             || !context
                 .ref_writer
                 .try_write_rc_ref(&mut context.writer, self)
@@ -249,21 +272,21 @@ impl Serializer for Rc<dyn Any> {
 
     fn fory_read(
         context: &mut ReadContext,
-        read_ref_info: bool,
+        ref_mode: RefMode,
         read_type_info: bool,
     ) -> Result<Self, Error> {
-        read_rc_any(context, read_ref_info, read_type_info, None)
+        read_rc_any(context, ref_mode, read_type_info, None)
     }
 
     fn fory_read_with_type_info(
         context: &mut ReadContext,
-        read_ref_info: bool,
+        ref_mode: RefMode,
         type_info: Rc<TypeInfo>,
     ) -> Result<Self, Error>
     where
         Self: Sized + ForyDefault,
     {
-        read_rc_any(context, read_ref_info, false, Some(type_info))
+        read_rc_any(context, ref_mode, false, Some(type_info))
     }
 
     fn fory_read_data(_: &mut ReadContext) -> Result<Self, Error> {
@@ -319,11 +342,11 @@ impl Serializer for Rc<dyn Any> {
 
 pub fn read_rc_any(
     context: &mut ReadContext,
-    read_ref_info: bool,
+    ref_mode: RefMode,
     read_type_info: bool,
     type_info: Option<Rc<TypeInfo>>,
 ) -> Result<Rc<dyn Any>, Error> {
-    let ref_flag = if read_ref_info {
+    let ref_flag = if ref_mode != RefMode::None {
         context.ref_reader.read_ref_flag(&mut context.reader)?
     } else {
         RefFlag::NotNullValue
@@ -346,8 +369,11 @@ pub fn read_rc_any(
             } else {
                 type_info.ok_or_else(|| Error::type_error("No type info found for read"))?
             };
-            let read_data_fn = typeinfo.get_harness().get_read_data_fn();
-            let boxed = read_data_fn(context)?;
+            // Check for generic container types which cannot be deserialized polymorphically
+            check_generic_container_type(&typeinfo)?;
+            let boxed = typeinfo
+                .get_harness()
+                .read_polymorphic_data(context, &typeinfo)?;
             context.dec_depth();
             Ok(Rc::<dyn Any>::from(boxed))
         }
@@ -358,8 +384,11 @@ pub fn read_rc_any(
             } else {
                 type_info.ok_or_else(|| Error::type_error("No type info found for read"))?
             };
-            let read_data_fn = typeinfo.get_harness().get_read_data_fn();
-            let boxed = read_data_fn(context)?;
+            // Check for generic container types which cannot be deserialized polymorphically
+            check_generic_container_type(&typeinfo)?;
+            let boxed = typeinfo
+                .get_harness()
+                .read_polymorphic_data(context, &typeinfo)?;
             context.dec_depth();
             let rc: Rc<dyn Any> = Rc::from(boxed);
             context.ref_reader.store_rc_ref(rc.clone());
@@ -378,11 +407,11 @@ impl Serializer for Arc<dyn Any> {
     fn fory_write(
         &self,
         context: &mut WriteContext,
-        write_ref_info: bool,
+        ref_mode: RefMode,
         write_type_info: bool,
         has_generics: bool,
     ) -> Result<(), Error> {
-        if !write_ref_info
+        if ref_mode == RefMode::None
             || !context
                 .ref_writer
                 .try_write_arc_ref(&mut context.writer, self)
@@ -418,21 +447,21 @@ impl Serializer for Arc<dyn Any> {
 
     fn fory_read(
         context: &mut ReadContext,
-        read_ref_info: bool,
+        ref_mode: RefMode,
         read_type_info: bool,
     ) -> Result<Self, Error> {
-        read_arc_any(context, read_ref_info, read_type_info, None)
+        read_arc_any(context, ref_mode, read_type_info, None)
     }
 
     fn fory_read_with_type_info(
         context: &mut ReadContext,
-        read_ref_info: bool,
+        ref_mode: RefMode,
         type_info: Rc<TypeInfo>,
     ) -> Result<Self, Error>
     where
         Self: Sized + ForyDefault,
     {
-        read_arc_any(context, read_ref_info, false, Some(type_info))
+        read_arc_any(context, ref_mode, false, Some(type_info))
     }
 
     fn fory_read_data(_: &mut ReadContext) -> Result<Self, Error> {
@@ -488,11 +517,11 @@ impl Serializer for Arc<dyn Any> {
 
 pub fn read_arc_any(
     context: &mut ReadContext,
-    read_ref_info: bool,
+    ref_mode: RefMode,
     read_type_info: bool,
     type_info: Option<Rc<TypeInfo>>,
 ) -> Result<Arc<dyn Any>, Error> {
-    let ref_flag = if read_ref_info {
+    let ref_flag = if ref_mode != RefMode::None {
         context.ref_reader.read_ref_flag(&mut context.reader)?
     } else {
         RefFlag::NotNullValue
@@ -516,8 +545,11 @@ pub fn read_arc_any(
                 type_info
                     .ok_or_else(|| Error::type_error("No type info found for read Arc<dyn Any>"))?
             };
-            let read_data_fn = typeinfo.get_harness().get_read_data_fn();
-            let boxed = read_data_fn(context)?;
+            // Check for generic container types which cannot be deserialized polymorphically
+            check_generic_container_type(&typeinfo)?;
+            let boxed = typeinfo
+                .get_harness()
+                .read_polymorphic_data(context, &typeinfo)?;
             context.dec_depth();
             Ok(Arc::<dyn Any>::from(boxed))
         }
@@ -529,8 +561,11 @@ pub fn read_arc_any(
                 type_info
                     .ok_or_else(|| Error::type_error("No type info found for read Arc<dyn Any>"))?
             };
-            let read_data_fn = typeinfo.get_harness().get_read_data_fn();
-            let boxed = read_data_fn(context)?;
+            // Check for generic container types which cannot be deserialized polymorphically
+            check_generic_container_type(&typeinfo)?;
+            let boxed = typeinfo
+                .get_harness()
+                .read_polymorphic_data(context, &typeinfo)?;
             context.dec_depth();
             let arc: Arc<dyn Any> = Arc::from(boxed);
             context.ref_reader.store_arc_ref(arc.clone());

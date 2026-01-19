@@ -20,10 +20,7 @@ use crate::error::Error;
 use crate::resolver::context::{ReadContext, WriteContext};
 use crate::serializer::Serializer;
 use crate::types::TypeId;
-use crate::types::{
-    is_user_type, BOOL, ENUM, FLOAT32, FLOAT64, INT16, INT32, INT64, INT8, NAMED_ENUM, U128, U16,
-    U32, U64, U8, USIZE,
-};
+use crate::types::{is_user_type, ENUM, NAMED_ENUM, UNION};
 
 #[inline(always)]
 pub(crate) fn read_basic_type_info<T: Serializer>(context: &mut ReadContext) -> Result<(), Error> {
@@ -46,7 +43,7 @@ pub(crate) fn read_basic_type_info<T: Serializer>(context: &mut ReadContext) -> 
 #[inline]
 pub const fn field_need_read_type_info(type_id: u32) -> bool {
     let internal_type_id = type_id & 0xff;
-    if internal_type_id == ENUM || internal_type_id == NAMED_ENUM {
+    if internal_type_id == ENUM || internal_type_id == NAMED_ENUM || internal_type_id == UNION {
         return false;
     }
     is_user_type(internal_type_id)
@@ -55,34 +52,26 @@ pub const fn field_need_read_type_info(type_id: u32) -> bool {
 /// Keep as const fn for compile time evaluation or constant folding
 pub const fn field_need_write_type_info(static_type_id: TypeId) -> bool {
     let static_type_id = static_type_id as u32;
-    if static_type_id == ENUM || static_type_id == NAMED_ENUM {
+    if static_type_id == ENUM || static_type_id == NAMED_ENUM || static_type_id == UNION {
         return false;
     }
     is_user_type(static_type_id)
 }
 
 /// Keep as const fn for compile time evaluation or constant folding
+///
+/// In xlang mode with nullable=false default:
+/// - If nullable=true: always need to write ref flag (to handle null values)
+/// - If nullable=false: no ref flag needed (value is always present, no null handling required)
+///
+/// This aligns with the xlang protocol where:
+/// - Non-optional types (nullable=false) skip the ref flag entirely
+/// - Optional types (nullable=true) write a ref flag to indicate null vs non-null
 #[inline]
-pub const fn field_need_write_ref_into(type_id: u32, nullable: bool) -> bool {
-    if nullable {
-        return true;
-    }
-    let internal_type_id = type_id & 0xff;
-    !matches!(
-        internal_type_id,
-        BOOL | INT8
-            | INT16
-            | INT32
-            | INT64
-            | FLOAT32
-            | FLOAT64
-            | U8
-            | U16
-            | U32
-            | U64
-            | USIZE
-            | U128
-    )
+pub const fn field_need_write_ref_into(_type_id: u32, nullable: bool) -> bool {
+    // Only write ref flag when nullable is true (value can be null)
+    // When nullable=false, the value is always present, no ref flag needed
+    nullable
 }
 
 #[inline(always)]

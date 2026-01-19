@@ -1,6 +1,6 @@
 ---
 title: Development
-sidebar_position: 8
+sidebar_position: 20
 id: development
 license: |
   Licensed to the Apache Software Foundation (ASF) under one or more
@@ -43,9 +43,8 @@ cd python
 # For Python versions less than 3.13, numpy 2 is not currently supported.
 pip uninstall -y numpy
 # Install necessary environment for Python < 3.13.
-pip install pyarrow==15.0.0 Cython wheel pytest
-# For Python 3.13, pyarrow 18.0.0 is available and requires numpy version greater than 2.
-# pip install pyarrow==18.0.0 Cython wheel pytest
+pip install pyarrow Cython wheel pytest
+# pip install pyarrow Cython wheel pytest
 pip install -v -e .
 ```
 
@@ -58,14 +57,12 @@ pip install -v -e .
 Build fory row format：
 
 ```bash
-pip install pyarrow==15.0.0
 bazel build //cpp/fory/row:fory_row_format
 ```
 
 Build fory row format encoder:
 
 ```bash
-pip install pyarrow==15.0.0
 bazel build //cpp/fory/encoder:fory_encoder
 ```
 
@@ -79,7 +76,7 @@ bazel build //cpp/fory/encoder:fory_encoder
 ```bash
 cd go/fory
 # run test
-go test -v
+go test -v ./...
 # run xlang test
 go test -v fory_xlang_test.go
 ```

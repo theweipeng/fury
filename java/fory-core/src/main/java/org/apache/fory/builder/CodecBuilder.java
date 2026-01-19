@@ -63,7 +63,6 @@ import org.apache.fory.reflect.TypeRef;
 import org.apache.fory.resolver.ClassInfo;
 import org.apache.fory.resolver.ClassInfoHolder;
 import org.apache.fory.type.Descriptor;
-import org.apache.fory.type.FinalObjectTypeStub;
 import org.apache.fory.util.GraalvmSupport;
 import org.apache.fory.util.Preconditions;
 import org.apache.fory.util.StringUtils;
@@ -118,8 +117,11 @@ public abstract class CodecBuilder {
     ctx.reserveName(ROOT_OBJECT_NAME);
     // Don't import other packages to avoid class conflicts.
     // For example user class named as `Date`/`List`/`MemoryBuffer`
+    // Skip Java reserved words since they can't be used as variable names anyway
+    // (e.g., Kotlin allows field names like "new" which are valid at bytecode level)
     ReflectionUtils.getFields(beanType.getRawType(), true).stream()
         .map(Field::getName)
+        .filter(name -> !CodegenContext.JAVA_RESERVED_WORDS.contains(name))
         .collect(Collectors.toSet())
         .forEach(ctx::reserveName);
   }
@@ -151,10 +153,6 @@ public abstract class CodecBuilder {
   protected Expression tryCastIfPublic(
       Expression expression, TypeRef<?> targetType, boolean inline) {
     Class<?> rawType = getRawType(targetType);
-    if (rawType == FinalObjectTypeStub.class) {
-      // final field doesn't exist in this class, skip cast.
-      return expression;
-    }
     if (inline) {
       if (sourcePublicAccessible(rawType)) {
         return new Cast(expression, targetType);
@@ -306,7 +304,7 @@ public abstract class CodecBuilder {
     return new Cast(getObj, descriptor.getTypeRef(), descriptor.getName());
   }
 
-  /** Returns an expression that get field value> from <code>bean</code> using {@link Unsafe}. */
+  /** Returns an expression that get field value> from <code>bean</code> using `Unsafe`. */
   private Expression unsafeAccessField(
       Expression inputObject, Class<?> cls, Descriptor descriptor) {
     String fieldName = descriptor.getName();
@@ -375,15 +373,21 @@ public abstract class CodecBuilder {
     if (!d.isFinalField()
         && Modifier.isPublic(d.getModifiers())
         && Modifier.isPublic(d.getRawType().getModifiers())) {
+      if (!d.getRawType().isAssignableFrom(value.type().getRawType())) {
+        value = tryInlineCast(value, d.getTypeRef());
+      }
       return new Expression.SetField(bean, fieldName, value);
     } else if (d.getWriteMethod() != null && Modifier.isPublic(d.getWriteMethod().getModifiers())) {
+      if (!d.getRawType().isAssignableFrom(value.type().getRawType())) {
+        value = tryInlineCast(value, d.getTypeRef());
+      }
       return new Invoke(bean, d.getWriteMethod().getName(), value);
     } else {
       if (!d.isFinalField() && !Modifier.isPrivate(d.getModifiers())) {
         if (AccessorHelper.defineSetter(d.getField())) {
           Class<?> accessorClass = AccessorHelper.getAccessorClass(d.getField());
-          if (!value.type().equals(d.getTypeRef())) {
-            value = new Cast(value, d.getTypeRef());
+          if (!d.getRawType().isAssignableFrom(value.type().getRawType())) {
+            value = tryInlineCast(value, d.getTypeRef());
           }
           return new StaticInvoke(
               accessorClass, d.getName(), PRIMITIVE_VOID_TYPE, false, bean, value);
@@ -392,8 +396,8 @@ public abstract class CodecBuilder {
       if (d.getWriteMethod() != null && !Modifier.isPrivate(d.getWriteMethod().getModifiers())) {
         if (AccessorHelper.defineSetter(d.getWriteMethod())) {
           Class<?> accessorClass = AccessorHelper.getAccessorClass(d.getWriteMethod());
-          if (!value.type().equals(d.getTypeRef())) {
-            value = new Cast(value, d.getTypeRef());
+          if (!d.getRawType().isAssignableFrom(value.type().getRawType())) {
+            value = tryInlineCast(value, d.getTypeRef());
           }
           return new StaticInvoke(
               accessorClass, d.getWriteMethod().getName(), PRIMITIVE_VOID_TYPE, false, bean, value);
@@ -415,8 +419,7 @@ public abstract class CodecBuilder {
   }
 
   /**
-   * Returns an expression that set field <code>value</code> to <code>bean</code> using {@link
-   * Unsafe}.
+   * Returns an expression that set field <code>value</code> to <code>bean</code> using `Unsafe`.
    */
   private Expression unsafeSetField(Expression bean, Descriptor descriptor, Expression value) {
     TypeRef<?> fieldType = descriptor.getTypeRef();
@@ -476,6 +479,7 @@ public abstract class CodecBuilder {
       boolean isStatic, Class<?> type, String fieldName, Supplier<Expression> value) {
     Reference fieldRef = fieldMap.get(fieldName);
     if (fieldRef == null) {
+      fieldName = ctx.newName(fieldName);
       ctx.addField(isStatic, true, ctx.type(type), fieldName, value.get());
       fieldRef = new Reference(fieldName, TypeRef.of(type));
       fieldMap.put(fieldName, fieldRef);
@@ -706,13 +710,27 @@ public abstract class CodecBuilder {
     return Platform.IS_LITTLE_ENDIAN ? "_readInt64OnLE" : "_readInt64OnBE";
   }
 
+  public static String readInt16Func() {
+    return Platform.IS_LITTLE_ENDIAN ? "_readInt16OnLE" : "_readInt16OnBE";
+  }
+
+  public static String readVarInt32Func() {
+    return Platform.IS_LITTLE_ENDIAN ? "_readVarInt32OnLE" : "_readVarInt32OnBE";
+  }
+
+  public static String readFloat32Func() {
+    return Platform.IS_LITTLE_ENDIAN ? "_readFloat32OnLE" : "_readFloat32OnBE";
+  }
+
+  public static String readFloat64Func() {
+    return Platform.IS_LITTLE_ENDIAN ? "_readFloat64OnLE" : "_readFloat64OnBE";
+  }
+
   protected Expression readFloat32(Expression buffer) {
-    String func = Platform.IS_LITTLE_ENDIAN ? "_readFloat32OnLE" : "_readFloat32OnBE";
-    return new Invoke(buffer, func, PRIMITIVE_FLOAT_TYPE);
+    return new Invoke(buffer, readFloat32Func(), PRIMITIVE_FLOAT_TYPE);
   }
 
   protected Expression readFloat64(Expression buffer) {
-    String func = Platform.IS_LITTLE_ENDIAN ? "_readFloat64OnLE" : "_readFloat64OnBE";
-    return new Invoke(buffer, func, PRIMITIVE_DOUBLE_TYPE);
+    return new Invoke(buffer, readFloat64Func(), PRIMITIVE_DOUBLE_TYPE);
   }
 }

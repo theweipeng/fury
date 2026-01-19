@@ -20,6 +20,7 @@
 #pragma once
 
 #include "fory/serialization/serializer.h"
+#include "fory/util/bit_util.h"
 #include <array>
 
 namespace fory {
@@ -59,65 +60,124 @@ struct Serializer<
     }
   }();
 
-  static Result<void, Error> write(const std::array<T, N> &arr,
-                                   WriteContext &ctx, bool write_ref,
-                                   bool write_type) {
-    write_not_null_ref_flag(ctx, write_ref);
+  static inline void write_type_info(WriteContext &ctx) {
+    ctx.write_varuint32(static_cast<uint32_t>(type_id));
+  }
+
+  static inline void read_type_info(ReadContext &ctx) {
+    uint32_t actual = ctx.read_varuint32(ctx.error());
+    if (FORY_PREDICT_FALSE(ctx.has_error())) {
+      return;
+    }
+    if (!type_id_matches(actual, static_cast<uint32_t>(type_id))) {
+      ctx.set_error(
+          Error::type_mismatch(actual, static_cast<uint32_t>(type_id)));
+    }
+  }
+
+  static inline void write(const std::array<T, N> &arr, WriteContext &ctx,
+                           RefMode ref_mode, bool write_type,
+                           bool has_generics = false) {
+    write_not_null_ref_flag(ctx, ref_mode);
     if (write_type) {
-      ctx.write_uint8(static_cast<uint8_t>(type_id));
+      ctx.write_varuint32(static_cast<uint32_t>(type_id));
     }
-    return write_data(arr, ctx);
+    write_data_generic(arr, ctx, has_generics);
   }
 
-  static Result<void, Error> write_data(const std::array<T, N> &arr,
-                                        WriteContext &ctx) {
-    // Write array length
-    ctx.write_varuint32(static_cast<uint32_t>(N));
+  static inline void write_data(const std::array<T, N> &arr,
+                                WriteContext &ctx) {
+    Buffer &buffer = ctx.buffer();
+    // bulk write may write 8 bytes for varint32
+    constexpr size_t max_size = 8 + N * sizeof(T);
+    buffer.Grow(static_cast<uint32_t>(max_size));
+    uint32_t writer_index = buffer.writer_index();
+    // Write array length in bytes
+    writer_index +=
+        buffer.PutVarUint32(writer_index, static_cast<uint32_t>(N * sizeof(T)));
 
-    // Write raw binary data
+    // Write data
     if constexpr (N > 0) {
-      ctx.write_bytes(arr.data(), N * sizeof(T));
+      if constexpr (FORY_LITTLE_ENDIAN || sizeof(T) == 1) {
+        // Fast path: direct memory copy on little-endian or for single-byte
+        // types
+        buffer.UnsafePut(writer_index, arr.data(), N * sizeof(T));
+      } else {
+        // Slow path: element-by-element write on big-endian machines
+        for (size_t i = 0; i < N; ++i) {
+          T value = util::ToLittleEndian(arr[i]);
+          buffer.UnsafePut(writer_index + i * sizeof(T), &value, sizeof(T));
+        }
+      }
     }
-    return Result<void, Error>();
+    buffer.WriterIndex(writer_index + N * sizeof(T));
   }
 
-  static Result<void, Error> write_data_generic(const std::array<T, N> &arr,
-                                                WriteContext &ctx,
-                                                bool has_generics) {
-    return write_data(arr, ctx);
+  static inline void write_data_generic(const std::array<T, N> &arr,
+                                        WriteContext &ctx, bool has_generics) {
+    write_data(arr, ctx);
   }
 
-  static Result<std::array<T, N>, Error> read(ReadContext &ctx, bool read_ref,
-                                              bool read_type) {
-    FORY_TRY(has_value, consume_ref_flag(ctx, read_ref));
-    if (!has_value) {
+  static inline std::array<T, N> read(ReadContext &ctx, RefMode ref_mode,
+                                      bool read_type) {
+    bool has_value = read_null_only_flag(ctx, ref_mode);
+    if (ctx.has_error() || !has_value) {
       return std::array<T, N>();
     }
     if (read_type) {
-      FORY_TRY(type_byte, ctx.read_uint8());
-      if (type_byte != static_cast<uint8_t>(type_id)) {
-        return Unexpected(
-            Error::type_mismatch(type_byte, static_cast<uint8_t>(type_id)));
+      uint32_t type_id_read = ctx.read_varuint32(ctx.error());
+      if (FORY_PREDICT_FALSE(ctx.has_error())) {
+        return std::array<T, N>();
+      }
+      if (type_id_read != static_cast<uint32_t>(type_id)) {
+        ctx.set_error(
+            Error::type_mismatch(type_id_read, static_cast<uint32_t>(type_id)));
+        return std::array<T, N>();
       }
     }
     return read_data(ctx);
   }
 
-  static Result<std::array<T, N>, Error> read_data(ReadContext &ctx) {
-    // Read array length
-    FORY_TRY(length, ctx.read_varuint32());
+  static inline std::array<T, N> read_data(ReadContext &ctx) {
+    // Read array length in bytes
+    uint32_t size_bytes = ctx.read_varuint32(ctx.error());
+    if (FORY_PREDICT_FALSE(ctx.has_error())) {
+      return std::array<T, N>();
+    }
 
+    uint32_t length = size_bytes / sizeof(T);
     if (length != N) {
-      return Unexpected(Error::invalid_data("Array size mismatch: expected " +
-                                            std::to_string(N) + " but got " +
-                                            std::to_string(length)));
+      ctx.set_error(Error::invalid_data("Array size mismatch: expected " +
+                                        std::to_string(N) + " but got " +
+                                        std::to_string(length)));
+      return std::array<T, N>();
     }
 
     std::array<T, N> arr;
     if constexpr (N > 0) {
-      FORY_RETURN_NOT_OK(ctx.read_bytes(arr.data(), N * sizeof(T)));
+      if constexpr (FORY_LITTLE_ENDIAN || sizeof(T) == 1) {
+        // Fast path: direct memory copy on little-endian or for single-byte
+        // types
+        ctx.read_bytes(arr.data(), N * sizeof(T), ctx.error());
+      } else {
+        // Slow path: element-by-element read on big-endian machines
+        for (size_t i = 0; i < N; ++i) {
+          T value;
+          ctx.read_bytes(&value, sizeof(T), ctx.error());
+          if (FORY_PREDICT_FALSE(ctx.has_error())) {
+            return arr;
+          }
+          arr[i] = util::ToLittleEndian(value); // ToLittleEndian swaps on BE
+        }
+      }
     }
     return arr;
+  }
+
+  static inline std::array<T, N>
+  read_with_type_info(ReadContext &ctx, RefMode ref_mode,
+                      const TypeInfo &type_info) {
+    return read(ctx, ref_mode, false);
   }
 };
 
@@ -126,65 +186,101 @@ struct Serializer<
 template <size_t N> struct Serializer<std::array<bool, N>> {
   static constexpr TypeId type_id = TypeId::BOOL_ARRAY;
 
-  static Result<void, Error> write(const std::array<bool, N> &arr,
-                                   WriteContext &ctx, bool write_ref,
-                                   bool write_type) {
-    write_not_null_ref_flag(ctx, write_ref);
+  static inline void write_type_info(WriteContext &ctx) {
+    ctx.write_varuint32(static_cast<uint32_t>(type_id));
+  }
+
+  static inline void read_type_info(ReadContext &ctx) {
+    uint32_t actual = ctx.read_varuint32(ctx.error());
+    if (FORY_PREDICT_FALSE(ctx.has_error())) {
+      return;
+    }
+    if (!type_id_matches(actual, static_cast<uint32_t>(type_id))) {
+      ctx.set_error(
+          Error::type_mismatch(actual, static_cast<uint32_t>(type_id)));
+    }
+  }
+
+  static inline void write(const std::array<bool, N> &arr, WriteContext &ctx,
+                           RefMode ref_mode, bool write_type,
+                           bool has_generics = false) {
+    write_not_null_ref_flag(ctx, ref_mode);
     if (write_type) {
-      ctx.write_uint8(static_cast<uint8_t>(type_id));
+      ctx.write_varuint32(static_cast<uint32_t>(type_id));
     }
-    return write_data(arr, ctx);
+    write_data_generic(arr, ctx, has_generics);
   }
 
-  static Result<void, Error> write_data(const std::array<bool, N> &arr,
-                                        WriteContext &ctx) {
+  static inline void write_data(const std::array<bool, N> &arr,
+                                WriteContext &ctx) {
+    Buffer &buffer = ctx.buffer();
+    // bulk write may write 8 bytes for varint32
+    constexpr size_t max_size = 8 + N;
+    buffer.Grow(static_cast<uint32_t>(max_size));
+    uint32_t writer_index = buffer.writer_index();
     // Write array length
-    ctx.write_varuint32(static_cast<uint32_t>(N));
+    writer_index += buffer.PutVarUint32(writer_index, static_cast<uint32_t>(N));
 
-    // Write each boolean as a byte (per spec, bool is serialized as int16,
-    // but for arrays we use packed bytes for efficiency)
+    // Write each boolean as a byte
     for (size_t i = 0; i < N; ++i) {
-      ctx.write_uint8(arr[i] ? 1 : 0);
+      buffer.UnsafePutByte(writer_index + i,
+                           static_cast<uint8_t>(arr[i] ? 1 : 0));
     }
-    return Result<void, Error>();
+    buffer.WriterIndex(writer_index + N);
   }
 
-  static Result<void, Error> write_data_generic(const std::array<bool, N> &arr,
-                                                WriteContext &ctx,
-                                                bool has_generics) {
-    return write_data(arr, ctx);
+  static inline void write_data_generic(const std::array<bool, N> &arr,
+                                        WriteContext &ctx, bool has_generics) {
+    write_data(arr, ctx);
   }
 
-  static Result<std::array<bool, N>, Error>
-  read(ReadContext &ctx, bool read_ref, bool read_type) {
-    FORY_TRY(has_value, consume_ref_flag(ctx, read_ref));
-    if (!has_value) {
+  static inline std::array<bool, N> read(ReadContext &ctx, RefMode ref_mode,
+                                         bool read_type) {
+    bool has_value = read_null_only_flag(ctx, ref_mode);
+    if (ctx.has_error() || !has_value) {
       return std::array<bool, N>();
     }
     if (read_type) {
-      FORY_TRY(type_byte, ctx.read_uint8());
-      if (type_byte != static_cast<uint8_t>(type_id)) {
-        return Unexpected(
-            Error::type_mismatch(type_byte, static_cast<uint8_t>(type_id)));
+      uint32_t type_id_read = ctx.read_varuint32(ctx.error());
+      if (FORY_PREDICT_FALSE(ctx.has_error())) {
+        return std::array<bool, N>();
+      }
+      if (type_id_read != static_cast<uint32_t>(type_id)) {
+        ctx.set_error(
+            Error::type_mismatch(type_id_read, static_cast<uint32_t>(type_id)));
+        return std::array<bool, N>();
       }
     }
     return read_data(ctx);
   }
 
-  static Result<std::array<bool, N>, Error> read_data(ReadContext &ctx) {
+  static inline std::array<bool, N> read_data(ReadContext &ctx) {
     // Read array length
-    FORY_TRY(length, ctx.read_varuint32());
+    uint32_t length = ctx.read_varuint32(ctx.error());
+    if (FORY_PREDICT_FALSE(ctx.has_error())) {
+      return std::array<bool, N>();
+    }
     if (length != N) {
-      return Unexpected(Error::invalid_data("Array size mismatch: expected " +
-                                            std::to_string(N) + " but got " +
-                                            std::to_string(length)));
+      ctx.set_error(Error::invalid_data("Array size mismatch: expected " +
+                                        std::to_string(N) + " but got " +
+                                        std::to_string(length)));
+      return std::array<bool, N>();
     }
     std::array<bool, N> arr;
     for (size_t i = 0; i < N; ++i) {
-      FORY_TRY(byte, ctx.read_uint8());
+      if (FORY_PREDICT_FALSE(ctx.has_error())) {
+        return arr;
+      }
+      uint8_t byte = ctx.read_uint8(ctx.error());
       arr[i] = (byte != 0);
     }
     return arr;
+  }
+
+  static inline std::array<bool, N>
+  read_with_type_info(ReadContext &ctx, RefMode ref_mode,
+                      const TypeInfo &type_info) {
+    return read(ctx, ref_mode, false);
   }
 };
 

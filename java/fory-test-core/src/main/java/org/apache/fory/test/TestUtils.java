@@ -19,10 +19,8 @@
 
 package org.apache.fory.test;
 
-import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -64,23 +62,13 @@ public class TestUtils {
   private static boolean executeCommand(
       ProcessBuilder processBuilder, List<String> command, int waitTimeoutSeconds) {
     try {
+      processBuilder.inheritIO();
       Process process = processBuilder.start();
-      // Capture output to log
-      BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
-      BufferedReader errorReader =
-          new BufferedReader(new InputStreamReader(process.getErrorStream()));
-      String line;
-      while ((line = reader.readLine()) != null) {
-        System.out.println(line);
-      }
-      while ((line = errorReader.readLine()) != null) {
-        System.err.println(line);
-      }
       boolean finished = process.waitFor(waitTimeoutSeconds, TimeUnit.SECONDS);
       if (finished) {
         return process.exitValue() == 0;
       } else {
-        process.destroy(); // ensure the process is terminated
+        process.destroy();
         return false;
       }
     } catch (Exception e) {
@@ -116,7 +104,7 @@ public class TestUtils {
           Arrays.asList(
               "python",
               "-c",
-              "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec(\"pyfory\") is None else 1)"),
+              "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('pyfory') is None else 1)"),
           10,
           Collections.emptyMap())) {
         throw new SkipException("pyfory not installed");

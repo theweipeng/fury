@@ -30,17 +30,19 @@ import static org.apache.fory.meta.Encoders.typeNameEncodingsList;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Function;
 import org.apache.fory.Fory;
+import org.apache.fory.annotation.ForyField;
 import org.apache.fory.annotation.Internal;
 import org.apache.fory.collection.Tuple2;
 import org.apache.fory.memory.MemoryBuffer;
 import org.apache.fory.memory.MemoryUtils;
-import org.apache.fory.meta.ClassDef.FieldInfo;
-import org.apache.fory.meta.ClassDef.FieldType;
+import org.apache.fory.meta.FieldTypes.FieldType;
 import org.apache.fory.reflect.ReflectionUtils;
 import org.apache.fory.resolver.ClassResolver;
 import org.apache.fory.resolver.TypeResolver;
@@ -72,7 +74,7 @@ public class ClassDefEncoder {
         .getBoxedDescriptors()
         .forEach(descriptor -> fields.add(descriptor.getField()));
     descriptorGrouper
-        .getFinalDescriptors()
+        .getBuildInDescriptors()
         .forEach(descriptor -> fields.add(descriptor.getField()));
     descriptorGrouper
         .getOtherDescriptors()
@@ -90,12 +92,38 @@ public class ClassDefEncoder {
 
   public static List<FieldInfo> buildFieldsInfo(TypeResolver resolver, List<Field> fields) {
     List<FieldInfo> fieldInfos = new ArrayList<>();
+    Set<Integer> usedTagIds = new HashSet<>();
     for (Field field : fields) {
-      FieldInfo fieldInfo =
-          new FieldInfo(
-              field.getDeclaringClass().getName(),
-              field.getName(),
-              ClassDef.buildFieldType(resolver, field));
+      // Check for @ForyField annotation to extract tag ID
+      ForyField foryField = field.getAnnotation(ForyField.class);
+      FieldType fieldType = FieldTypes.buildFieldType(resolver, field);
+
+      FieldInfo fieldInfo;
+      if (foryField != null) {
+        int tagId = foryField.id();
+        if (tagId >= 0) {
+          if (!usedTagIds.add(tagId)) {
+            throw new IllegalArgumentException(
+                "Duplicate tag id: "
+                    + tagId
+                    + ", field: "
+                    + field
+                    + ", class: "
+                    + field.getDeclaringClass());
+          }
+          // Create FieldInfo with tag ID for optimized serialization
+          fieldInfo =
+              new FieldInfo(
+                  field.getDeclaringClass().getName(), field.getName(), fieldType, (short) tagId);
+        } else {
+          // tagId == -1 means opt-out, use field name
+          fieldInfo =
+              new FieldInfo(field.getDeclaringClass().getName(), field.getName(), fieldType);
+        }
+      } else {
+        // No annotation, use field name
+        fieldInfo = new FieldInfo(field.getDeclaringClass().getName(), field.getName(), fieldType);
+      }
       fieldInfos.add(fieldInfo);
     }
     return fieldInfos;
@@ -111,7 +139,7 @@ public class ClassDefEncoder {
   static ClassDef buildClassDefWithFieldInfos(
       ClassResolver classResolver,
       Class<?> type,
-      List<ClassDef.FieldInfo> fieldInfos,
+      List<FieldInfo> fieldInfos,
       boolean hasFieldsMeta) {
     Map<String, List<FieldInfo>> classLayers = getClassFields(type, fieldInfos);
     fieldInfos = new ArrayList<>(fieldInfos.size());
@@ -252,30 +280,29 @@ public class ClassDefEncoder {
   static void writeFieldsInfo(MemoryBuffer buffer, List<FieldInfo> fields) {
     for (FieldInfo fieldInfo : fields) {
       FieldType fieldType = fieldInfo.getFieldType();
-      // `3 bits size + 2 bits field name encoding + polymorphism flag + nullability flag + ref
-      // tracking flag`
-      int header = ((fieldType.isMonomorphic() ? 1 : 0) << 2);
+      // `3 bits size + 2 bits field name encoding + nullability flag + ref tracking flag`
+      int header = ((fieldType.nullable() ? 1 : 0) << 1);
       header |= ((fieldType.trackingRef() ? 1 : 0));
       // Encoding `UTF8/ALL_TO_LOWER_SPECIAL/LOWER_UPPER_DIGIT_SPECIAL/TAG_ID`
       MetaString metaString = Encoders.encodeFieldName(fieldInfo.getFieldName());
       int encodingFlags = fieldNameEncodingsList.indexOf(metaString.getEncoding());
       byte[] encoded = metaString.getBytes();
       int size = (encoded.length - 1);
-      if (fieldInfo.hasTag()) {
-        size = fieldInfo.getTag();
+      if (fieldInfo.hasFieldId()) {
+        size = fieldInfo.getFieldId();
         encodingFlags = 3;
       }
-      header |= (byte) (encodingFlags << 3);
+      header |= (byte) (encodingFlags << 2);
       boolean bigSize = size >= 7;
       if (bigSize) {
-        header |= 0b11100000;
+        header |= 0b01110000;
         buffer.writeByte(header);
         buffer.writeVarUint32Small7(size - 7);
       } else {
-        header |= (size << 5);
+        header |= (size << 4);
         buffer.writeByte(header);
       }
-      if (!fieldInfo.hasTag()) {
+      if (!fieldInfo.hasFieldId()) {
         buffer.writeBytes(encoded);
       }
       fieldType.write(buffer, false);

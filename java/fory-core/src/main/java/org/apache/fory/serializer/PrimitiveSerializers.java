@@ -197,11 +197,12 @@ public class PrimitiveSerializers {
     public static Expression writeInt64(
         Expression buffer, Expression v, LongEncoding longEncoding, boolean ensureBounds) {
       switch (longEncoding) {
-        case LE_RAW_BYTES:
+        case FIXED:
           return new Invoke(buffer, "writeInt64", v);
-        case SLI:
-          return new Invoke(buffer, ensureBounds ? "writeSliInt64" : "_unsafeWriteSliInt64", v);
-        case PVL:
+        case TAGGED:
+          return new Invoke(
+              buffer, ensureBounds ? "writeTaggedInt64" : "_unsafeWriteTaggedInt64", v);
+        case VARINT:
           return new Invoke(buffer, ensureBounds ? "writeVarInt64" : "_unsafeWriteVarInt64", v);
         default:
           throw new UnsupportedOperationException("Unsupported long encoding " + longEncoding);
@@ -209,9 +210,9 @@ public class PrimitiveSerializers {
     }
 
     public static void writeInt64(MemoryBuffer buffer, long value, LongEncoding longEncoding) {
-      if (longEncoding == LongEncoding.SLI) {
-        buffer.writeSliInt64(value);
-      } else if (longEncoding == LongEncoding.LE_RAW_BYTES) {
+      if (longEncoding == LongEncoding.TAGGED) {
+        buffer.writeTaggedInt64(value);
+      } else if (longEncoding == LongEncoding.FIXED) {
         buffer.writeInt64(value);
       } else {
         buffer.writeVarInt64(value);
@@ -219,9 +220,9 @@ public class PrimitiveSerializers {
     }
 
     public static long readInt64(MemoryBuffer buffer, LongEncoding longEncoding) {
-      if (longEncoding == LongEncoding.SLI) {
-        return buffer.readSliInt64();
-      } else if (longEncoding == LongEncoding.LE_RAW_BYTES) {
+      if (longEncoding == LongEncoding.TAGGED) {
+        return buffer.readTaggedInt64();
+      } else if (longEncoding == LongEncoding.FIXED) {
         return buffer.readInt64();
       } else {
         return buffer.readVarInt64();
@@ -234,11 +235,11 @@ public class PrimitiveSerializers {
 
     public static String readLongFunc(LongEncoding longEncoding) {
       switch (longEncoding) {
-        case LE_RAW_BYTES:
+        case FIXED:
           return Platform.IS_LITTLE_ENDIAN ? "_readInt64OnLE" : "_readInt64OnBE";
-        case SLI:
-          return Platform.IS_LITTLE_ENDIAN ? "_readSliInt64OnLE" : "_readSliInt64OnBE";
-        case PVL:
+        case TAGGED:
+          return Platform.IS_LITTLE_ENDIAN ? "_readTaggedInt64OnLE" : "_readTaggedInt64OnBE";
+        case VARINT:
           return Platform.IS_LITTLE_ENDIAN ? "_readVarInt64OnLE" : "_readVarInt64OnBE";
         default:
           throw new UnsupportedOperationException("Unsupported long encoding " + longEncoding);
@@ -294,21 +295,21 @@ public class PrimitiveSerializers {
   public static void registerDefaultSerializers(Fory fory) {
     // primitive types will be boxed.
     ClassResolver resolver = fory.getClassResolver();
-    resolver.registerSerializer(boolean.class, new BooleanSerializer(fory, boolean.class));
-    resolver.registerSerializer(byte.class, new ByteSerializer(fory, byte.class));
-    resolver.registerSerializer(short.class, new ShortSerializer(fory, short.class));
-    resolver.registerSerializer(char.class, new CharSerializer(fory, char.class));
-    resolver.registerSerializer(int.class, new IntSerializer(fory, int.class));
-    resolver.registerSerializer(long.class, new LongSerializer(fory, long.class));
-    resolver.registerSerializer(float.class, new FloatSerializer(fory, float.class));
-    resolver.registerSerializer(double.class, new DoubleSerializer(fory, double.class));
-    resolver.registerSerializer(Boolean.class, new BooleanSerializer(fory, Boolean.class));
-    resolver.registerSerializer(Byte.class, new ByteSerializer(fory, Byte.class));
-    resolver.registerSerializer(Short.class, new ShortSerializer(fory, Short.class));
-    resolver.registerSerializer(Character.class, new CharSerializer(fory, Character.class));
-    resolver.registerSerializer(Integer.class, new IntSerializer(fory, Integer.class));
-    resolver.registerSerializer(Long.class, new LongSerializer(fory, Long.class));
-    resolver.registerSerializer(Float.class, new FloatSerializer(fory, Float.class));
-    resolver.registerSerializer(Double.class, new DoubleSerializer(fory, Double.class));
+    resolver.registerInternalSerializer(boolean.class, new BooleanSerializer(fory, boolean.class));
+    resolver.registerInternalSerializer(byte.class, new ByteSerializer(fory, byte.class));
+    resolver.registerInternalSerializer(short.class, new ShortSerializer(fory, short.class));
+    resolver.registerInternalSerializer(char.class, new CharSerializer(fory, char.class));
+    resolver.registerInternalSerializer(int.class, new IntSerializer(fory, int.class));
+    resolver.registerInternalSerializer(long.class, new LongSerializer(fory, long.class));
+    resolver.registerInternalSerializer(float.class, new FloatSerializer(fory, float.class));
+    resolver.registerInternalSerializer(double.class, new DoubleSerializer(fory, double.class));
+    resolver.registerInternalSerializer(Boolean.class, new BooleanSerializer(fory, Boolean.class));
+    resolver.registerInternalSerializer(Byte.class, new ByteSerializer(fory, Byte.class));
+    resolver.registerInternalSerializer(Short.class, new ShortSerializer(fory, Short.class));
+    resolver.registerInternalSerializer(Character.class, new CharSerializer(fory, Character.class));
+    resolver.registerInternalSerializer(Integer.class, new IntSerializer(fory, Integer.class));
+    resolver.registerInternalSerializer(Long.class, new LongSerializer(fory, Long.class));
+    resolver.registerInternalSerializer(Float.class, new FloatSerializer(fory, Float.class));
+    resolver.registerInternalSerializer(Double.class, new DoubleSerializer(fory, Double.class));
   }
 }

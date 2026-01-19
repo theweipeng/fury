@@ -28,6 +28,10 @@
 #include <cstdint>
 #include <type_traits>
 
+#ifdef FORY_DEBUG
+#include <iostream>
+#endif
+
 namespace fory {
 namespace serialization {
 
@@ -42,52 +46,86 @@ struct Serializer<E, std::enable_if_t<std::is_enum_v<E>>> {
   using Metadata = meta::EnumMetadata<E>;
   using OrdinalType = typename Metadata::OrdinalType;
 
-  static inline Result<void, Error> write(E value, WriteContext &ctx,
-                                          bool write_ref, bool write_type) {
-    write_not_null_ref_flag(ctx, write_ref);
-    if (write_type) {
-      ctx.write_uint8(static_cast<uint8_t>(type_id));
-    }
-    return write_data(value, ctx);
+  static inline void write_type_info(WriteContext &ctx) {
+    // Use compile-time type lookup for faster enum type info writing
+    ctx.write_enum_typeinfo<E>();
   }
 
-  static inline Result<void, Error> write_data(E value, WriteContext &ctx) {
+  static inline void read_type_info(ReadContext &ctx) {
+    const TypeInfo *type_info = ctx.read_any_typeinfo(ctx.error());
+    if (FORY_PREDICT_FALSE(ctx.has_error())) {
+      return;
+    }
+    if (!type_id_matches(type_info->type_id, static_cast<uint32_t>(type_id))) {
+      ctx.set_error(Error::type_mismatch(type_info->type_id,
+                                         static_cast<uint32_t>(type_id)));
+    }
+  }
+
+  static inline void write(E value, WriteContext &ctx, RefMode ref_mode,
+                           bool write_type, bool has_generics = false) {
+    write_not_null_ref_flag(ctx, ref_mode);
+    if (write_type) {
+      write_type_info(ctx);
+    }
+    write_data_generic(value, ctx, has_generics);
+  }
+
+  static inline void write_data(E value, WriteContext &ctx) {
     OrdinalType ordinal{};
     if (!Metadata::to_ordinal(value, &ordinal)) {
-      return Unexpected(Error::unknown_enum("Unknown enum value"));
+      ctx.set_error(Error::unknown_enum("Unknown enum value"));
+      return;
     }
-    return Serializer<OrdinalType>::write_data(ordinal, ctx);
+    // Enums are encoded as unsigned varints in the xlang spec
+    ctx.write_varuint32(static_cast<uint32_t>(ordinal));
   }
 
-  static inline Result<void, Error>
-  write_data_generic(E value, WriteContext &ctx, bool has_generics) {
-    (void)has_generics;
-    return write_data(value, ctx);
+  static inline void write_data_generic(E value, WriteContext &ctx,
+                                        bool has_generics) {
+    write_data(value, ctx);
   }
 
-  static inline Result<E, Error> read(ReadContext &ctx, bool read_ref,
-                                      bool read_type) {
-    FORY_TRY(has_value, consume_ref_flag(ctx, read_ref));
-    if (!has_value) {
+  static inline E read(ReadContext &ctx, RefMode ref_mode, bool read_type) {
+    // Handle null/ref flag if requested.
+    // In compatible mode, the caller (read_struct_fields_compatible) determines
+    // whether to pass read_ref=true based on the remote TypeDef's nullable
+    // flag. In non-compatible mode, read_ref is based on C++ type traits. When
+    // reading through std::optional, the optional serializer already handles
+    // the null flag and calls us with read_ref=false.
+    bool has_value = read_null_only_flag(ctx, ref_mode);
+    if (ctx.has_error() || !has_value) {
       return E{};
     }
     if (read_type) {
-      FORY_TRY(type_byte, ctx.read_uint8());
-      if (type_byte != static_cast<uint8_t>(type_id)) {
-        return Unexpected(
-            Error::type_mismatch(type_byte, static_cast<uint8_t>(type_id)));
+      // Use overload without type_index (fast path)
+      ctx.read_enum_type_info(static_cast<uint32_t>(type_id));
+      if (FORY_PREDICT_FALSE(ctx.has_error())) {
+        return E{};
       }
     }
     return read_data(ctx);
   }
 
-  static inline Result<E, Error> read_data(ReadContext &ctx) {
-    FORY_TRY(ordinal, Serializer<OrdinalType>::read_data(ctx));
+  static inline E read_data(ReadContext &ctx) {
+    uint32_t raw_ordinal = ctx.read_varuint32(ctx.error());
+    if (FORY_PREDICT_FALSE(ctx.has_error())) {
+      return E{};
+    }
+    OrdinalType ordinal = static_cast<OrdinalType>(raw_ordinal);
     E value{};
     if (!Metadata::from_ordinal(ordinal, &value)) {
-      return Unexpected(Error::unknown_enum("Invalid ordinal value"));
+      ctx.set_error(
+          Error::unknown_enum("Invalid ordinal value: " +
+                              std::to_string(static_cast<long long>(ordinal))));
+      return E{};
     }
     return value;
+  }
+
+  static inline E read_with_type_info(ReadContext &ctx, RefMode ref_mode,
+                                      const TypeInfo &type_info) {
+    return read(ctx, ref_mode, false);
   }
 };
 

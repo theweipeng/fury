@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use fory_core::{Fory, ForyDefault, Reader};
+use fory_core::{Fory, Reader};
 use fory_derive::ForyObject;
 
 #[derive(ForyObject, Debug, PartialEq)]
@@ -98,7 +98,7 @@ fn test_basic_skip_functionality() {
     assert_eq!(decoded.skipped_field, String::default());
 
     let mut buf: Vec<u8> = vec![];
-    fory.serialize_to(&original, &mut buf).unwrap();
+    fory.serialize_to(&mut buf, &original).unwrap();
     let mut reader = Reader::new(&buf);
     let decoded: TestSkipFields = fory.deserialize_from(&mut reader).unwrap();
     assert_eq!(original.serialized_field, decoded.serialized_field);
@@ -123,7 +123,8 @@ fn test_nested_skip_functionality() {
 
     assert_eq!(original.normal_field, decoded.normal_field);
     assert_eq!(original.nested, decoded.nested);
-    assert_eq!(decoded.skipped_nested, NestedStruct::default());
+    use fory_core::ForyDefault;
+    assert_eq!(decoded.skipped_nested, NestedStruct::fory_default());
 }
 
 #[test]
@@ -197,9 +198,10 @@ fn test_complex_nested_skip() {
         original.nested.serialized_field,
         decoded.nested.serialized_field
     );
+    use fory_core::ForyDefault;
     assert_eq!(decoded.nested.skipped_field, String::default());
     assert_eq!(decoded.skipped_field, String::default());
-    assert_eq!(decoded.skipped_nested, TestSkipFields::default());
+    assert_eq!(decoded.skipped_nested, TestSkipFields::fory_default());
 }
 
 #[test]
@@ -216,7 +218,8 @@ fn test_enum_skip() {
     let original_skip = TestEnumSkip::Deleted;
     let bytes = fory.serialize(&original_skip).unwrap();
     let decoded: TestEnumSkip = fory.deserialize(&bytes).unwrap();
-    assert_eq!(decoded, TestEnumSkip::default());
+    use fory_core::ForyDefault;
+    assert_eq!(decoded, TestEnumSkip::fory_default());
 }
 
 #[test]
@@ -298,7 +301,6 @@ fn test_skip_with_different_types() {
 
 #[test]
 fn test_trait_object_serialization() {
-    use fory_core::ForyDefault;
     use fory_core::Serializer;
     use fory_core::{register_trait_type, Fory};
     use fory_derive::ForyObject;

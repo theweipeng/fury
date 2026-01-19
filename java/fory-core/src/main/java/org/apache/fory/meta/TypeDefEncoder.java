@@ -26,15 +26,19 @@ import static org.apache.fory.meta.Encoders.fieldNameEncodingsList;
 
 import java.lang.reflect.Field;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.apache.fory.Fory;
+import org.apache.fory.annotation.ForyField;
+import org.apache.fory.logging.Logger;
+import org.apache.fory.logging.LoggerFactory;
 import org.apache.fory.memory.MemoryBuffer;
-import org.apache.fory.meta.ClassDef.FieldInfo;
-import org.apache.fory.meta.ClassDef.FieldType;
+import org.apache.fory.meta.FieldTypes.FieldType;
 import org.apache.fory.reflect.ReflectionUtils;
 import org.apache.fory.resolver.ClassInfo;
 import org.apache.fory.resolver.TypeResolver;
@@ -43,6 +47,8 @@ import org.apache.fory.type.Descriptor;
 import org.apache.fory.type.DescriptorGrouper;
 import org.apache.fory.type.Types;
 import org.apache.fory.util.Preconditions;
+import org.apache.fory.util.StringUtils;
+import org.apache.fory.util.Utils;
 
 /**
  * An encoder which encode {@link ClassDef} into binary. See spec documentation:
@@ -50,12 +56,14 @@ import org.apache.fory.util.Preconditions;
  * href="https://fory.apache.org/docs/specification/fory_xlang_serialization_spec">...</a>
  */
 class TypeDefEncoder {
+  private static final Logger LOG = LoggerFactory.getLogger(TypeDefEncoder.class);
+
   /** Build class definition from fields of class. */
   static ClassDef buildTypeDef(Fory fory, Class<?> type) {
     DescriptorGrouper descriptorGrouper =
-        fory.getClassResolver()
+        fory.getXtypeResolver()
             .createDescriptorGrouper(
-                fory.getClassResolver().getFieldDescriptors(type, true),
+                fory.getXtypeResolver().getFieldDescriptors(type, true),
                 false,
                 Function.identity());
     ClassInfo classInfo = fory._getTypeResolver().getClassInfo(type);
@@ -74,11 +82,30 @@ class TypeDefEncoder {
   }
 
   static List<FieldInfo> buildFieldsInfo(TypeResolver resolver, Class<?> type, List<Field> fields) {
+    Set<Integer> usedTagIds = new HashSet<>();
     return fields.stream()
         .map(
-            field ->
-                new FieldInfo(
-                    type.getName(), field.getName(), ClassDef.buildFieldType(resolver, field)))
+            field -> {
+              ForyField foryField = field.getAnnotation(ForyField.class);
+              FieldType fieldType = FieldTypes.buildFieldType(resolver, field);
+              if (foryField != null) {
+                int tagId = foryField.id();
+                if (tagId >= 0) {
+                  if (!usedTagIds.add(tagId)) {
+                    throw new IllegalArgumentException(
+                        "Duplicate tag id "
+                            + tagId
+                            + " for field "
+                            + field.getName()
+                            + " in class "
+                            + type.getName());
+                  }
+                  return new FieldInfo(type.getName(), field.getName(), fieldType, (short) tagId);
+                }
+                // tagId == -1 means use field name, fall through to create regular FieldInfo
+              }
+              return new FieldInfo(type.getName(), field.getName(), fieldType);
+            })
         .collect(Collectors.toList());
   }
 
@@ -87,8 +114,17 @@ class TypeDefEncoder {
     fieldInfos = new ArrayList<>(getClassFields(type, fieldInfos).values());
     MemoryBuffer encodeClassDef = encodeClassDef(resolver, type, fieldInfos);
     byte[] classDefBytes = encodeClassDef.getBytes(0, encodeClassDef.writerIndex());
-    return new ClassDef(
-        Encoders.buildClassSpec(type), fieldInfos, true, encodeClassDef.getInt64(0), classDefBytes);
+    ClassDef classDef =
+        new ClassDef(
+            Encoders.buildClassSpec(type),
+            fieldInfos,
+            true,
+            encodeClassDef.getInt64(0),
+            classDefBytes);
+    if (Utils.debugOutputEnabled()) {
+      LOG.info("[Java TypeDef BUILT] " + classDef);
+    }
+    return classDef;
   }
 
   static final int SMALL_NUM_FIELDS_THRESHOLD = 0b11111;
@@ -157,11 +193,13 @@ class TypeDefEncoder {
       header |= fieldType.nullable() ? 0b10 : 0b00;
       int size, encodingFlags;
       byte[] encoded = null;
-      if (fieldInfo.hasTag()) {
-        size = fieldInfo.getTag();
+      if (fieldInfo.hasFieldId()) {
+        size = fieldInfo.getFieldId();
         encodingFlags = 3;
       } else {
-        MetaString metaString = Encoders.encodeFieldName(fieldInfo.getFieldName());
+        // Convert camelCase field names to snake_case for xlang interoperability
+        String fieldName = StringUtils.lowerCamelToLowerUnderscore(fieldInfo.getFieldName());
+        MetaString metaString = Encoders.encodeFieldName(fieldName);
         // Encoding `UTF8/ALL_TO_LOWER_SPECIAL/LOWER_UPPER_DIGIT_SPECIAL/TAG_ID`
         encodingFlags = fieldNameEncodingsList.indexOf(metaString.getEncoding());
         encoded = metaString.getBytes();
@@ -179,7 +217,7 @@ class TypeDefEncoder {
       }
       fieldType.xwrite(buffer, false);
       // write field name
-      if (!fieldInfo.hasTag()) {
+      if (!fieldInfo.hasFieldId()) {
         buffer.writeBytes(encoded);
       }
     }
