@@ -707,6 +707,34 @@ export const Type = {
 
     );
   },
+  uint8Array() {
+    return TypeInfo.fromNonParam(
+      InternalSerializerType.UINT8_ARRAY as const,
+      (TypeId.INT8_ARRAY),
+
+    );
+  },
+  uint16Array() {
+    return TypeInfo.fromNonParam(
+      InternalSerializerType.UINT16_ARRAY as const,
+      (TypeId.INT16_ARRAY),
+
+    );
+  },
+  uint32Array() {
+    return TypeInfo.fromNonParam(
+      InternalSerializerType.UINT32_ARRAY as const,
+      (TypeId.UINT32_ARRAY),
+
+    );
+  },
+  uint64Array() {
+    return TypeInfo.fromNonParam(
+      InternalSerializerType.UINT64_ARRAY as const,
+      (TypeId.INT64_ARRAY),
+
+    );
+  },
   float16Array() {
     return TypeInfo.fromNonParam(
       InternalSerializerType.FLOAT16_ARRAY as const,

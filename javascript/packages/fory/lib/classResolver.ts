@@ -87,6 +87,14 @@ export default class ClassResolver {
     this.setSerializer = this.getSerializerById((TypeId.SET));
     this.arraySerializer = this.getSerializerById((TypeId.ARRAY));
     this.mapSerializer = this.getSerializerById((TypeId.MAP));
+    this.uint8ArraySerializer = this.getSerializerById(TypeId.UINT8_ARRAY);
+    this.uint16ArraySerializer = this.getSerializerById(TypeId.UINT16_ARRAY);
+    this.uint32ArraySerializer = this.getSerializerById(TypeId.UINT32_ARRAY);
+    this.uint64ArraySerializer = this.getSerializerById(TypeId.UINT64_ARRAY);
+    this.int8ArraySerializer = this.getSerializerById(TypeId.INT8_ARRAY);
+    this.int16ArraySerializer = this.getSerializerById(TypeId.INT16_ARRAY);
+    this.int32ArraySerializer = this.getSerializerById(TypeId.INT32_ARRAY);
+    this.int64ArraySerializer = this.getSerializerById(TypeId.INT64_ARRAY);
   }
 
   private numberSerializer: null | Serializer = null;
@@ -97,6 +105,14 @@ export default class ClassResolver {
   private setSerializer: null | Serializer = null;
   private arraySerializer: null | Serializer = null;
   private mapSerializer: null | Serializer = null;
+  private uint8ArraySerializer: null | Serializer = null;
+  private uint16ArraySerializer: null | Serializer = null;
+  private uint32ArraySerializer: null | Serializer = null;
+  private uint64ArraySerializer: null | Serializer = null;
+  private int8ArraySerializer: null | Serializer = null;
+  private int16ArraySerializer: null | Serializer = null;
+  private int32ArraySerializer: null | Serializer = null;
+  private int64ArraySerializer: null | Serializer = null;
 
   constructor(private fory: Fory) {
   }
@@ -178,6 +194,31 @@ export default class ClassResolver {
       return this.stringSerializer;
     }
 
+    if (v instanceof Uint8Array) {
+      return this.uint8ArraySerializer;
+    }
+    if (v instanceof Uint16Array) {
+      return this.uint16ArraySerializer;
+    } 
+    if (v instanceof Uint32Array) {
+      return this.uint32ArraySerializer;
+    }
+    if (v instanceof BigUint64Array) {
+      return this.uint64ArraySerializer;
+    }
+    if (v instanceof Int8Array) {
+      return this.int8ArraySerializer;
+    }
+    if (v instanceof Int16Array) {
+      return this.int16ArraySerializer;
+    } 
+    if (v instanceof Int32Array) {
+      return this.int32ArraySerializer;
+    }
+    if (v instanceof BigInt64Array) {
+      return this.int64ArraySerializer;
+    }
+    
     if (Array.isArray(v)) {
       return this.arraySerializer;
     }

@@ -21,7 +21,7 @@ import Fory, { TypeInfo, InternalSerializerType, Type } from '../packages/fory/i
 import { describe, expect, test } from '@jest/globals';
 
 describe('object', () => {
-  test('should descoration work', () => {
+  test('test_integer', () => {
     @Type.struct({
       typeName: "example.foo"
     })
