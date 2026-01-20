@@ -48,7 +48,7 @@ const Long = {
 describe("bool", () => {
   const dataFile = process.env["DATA_FILE"];
   if (!dataFile) {
-    return null;
+    return;
   }
   function writeToFile(buffer: Buffer) {
     fs.writeFileSync(dataFile!, buffer);
