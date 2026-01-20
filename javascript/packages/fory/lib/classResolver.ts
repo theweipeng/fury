@@ -197,28 +197,35 @@ export default class ClassResolver {
     if (v instanceof Uint8Array) {
       return this.uint8ArraySerializer;
     }
+
     if (v instanceof Uint16Array) {
       return this.uint16ArraySerializer;
-    } 
+    }
+
     if (v instanceof Uint32Array) {
       return this.uint32ArraySerializer;
     }
+
     if (v instanceof BigUint64Array) {
       return this.uint64ArraySerializer;
     }
+
     if (v instanceof Int8Array) {
       return this.int8ArraySerializer;
     }
+
     if (v instanceof Int16Array) {
       return this.int16ArraySerializer;
-    } 
+    }
+
     if (v instanceof Int32Array) {
       return this.int32ArraySerializer;
     }
+
     if (v instanceof BigInt64Array) {
       return this.int64ArraySerializer;
     }
-    
+
     if (Array.isArray(v)) {
       return this.arraySerializer;
     }
