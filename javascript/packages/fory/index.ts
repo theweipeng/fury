@@ -26,6 +26,7 @@ import {
 import { Serializer, InternalSerializerType, Mode } from "./lib/type";
 import Fory from "./lib/fory";
 import { BinaryReader } from "./lib/reader";
+import { BinaryWriter } from "./lib/writer";
 
 export {
   Serializer,
@@ -35,6 +36,7 @@ export {
   StructTypeInfo,
   Type,
   Mode,
+  BinaryWriter,
   BinaryReader,
 };
 

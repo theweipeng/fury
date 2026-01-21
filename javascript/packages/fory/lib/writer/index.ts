@@ -80,6 +80,11 @@ export class BinaryWriter {
     this.reserved = 0;
   }
 
+  bool(bool: boolean) {
+    this.dataView.setUint8(this.cursor, bool ? 1 : 0);
+    this.cursor++;
+  }
+
   uint8(v: number) {
     this.dataView.setUint8(this.cursor, v);
     this.cursor++;
