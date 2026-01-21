@@ -15,38 +15,21 @@
 # specific language governing permissions and limitations
 # under the License.
 
-"""FDL parser components."""
+"""FlatBuffers frontend (placeholder)."""
 
-from fory_compiler.parser.lexer import Lexer, Token, TokenType
-from fory_compiler.parser.parser import Parser
-from fory_compiler.parser.ast import (
-    Schema,
-    Message,
-    Enum,
-    Field,
-    EnumValue,
-    Import,
-    FieldType,
-    PrimitiveType,
-    NamedType,
-    ListType,
-    MapType,
-)
+from fory_compiler.frontend.base import BaseFrontend, FrontendError
+from fory_compiler.ir.ast import Schema
 
-__all__ = [
-    "Lexer",
-    "Token",
-    "TokenType",
-    "Parser",
-    "Schema",
-    "Message",
-    "Enum",
-    "Field",
-    "EnumValue",
-    "Import",
-    "FieldType",
-    "PrimitiveType",
-    "NamedType",
-    "ListType",
-    "MapType",
-]
+
+class FBSFrontend(BaseFrontend):
+    """Frontend for FlatBuffers (.fbs)."""
+
+    extensions = [".fbs"]
+
+    def parse(self, source: str, filename: str = "<input>") -> Schema:
+        raise FrontendError(
+            "FlatBuffers frontend is not implemented yet", filename, 1, 1
+        )
+
+
+__all__ = ["FBSFrontend"]

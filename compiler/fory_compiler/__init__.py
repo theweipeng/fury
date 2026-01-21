@@ -15,13 +15,14 @@
 # specific language governing permissions and limitations
 # under the License.
 
-"""FDL (Fory Definition Language) compiler for Apache Fory."""
+"""Fory IDL compiler for Apache Fory."""
 
 __version__ = "0.1.0"
 
-from fory_compiler.parser.ast import Schema, Message, Enum, Field, EnumValue, Import
-from fory_compiler.parser.parser import Parser
-from fory_compiler.parser.lexer import Lexer
+from fory_compiler.ir.ast import Schema, Message, Enum, Field, EnumValue, Import
+from fory_compiler.frontend.fdl import FDLFrontend
+from fory_compiler.frontend.fbs import FBSFrontend
+from fory_compiler.frontend.proto import ProtoFrontend
 
 __all__ = [
     "Schema",
@@ -30,6 +31,7 @@ __all__ = [
     "Field",
     "EnumValue",
     "Import",
-    "Parser",
-    "Lexer",
+    "FDLFrontend",
+    "FBSFrontend",
+    "ProtoFrontend",
 ]

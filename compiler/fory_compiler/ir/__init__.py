@@ -15,12 +15,38 @@
 # specific language governing permissions and limitations
 # under the License.
 
-apache/fory-site@main:
-  - source: docs/guide/
-    dest: docs/guide/
-  - source: docs/specification/
-    dest: docs/specification/
-  - source: docs/compiler/
-    dest: docs/compiler/
-  - source: docs/benchmarks/
-    dest: static/img/benchmarks/
+"""Fory compiler intermediate representation (IR)."""
+
+from fory_compiler.ir.ast import (  # noqa: F401
+    SourceLocation,
+    PrimitiveType,
+    NamedType,
+    ListType,
+    MapType,
+    Field,
+    EnumValue,
+    Enum,
+    Message,
+    Import,
+    Schema,
+)
+from fory_compiler.ir.types import PrimitiveKind, PRIMITIVE_TYPES  # noqa: F401
+from fory_compiler.ir.validator import validate_schema, SchemaValidator  # noqa: F401
+
+__all__ = [
+    "SourceLocation",
+    "PrimitiveKind",
+    "PRIMITIVE_TYPES",
+    "PrimitiveType",
+    "NamedType",
+    "ListType",
+    "MapType",
+    "Field",
+    "EnumValue",
+    "Enum",
+    "Message",
+    "Import",
+    "Schema",
+    "validate_schema",
+    "SchemaValidator",
+]

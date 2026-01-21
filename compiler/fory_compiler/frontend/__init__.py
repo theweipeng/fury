@@ -15,12 +15,9 @@
 # specific language governing permissions and limitations
 # under the License.
 
-apache/fory-site@main:
-  - source: docs/guide/
-    dest: docs/guide/
-  - source: docs/specification/
-    dest: docs/specification/
-  - source: docs/compiler/
-    dest: docs/compiler/
-  - source: docs/benchmarks/
-    dest: static/img/benchmarks/
+"""Frontends for Fory IDL compilation."""
+
+from fory_compiler.frontend.base import BaseFrontend, FrontendError
+from fory_compiler.frontend.fbs import FBSFrontend
+
+__all__ = ["BaseFrontend", "FrontendError", "FBSFrontend"]

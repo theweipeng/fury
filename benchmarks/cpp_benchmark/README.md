@@ -31,12 +31,12 @@ Note: Protobuf is fetched automatically via CMake FetchContent, so no manual ins
 
 | Datatype     | Operation   | Fory TPS   | Protobuf TPS | Faster      |
 | ------------ | ----------- | ---------- | ------------ | ----------- |
-| Mediacontent | Serialize   | 2,430,924  | 484,368      | Fory (5.0x) |
-| Mediacontent | Deserialize | 740,074    | 387,522      | Fory (1.9x) |
-| Sample       | Serialize   | 4,813,270  | 3,021,968    | Fory (1.6x) |
-| Sample       | Deserialize | 915,554    | 684,675      | Fory (1.3x) |
-| Struct       | Serialize   | 18,105,957 | 5,788,186    | Fory (3.1x) |
-| Struct       | Deserialize | 7,495,726  | 5,932,982    | Fory (1.3x) |
+| Mediacontent | Serialize   | 11,319,876 | 1,181,595    | Fory (9.6x) |
+| Mediacontent | Deserialize | 2,729,388  | 835,956      | Fory (3.3x) |
+| Sample       | Serialize   | 16,899,403 | 10,575,760   | Fory (1.6x) |
+| Sample       | Deserialize | 3,079,241  | 1,450,789    | Fory (2.1x) |
+| Struct       | Serialize   | 43,184,198 | 29,359,454   | Fory (1.5x) |
+| Struct       | Deserialize | 54,599,691 | 38,796,674   | Fory (1.4x) |
 
 ## Quick Start
 
@@ -45,6 +45,34 @@ Run the complete benchmark pipeline (build, run, generate report):
 ```bash
 cd benchmarks/cpp_benchmark
 ./run.sh
+```
+
+### Run Options
+
+```bash
+./run.sh --help
+
+Options:
+  --data <struct|sample>       Filter benchmark by data type
+  --serializer <fory|protobuf> Filter benchmark by serializer
+  --duration <seconds>         Minimum time to run each benchmark (e.g., 10, 30)
+  --debug                      Build with debug symbols for profiling
+```
+
+Examples:
+
+```bash
+# Run only Struct benchmarks
+./run.sh --data struct
+
+# Run only Fory benchmarks
+./run.sh --serializer fory
+
+# Run each benchmark for at least 10 seconds (for more stable results)
+./run.sh --duration 10
+
+# Combine options
+./run.sh --data struct --serializer fory --duration 5
 ```
 
 ## Building
