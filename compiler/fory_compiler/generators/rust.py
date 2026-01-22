@@ -190,15 +190,10 @@ class RustGenerator(BaseGenerator):
         lines = []
 
         type_name = enum.name
-        reg_name = self.get_registration_type_name(enum.name, parent_stack)
 
         # Derive macros
         lines.append("#[derive(ForyObject, Debug, Clone, PartialEq, Default)]")
         lines.append("#[repr(i32)]")
-
-        # Tag for name-based registration
-        if enum.type_id is None and self.package:
-            lines.append(f'#[tag("{self.package}.{reg_name}")]')
 
         lines.append(f"pub enum {type_name} {{")
 
@@ -222,14 +217,9 @@ class RustGenerator(BaseGenerator):
         lines = []
 
         type_name = message.name
-        reg_name = self.get_registration_type_name(message.name, parent_stack)
 
         # Derive macros
         lines.append("#[derive(ForyObject, Debug, Clone, PartialEq, Default)]")
-
-        # Tag for name-based registration
-        if message.type_id is None and self.package:
-            lines.append(f'#[tag("{self.package}.{reg_name}")]')
 
         lines.append(f"pub struct {type_name} {{")
 
@@ -296,11 +286,16 @@ class RustGenerator(BaseGenerator):
         lines = []
 
         attrs = []
+        if field.tag_id is not None:
+            attrs.append(f"id = {field.tag_id}")
         if field.optional:
             attrs.append("nullable = true")
         encoding = self.get_encoding_attr(field.field_type)
         if encoding:
             attrs.append(encoding)
+        array_attr = self.get_array_attr(field)
+        if array_attr:
+            attrs.append(array_attr)
         if attrs:
             lines.append(f"#[fory({', '.join(attrs)})]")
 
@@ -334,6 +329,21 @@ class RustGenerator(BaseGenerator):
             return 'encoding = "fixed"'
         if kind in (PrimitiveKind.TAGGED_INT64, PrimitiveKind.TAGGED_UINT64):
             return 'encoding = "tagged"'
+        return None
+
+    def get_array_attr(self, field: Field) -> Optional[str]:
+        """Return type_id attribute for int8/uint8 arrays."""
+        if not isinstance(field.field_type, ListType):
+            return None
+        if field.element_optional or field.element_ref:
+            return None
+        element_type = field.field_type.element_type
+        if not isinstance(element_type, PrimitiveType):
+            return None
+        if element_type.kind == PrimitiveKind.INT8:
+            return 'type_id = "int8_array"'
+        if element_type.kind == PrimitiveKind.UINT8:
+            return 'type_id = "uint8_array"'
         return None
 
     def generate_type(

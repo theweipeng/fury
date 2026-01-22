@@ -87,6 +87,27 @@ class PythonGenerator(BaseGenerator):
         PrimitiveKind.FLOAT64: "np.float64",
     }
 
+    ARRAY_TYPE_HINTS = {
+        PrimitiveKind.BOOL: "pyfory.bool_ndarray",
+        PrimitiveKind.INT8: "pyfory.int8_ndarray",
+        PrimitiveKind.INT16: "pyfory.int16_ndarray",
+        PrimitiveKind.INT32: "pyfory.int32_ndarray",
+        PrimitiveKind.VARINT32: "pyfory.int32_ndarray",
+        PrimitiveKind.INT64: "pyfory.int64_ndarray",
+        PrimitiveKind.VARINT64: "pyfory.int64_ndarray",
+        PrimitiveKind.TAGGED_INT64: "pyfory.int64_ndarray",
+        PrimitiveKind.UINT8: "pyfory.uint8_ndarray",
+        PrimitiveKind.UINT16: "pyfory.uint16_ndarray",
+        PrimitiveKind.UINT32: "pyfory.uint32_ndarray",
+        PrimitiveKind.VAR_UINT32: "pyfory.uint32_ndarray",
+        PrimitiveKind.UINT64: "pyfory.uint64_ndarray",
+        PrimitiveKind.VAR_UINT64: "pyfory.uint64_ndarray",
+        PrimitiveKind.TAGGED_UINT64: "pyfory.uint64_ndarray",
+        PrimitiveKind.FLOAT16: "pyfory.float32_ndarray",
+        PrimitiveKind.FLOAT32: "pyfory.float32_ndarray",
+        PrimitiveKind.FLOAT64: "pyfory.float64_ndarray",
+    }
+
     # Default values for primitive types
     DEFAULT_VALUES = {
         PrimitiveKind.BOOL: "False",
@@ -268,11 +289,15 @@ class PythonGenerator(BaseGenerator):
             default_expr, comment = default.split(" # ", 1)
             trailing_comment = f"  # {comment}"
 
-        if field.ref:
+        tag_id = field.tag_id
+        if tag_id is not None or field.ref:
             field_args = []
+            if tag_id is not None:
+                field_args.append(f"id={tag_id}")
             if field.optional:
                 field_args.append("nullable=True")
-            field_args.append("ref=True")
+            if field.ref:
+                field_args.append("ref=True")
             if default_factory is not None:
                 field_args.append(f"default_factory={default_factory}")
             else:
@@ -293,7 +318,7 @@ class PythonGenerator(BaseGenerator):
         if not isinstance(field_type.element_type, PrimitiveType):
             return False
         return (
-            field_type.element_type.kind in self.NUMPY_DTYPE_MAP
+            field_type.element_type.kind in self.ARRAY_TYPE_HINTS
             and not element_optional
         )
 
@@ -332,11 +357,17 @@ class PythonGenerator(BaseGenerator):
         elif isinstance(field_type, ListType):
             # Use numpy array for numeric primitive types
             if isinstance(field_type.element_type, PrimitiveType):
-                if (
-                    field_type.element_type.kind in self.NUMPY_DTYPE_MAP
-                    and not element_optional
-                ):
-                    list_type = "np.ndarray"
+                if not element_optional:
+                    kind = field_type.element_type.kind
+                    if kind in self.ARRAY_TYPE_HINTS:
+                        list_type = self.ARRAY_TYPE_HINTS[kind]
+                    else:
+                        element_type = self.generate_type(
+                            field_type.element_type,
+                            element_optional,
+                            parent_stack,
+                        )
+                        list_type = f"List[{element_type}]"
                 else:
                     element_type = self.generate_type(
                         field_type.element_type,
@@ -422,10 +453,10 @@ class PythonGenerator(BaseGenerator):
                 imports.add("import datetime")
 
         elif isinstance(field_type, ListType):
-            # Add numpy import for numeric primitive arrays
+            # Add numpy import for primitive arrays
             if isinstance(field_type.element_type, PrimitiveType):
                 if (
-                    field_type.element_type.kind in self.NUMPY_DTYPE_MAP
+                    field_type.element_type.kind in self.ARRAY_TYPE_HINTS
                     and not element_optional
                 ):
                     imports.add("import numpy as np")

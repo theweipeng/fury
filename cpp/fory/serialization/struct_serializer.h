@@ -582,6 +582,11 @@ template <typename T> struct CompileTimeFieldHelpers {
         if constexpr (signed_tid != 0) {
           return signed_tid;
         }
+        constexpr int16_t override_id =
+            ::fory::detail::GetFieldConfigEntry<T, Index>::type_id_override;
+        if constexpr (override_id >= 0) {
+          return static_cast<uint32_t>(override_id);
+        }
       }
       return static_cast<uint32_t>(Serializer<FieldType>::type_id);
     }
@@ -627,6 +632,13 @@ template <typename T> struct CompileTimeFieldHelpers {
       using PtrT = std::tuple_element_t<Index, FieldPtrs>;
       using RawFieldType = meta::RemoveMemberPointerCVRefT<PtrT>;
 
+      if constexpr (::fory::detail::has_field_config_v<T>) {
+        constexpr int16_t config_id =
+            ::fory::detail::GetFieldConfigEntry<T, Index>::id;
+        if constexpr (config_id >= 0) {
+          return config_id;
+        }
+      }
       // If it's a fory::field<> wrapper, use its tag_id
       if constexpr (is_fory_field_v<RawFieldType>) {
         return RawFieldType::tag_id;
@@ -639,6 +651,16 @@ template <typename T> struct CompileTimeFieldHelpers {
       else {
         return -1;
       }
+    }
+  }
+
+  template <size_t... Indices>
+  static constexpr std::array<int16_t, FieldCount>
+  make_field_ids(std::index_sequence<Indices...>) {
+    if constexpr (FieldCount == 0) {
+      return {};
+    } else {
+      return {field_tag_id<Indices>()...};
     }
   }
 
@@ -894,6 +916,9 @@ template <typename T> struct CompileTimeFieldHelpers {
   static inline constexpr std::array<bool, FieldCount> nullable_flags =
       make_nullable_flags(std::make_index_sequence<FieldCount>{});
 
+  static inline constexpr std::array<int16_t, FieldCount> field_ids =
+      make_field_ids(std::make_index_sequence<FieldCount>{});
+
   /// Flags for fields whose types are nullable wrappers (optional/shared_ptr/
   /// unique_ptr/weak_ptr), which require ref/null flags in the wire format.
   static inline constexpr std::array<bool, FieldCount> nullable_type_flags =
@@ -953,6 +978,82 @@ template <typename T> struct CompileTimeFieldHelpers {
         return names;
       }();
 
+  static constexpr size_t tag_id_length(int16_t value) {
+    size_t count = 1;
+    int16_t v = value;
+    while (v >= 10) {
+      v /= 10;
+      ++count;
+    }
+    return count;
+  }
+
+  static constexpr size_t identifier_length(size_t index) {
+    int16_t id = field_ids[index];
+    if (id >= 0) {
+      return tag_id_length(id);
+    }
+    return snake_case_lengths[index];
+  }
+
+  template <size_t... Indices>
+  static constexpr std::array<size_t, FieldCount>
+  make_identifier_lengths(std::index_sequence<Indices...>) {
+    if constexpr (FieldCount == 0) {
+      return {};
+    } else {
+      return {identifier_length(Indices)...};
+    }
+  }
+
+  static inline constexpr std::array<size_t, FieldCount> identifier_lengths =
+      make_identifier_lengths(std::make_index_sequence<FieldCount>{});
+
+  static constexpr size_t compute_max_identifier_length() {
+    size_t max_length = 0;
+    if constexpr (FieldCount > 0) {
+      for (size_t length : identifier_lengths) {
+        if (length > max_length) {
+          max_length = length;
+        }
+      }
+    }
+    return max_length;
+  }
+
+  static inline constexpr size_t max_identifier_length =
+      compute_max_identifier_length();
+
+  static inline constexpr std::array<
+      std::array<char, max_identifier_length + 1>, FieldCount>
+      identifier_storage = []() constexpr {
+        std::array<std::array<char, max_identifier_length + 1>, FieldCount>
+            storage{};
+        if constexpr (FieldCount > 0) {
+          for (size_t i = 0; i < FieldCount; ++i) {
+            size_t length = identifier_lengths[i];
+            if (field_ids[i] >= 0) {
+              int16_t value = field_ids[i];
+              int16_t divisor = 1;
+              for (size_t j = 1; j < length; ++j) {
+                divisor *= 10;
+              }
+              for (size_t pos = 0; pos < length; ++pos) {
+                int digit = (value / divisor) % 10;
+                storage[i][pos] = static_cast<char>('0' + digit);
+                divisor /= 10;
+              }
+            } else {
+              for (size_t pos = 0; pos < length; ++pos) {
+                storage[i][pos] = snake_case_storage[i][pos];
+              }
+            }
+            storage[i][length] = '\0';
+          }
+        }
+        return storage;
+      }();
+
   static constexpr bool is_primitive_type_id(uint32_t tid) {
     return tid >= static_cast<uint32_t>(TypeId::BOOL) &&
            tid <= static_cast<uint32_t>(TypeId::FLOAT64);
@@ -1005,13 +1106,16 @@ template <typename T> struct CompileTimeFieldHelpers {
 
   /// Check if a type ID is an internal (built-in, final) type for group 2.
   /// Internal types are STRING, DURATION, TIMESTAMP, LOCAL_DATE, DECIMAL,
-  /// BINARY. Java xlang DescriptorGrouper excludes enums from finals (line 897
-  /// in XtypeResolver). Excludes: ENUM (13-14), STRUCT (15-18), EXT (19-20),
-  /// LIST (21), SET (22), MAP (23)
+  /// BINARY, ARRAY, and primitive arrays. Java xlang DescriptorGrouper excludes
+  /// enums from finals (line 897 in XtypeResolver). Excludes: ENUM (13-14),
+  /// STRUCT (15-18), EXT (19-20), LIST (21), SET (22), MAP (23)
   static constexpr bool is_internal_type_id(uint32_t tid) {
     return tid == static_cast<uint32_t>(TypeId::STRING) ||
            (tid >= static_cast<uint32_t>(TypeId::DURATION) &&
-            tid <= static_cast<uint32_t>(TypeId::BINARY));
+            tid <= static_cast<uint32_t>(TypeId::BINARY)) ||
+           tid == static_cast<uint32_t>(TypeId::ARRAY) ||
+           (tid >= static_cast<uint32_t>(TypeId::BOOL_ARRAY) &&
+            tid <= static_cast<uint32_t>(TypeId::FLOAT64_ARRAY));
   }
 
   static constexpr int group_rank(size_t index) {
@@ -1036,6 +1140,26 @@ template <typename T> struct CompileTimeFieldHelpers {
         return 2;
       return 6;
     }
+  }
+
+  static constexpr int compare_identifier(size_t lhs, size_t rhs) {
+    size_t lhs_len = identifier_lengths[lhs];
+    size_t rhs_len = identifier_lengths[rhs];
+    size_t min_len = lhs_len < rhs_len ? lhs_len : rhs_len;
+    for (size_t i = 0; i < min_len; ++i) {
+      char lc = identifier_storage[lhs][i];
+      char rc = identifier_storage[rhs][i];
+      if (lc < rc) {
+        return -1;
+      }
+      if (lc > rc) {
+        return 1;
+      }
+    }
+    if (lhs_len == rhs_len) {
+      return 0;
+    }
+    return lhs_len < rhs_len ? -1 : 1;
   }
 
   static constexpr bool field_compare(size_t a, size_t b) {
@@ -1065,7 +1189,10 @@ template <typename T> struct CompileTimeFieldHelpers {
           return sa > sb;
         if (a_tid != b_tid)
           return a_tid > b_tid; // type_id descending to match Java
-        // Use original Names (not snake_case) to match runtime sorting and Java
+        int cmp = compare_identifier(a, b);
+        if (cmp != 0) {
+          return cmp < 0;
+        }
         return Names[a] < Names[b];
       }
 
@@ -1073,11 +1200,17 @@ template <typename T> struct CompileTimeFieldHelpers {
         // Internal types (STRING, etc.): sort by type_id ascending, then name
         if (a_tid != b_tid)
           return a_tid < b_tid;
-        // Use original Names (not snake_case) to match runtime sorting and Java
+        int cmp = compare_identifier(a, b);
+        if (cmp != 0) {
+          return cmp < 0;
+        }
         return Names[a] < Names[b];
       }
 
-      // Use original Names (not snake_case) to match runtime sorting and Java
+      int cmp = compare_identifier(a, b);
+      if (cmp != 0) {
+        return cmp < 0;
+      }
       return Names[a] < Names[b];
     }
   }

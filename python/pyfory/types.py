@@ -259,34 +259,65 @@ def get_primitive_type_size(type_id) -> int:
     return _primitive_type_sizes.get(type_id, -1)
 
 
-# Int8ArrayType = TypeVar("Int8ArrayType", bound=array.ArrayType)
 BoolArrayType = TypeVar("BoolArrayType")
+int8_array = TypeVar("int8_array", bound=array.ArrayType)
+uint8_array = TypeVar("uint8_array", bound=array.ArrayType)
 int16_array = TypeVar("int16_array", bound=array.ArrayType)
 int32_array = TypeVar("int32_array", bound=array.ArrayType)
 int64_array = TypeVar("int64_array", bound=array.ArrayType)
+uint16_array = TypeVar("uint16_array", bound=array.ArrayType)
+uint32_array = TypeVar("uint32_array", bound=array.ArrayType)
+uint64_array = TypeVar("uint64_array", bound=array.ArrayType)
 float32_array = TypeVar("float32_array", bound=array.ArrayType)
 float64_array = TypeVar("float64_array", bound=array.ArrayType)
 BoolNDArrayType = TypeVar("BoolNDArrayType", bound=ndarray)
+Int8NDArrayType = TypeVar("Int8NDArrayType", bound=ndarray)
+Uint8NDArrayType = TypeVar("Uint8NDArrayType", bound=ndarray)
 Int16NDArrayType = TypeVar("Int16NDArrayType", bound=ndarray)
 Int32NDArrayType = TypeVar("Int32NDArrayType", bound=ndarray)
 Int64NDArrayType = TypeVar("Int64NDArrayType", bound=ndarray)
+Uint16NDArrayType = TypeVar("Uint16NDArrayType", bound=ndarray)
+Uint32NDArrayType = TypeVar("Uint32NDArrayType", bound=ndarray)
+Uint64NDArrayType = TypeVar("Uint64NDArrayType", bound=ndarray)
 Float32NDArrayType = TypeVar("Float32NDArrayType", bound=ndarray)
 Float64NDArrayType = TypeVar("Float64NDArrayType", bound=ndarray)
 
+# Aliases for numpy ndarray type hints (snake_case for ergonomics)
+bool_ndarray = BoolNDArrayType
+int8_ndarray = Int8NDArrayType
+uint8_ndarray = Uint8NDArrayType
+int16_ndarray = Int16NDArrayType
+int32_ndarray = Int32NDArrayType
+int64_ndarray = Int64NDArrayType
+uint16_ndarray = Uint16NDArrayType
+uint32_ndarray = Uint32NDArrayType
+uint64_ndarray = Uint64NDArrayType
+float32_ndarray = Float32NDArrayType
+float64_ndarray = Float64NDArrayType
+
 
 _py_array_types = {
-    # Int8ArrayType,
+    int8_array,
+    uint8_array,
     int16_array,
     int32_array,
     int64_array,
+    uint16_array,
+    uint32_array,
+    uint64_array,
     float32_array,
     float64_array,
 }
 _np_array_types = {
     BoolNDArrayType,
+    Int8NDArrayType,
+    Uint8NDArrayType,
     Int16NDArrayType,
     Int32NDArrayType,
     Int64NDArrayType,
+    Uint16NDArrayType,
+    Uint32NDArrayType,
+    Uint64NDArrayType,
     Float32NDArrayType,
     Float64NDArrayType,
 }
@@ -303,6 +334,10 @@ _primitive_array_type_ids = {
     TypeId.INT16_ARRAY,
     TypeId.INT32_ARRAY,
     TypeId.INT64_ARRAY,
+    TypeId.UINT8_ARRAY,
+    TypeId.UINT16_ARRAY,
+    TypeId.UINT32_ARRAY,
+    TypeId.UINT64_ARRAY,
     TypeId.FLOAT32_ARRAY,
     TypeId.FLOAT64_ARRAY,
 }

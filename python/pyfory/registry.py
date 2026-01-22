@@ -335,11 +335,12 @@ class TypeResolver:
                 ftype,
                 typeid,
             ) in Numpy1DArraySerializer.dtypes_dict.items():
-                register(
+                typeinfo = register(
                     ftype,
                     type_id=typeid,
                     serializer=Numpy1DArraySerializer(self.fory, ftype, dtype),
                 )
+                self._type_id_to_typeinfo[typeid] = typeinfo
         register(list, type_id=TypeId.LIST, serializer=ListSerializer)
         register(set, type_id=TypeId.SET, serializer=SetSerializer)
         register(dict, type_id=TypeId.MAP, serializer=MapSerializer)
@@ -695,6 +696,9 @@ class TypeResolver:
         typename = type_metabytes.decode(self.typename_decoder)
         # the hash computed between languages may be different.
         typeinfo = self._named_type_to_typeinfo.get((ns, typename))
+        if typeinfo is None and typename:
+            alt_typename = typename[0].upper() + typename[1:]
+            typeinfo = self._named_type_to_typeinfo.get((ns, alt_typename))
         if typeinfo is not None:
             self._ns_type_to_typeinfo[(ns_metabytes, type_metabytes)] = typeinfo
             return typeinfo
@@ -732,6 +736,9 @@ class TypeResolver:
                 ns = ns_metabytes.decode(self.namespace_decoder)
                 typename = type_metabytes.decode(self.typename_decoder)
                 typeinfo = self._named_type_to_typeinfo.get((ns, typename))
+                if typeinfo is None and typename:
+                    alt_typename = typename[0].upper() + typename[1:]
+                    typeinfo = self._named_type_to_typeinfo.get((ns, alt_typename))
                 if typeinfo is not None:
                     self._ns_type_to_typeinfo[(ns_metabytes, type_metabytes)] = typeinfo
                     return typeinfo

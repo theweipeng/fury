@@ -49,10 +49,15 @@ import org.apache.fory.annotation.ForyField;
 import org.apache.fory.annotation.Ignore;
 import org.apache.fory.annotation.Int32Type;
 import org.apache.fory.annotation.Int64Type;
+import org.apache.fory.annotation.Int8ArrayType;
 import org.apache.fory.annotation.Internal;
+import org.apache.fory.annotation.Uint16ArrayType;
 import org.apache.fory.annotation.Uint16Type;
+import org.apache.fory.annotation.Uint32ArrayType;
 import org.apache.fory.annotation.Uint32Type;
+import org.apache.fory.annotation.Uint64ArrayType;
 import org.apache.fory.annotation.Uint64Type;
+import org.apache.fory.annotation.Uint8ArrayType;
 import org.apache.fory.annotation.Uint8Type;
 import org.apache.fory.collection.Collections;
 import org.apache.fory.collection.Tuple2;
@@ -683,6 +688,11 @@ public class Descriptor {
     typeAnnotationsTypes.add(Uint16Type.class);
     typeAnnotationsTypes.add(Uint32Type.class);
     typeAnnotationsTypes.add(Uint64Type.class);
+    typeAnnotationsTypes.add(Int8ArrayType.class);
+    typeAnnotationsTypes.add(Uint8ArrayType.class);
+    typeAnnotationsTypes.add(Uint16ArrayType.class);
+    typeAnnotationsTypes.add(Uint32ArrayType.class);
+    typeAnnotationsTypes.add(Uint64ArrayType.class);
   }
 
   public static Annotation getAnnotation(Field field) {
@@ -703,5 +713,19 @@ public class Descriptor {
       }
     }
     return typeAnnotation;
+  }
+
+  public static Class<?> getDeclareClass(List<Descriptor> descriptors) {
+    Class<?> cls = Object.class;
+    for (Descriptor descriptor : descriptors) {
+      Field field = descriptor.getField();
+      if (field == null) {
+        continue;
+      }
+      if (cls.isAssignableFrom(field.getDeclaringClass())) {
+        cls = field.getDeclaringClass();
+      }
+    }
+    return cls;
   }
 }
