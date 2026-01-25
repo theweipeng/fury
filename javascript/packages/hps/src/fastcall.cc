@@ -113,10 +113,12 @@ static void serializeString(const v8::FunctionCallbackInfo<v8::Value> &args) {
       offset += writeVarUint32(dst_data, offset,
                                ((str->Length() * 2) << 2) |
                                    Encoding::UTF16); // length
-      offset += writeVarUint32(
-          dst_data, offset, (str->Length() << 2) | Encoding::LATIN1); // length
+      offset += str->WriteOneByte(isolate, dst_data + offset, 0, str->Length(),
+                                  flags);
     } else {
-      offset += writeVarUint32(dst_data, offset, ((str->Length()  * 2) << 2) | Encoding::UTF16); // length
+      offset += writeVarUint32(dst_data, offset,
+                               ((str->Length() * 2) << 2) |
+                                   Encoding::UTF16); // length
       offset += writeUCS2(isolate, dst_data + offset, str, flags);
     }
   }
