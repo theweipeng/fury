@@ -17,24 +17,13 @@
  * under the License.
  */
 
-import { ForyTypeInfoSymbol, WithForyClsInfo, Serializer, TypeId } from "./type";
+import { ForyTypeInfoSymbol, WithForyClsInfo, Serializer, TypeId, Mode } from "./type";
 import { Gen } from "./gen";
 import { Type, TypeInfo } from "./typeInfo";
 import Fory from "./fory";
 
 const uninitSerialize = {
-  read: () => {
-    throw new Error("uninitSerialize");
-  },
-  write: () => {
-    throw new Error("uninitSerialize");
-  },
-  readInner: () => {
-    throw new Error("uninitSerialize");
-  },
-  writeInner: () => {
-    throw new Error("uninitSerialize");
-  },
+  // for writer
   fixedSize: 0,
   getTypeId: () => {
     throw new Error("uninitSerialize");
@@ -42,18 +31,56 @@ const uninitSerialize = {
   needToWriteRef: () => {
     throw new Error("uninitSerialize");
   },
+  // for reader
+  read: () => {
+    throw new Error("uninitSerialize");
+  },
+  readInner: () => {
+    throw new Error("uninitSerialize");
+  },
+  getHash: () => {
+    throw new Error("uninitSerialize");
+  },
+  xwrite: (v: any) => {
+    throw new Error("uninitSerialize");
+  },
+  xwriteRef: (v: any) => {
+    throw new Error("uninitSerialize");
+  },
+  xwriteNoRef: (v: any) => {
+    throw new Error("uninitSerialize");
+  },
+  writeRefOrNull: (v: any) => {
+    throw new Error("uninitSerialize");
+  },
+  writeClassInfo: (v: any) => {
+    throw new Error("uninitSerialize");
+  },
+  xread: (fromRef: boolean) => {
+    throw new Error("uninitSerialize");
+  },
+  xreadRef: () => {
+    throw new Error("uninitSerialize");
+  },
+  xreadNoRef: (fromRef: boolean) => {
+    throw new Error("uninitSerialize");
+  },
+  readClassInfo: () => {
+    throw new Error("uninitSerialize");
+  }
 };
 
 export default class ClassResolver {
   private internalSerializer: Serializer[] = new Array(300);
   private customSerializer: Map<number | string, Serializer> = new Map();
-  private typeInfoMap: Map<number | string, TypeInfo> = new Map();
+  private customTypeInfoMap: Map<number | string, TypeInfo> = new Map();
 
   private initInternalSerializer() {
     const registerSerializer = (typeInfo: TypeInfo) => {
       return this.registerSerializer(typeInfo, new Gen(this.fory).generateSerializer(typeInfo));
     };
     registerSerializer(Type.string());
+    registerSerializer(Type.any());
     registerSerializer(Type.array(Type.any()));
     registerSerializer(Type.map(Type.any(), Type.any()));
     registerSerializer(Type.bool());
@@ -85,7 +112,7 @@ export default class ClassResolver {
     this.dateSerializer = this.getSerializerById((TypeId.TIMESTAMP));
     this.stringSerializer = this.getSerializerById((TypeId.STRING));
     this.setSerializer = this.getSerializerById((TypeId.SET));
-    this.arraySerializer = this.getSerializerById((TypeId.ARRAY));
+    this.arraySerializer = this.getSerializerById((TypeId.LIST));
     this.mapSerializer = this.getSerializerById((TypeId.MAP));
     this.uint8ArraySerializer = this.getSerializerById(TypeId.UINT8_ARRAY);
     this.uint16ArraySerializer = this.getSerializerById(TypeId.UINT16_ARRAY);
@@ -122,11 +149,11 @@ export default class ClassResolver {
   }
 
   getTypeInfo(typeIdOrName: number | string) {
-    return this.typeInfoMap.get(typeIdOrName);
+    return this.customTypeInfoMap.get(typeIdOrName);
   }
 
   registerSerializer(typeInfo: TypeInfo, serializer: Serializer = uninitSerialize) {
-    if (!TypeId.IS_NAMED_TYPE(typeInfo.typeId)) {
+    if (!TypeId.isNamedType(typeInfo.typeId)) {
       const id = typeInfo.typeId;
       if (id <= 0xFF) {
         if (this.internalSerializer[id]) {
@@ -134,42 +161,42 @@ export default class ClassResolver {
         } else {
           this.internalSerializer[id] = { ...serializer };
         }
-        this.typeInfoMap.set(id, typeInfo);
         return this.internalSerializer[id];
       } else {
         if (this.customSerializer.has(id)) {
-          Object.assign(this.customSerializer.get(id)!, serializer || uninitSerialize);
+          Object.assign(this.customSerializer.get(id)!, serializer);
         } else {
-          this.customSerializer.set(id, { ...serializer || uninitSerialize });
+          this.customSerializer.set(id, { ...serializer });
         }
-        this.typeInfoMap.set(id, typeInfo);
+        this.customTypeInfoMap.set(id, typeInfo);
         return this.customSerializer.get(id);
       }
     } else {
       const namedTypeInfo = typeInfo.castToStruct();
       const name = namedTypeInfo.named!;
       if (this.customSerializer.has(name)) {
-        Object.assign(this.customSerializer.get(name)!, serializer || uninitSerialize);
+        Object.assign(this.customSerializer.get(name)!, serializer);
       } else {
-        this.customSerializer.set(name, { ...serializer || uninitSerialize });
+        this.customSerializer.set(name, { ...serializer });
       }
-      this.typeInfoMap.set(name, typeInfo);
+      this.customTypeInfoMap.set(name, typeInfo);
       return this.customSerializer.get(name);
     }
   }
 
   typeInfoExists(typeInfo: TypeInfo) {
-    if (TypeId.IS_NAMED_TYPE(typeInfo.typeId)) {
-      return this.typeInfoMap.has((typeInfo.castToStruct()).named!);
+    if (typeInfo.isNamedType()) {
+      return this.customTypeInfoMap.has((typeInfo.castToStruct()).named!);
     }
-    return this.typeInfoMap.has(typeInfo.typeId);
+    return this.customTypeInfoMap.has(typeInfo.typeId);
   }
 
   getSerializerByTypeInfo(typeInfo: TypeInfo) {
-    if (TypeId.IS_NAMED_TYPE(typeInfo.typeId)) {
+    const typeId = typeInfo.computeTypeId(this.fory);
+    if (TypeId.isNamedType(typeId)) {
       return this.customSerializer.get((typeInfo.castToStruct()).named!);
     }
-    return this.getSerializerById(typeInfo.typeId);
+    return this.getSerializerById(typeId);
   }
 
   getSerializerById(id: number) {

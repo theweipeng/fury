@@ -32,23 +32,19 @@ class TimestampSerializerGenerator extends BaseSerializerGenerator {
     this.typeInfo = typeInfo;
   }
 
-  writeStmt(accessor: string): string {
+  xwrite(accessor: string): string {
     if (/^-?[0-9]+$/.test(accessor)) {
       return this.builder.writer.int64(`BigInt(${accessor})`);
     }
     return this.builder.writer.int64(`BigInt(${accessor}.getTime())`);
   }
 
-  readStmt(accessor: (expr: string) => string): string {
+  xread(accessor: (expr: string) => string): string {
     return accessor(`new Date(Number(${this.builder.reader.int64()}))`);
   }
 
   getFixedSize(): number {
     return 11;
-  }
-
-  needToWriteRef(): boolean {
-    return false;
   }
 }
 
@@ -60,7 +56,7 @@ class DurationSerializerGenerator extends BaseSerializerGenerator {
     this.typeInfo = typeInfo;
   }
 
-  writeStmt(accessor: string): string {
+  xwrite(accessor: string): string {
     const epoch = this.scope.declareByName("epoch", `new Date("1970/01/01 00:00").getTime()`);
     if (/^-?[0-9]+$/.test(accessor)) {
       return `
@@ -72,7 +68,7 @@ class DurationSerializerGenerator extends BaseSerializerGenerator {
         `;
   }
 
-  readStmt(accessor: (expr: string) => string): string {
+  xread(accessor: (expr: string) => string): string {
     const epoch = this.scope.declareByName("epoch", `new Date("1970/01/01 00:00").getTime()`);
     return accessor(`
             new Date(${epoch} + (${this.builder.reader.int32()} * (24 * 60 * 60) * 1000))
@@ -81,10 +77,6 @@ class DurationSerializerGenerator extends BaseSerializerGenerator {
 
   getFixedSize(): number {
     return 7;
-  }
-
-  needToWriteRef(): boolean {
-    return false;
   }
 }
 

@@ -26,6 +26,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -189,9 +190,8 @@ public abstract class XlangTestBase extends ForyTestBase {
   }
 
   private Path createDataFile(String caseName, byte[] payload) throws IOException {
-    Path dataFile = Files.createTempFile(caseName, "data");
+    Path dataFile = Paths.get("/Users/weipeng/Desktop/data");
     writeData(dataFile, payload == null ? new byte[0] : payload);
-    dataFile.toFile().deleteOnExit();
     return dataFile;
   }
 
@@ -394,7 +394,7 @@ public abstract class XlangTestBase extends ForyTestBase {
     runPeer(ctx);
   }
 
-  private void _testStringSerializer(Fory fory, String caseName) throws IOException {
+  public void _testStringSerializer(Fory fory, String caseName) throws IOException {
     MemoryBuffer buffer = MemoryUtils.buffer(256);
     String[] testStrings =
         new String[] {

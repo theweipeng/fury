@@ -82,6 +82,8 @@ describe('object', () => {
       a: Type.struct("example.bar", {
         b: Type.string()
       })
+    }, {
+      fieldInfo: { a: { nullable: true }}
     })
     const fory = new Fory({ refTracking: true });
     const { serialize, deserialize } = fory.registerSerializer(typeInfo);
@@ -194,6 +196,10 @@ describe('object', () => {
     const typeInfo = Type.struct('ws-channel-protocol', {
         kind: Type.string(),
         path: Type.string(),
+    }, {
+      fieldInfo: {
+        path: { nullable: true }
+      }
     });
 
     const fory = new Fory({ hps });

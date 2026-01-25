@@ -53,16 +53,18 @@ describe('protocol', () => {
         const nonNullable = Type.struct({
             typeName: "example.nonNullable"
         }, {
-            a: Object.assign(Type.string(), { nullable: false }),
+            a: Type.string(),
         });
         const nonNullableSer = fory.registerSerializer(nonNullable);
-        expect(() => nonNullableSer.serialize({ a: null })).toThrow(/Field 'a' is not nullable/);
+        expect(() => nonNullableSer.serialize({ a: null })).toThrow(/Field "a" is not nullable/);
 
         // 2) nullable not specified => keep old behavior (null allowed)
         const nullableUnspecified = Type.struct({
             typeName: "example.nullableUnspecified"
         }, {
             a: Type.string(),
+        }, {
+            fieldInfo: {a: { nullable: true }}
         });
         const { serialize, deserialize } = fory.registerSerializer(nullableUnspecified);
         expect(deserialize(serialize({ a: null }))).toEqual({ a: null });
@@ -74,8 +76,13 @@ describe('protocol', () => {
         const schema = Type.struct(
             { typeName: 'example.schemaConsistentNullable' },
             {
-                a: Object.assign(Type.string(), { nullable: false }),
+                a: Type.string(),
                 b: Type.string(),
+            },
+            {
+                fieldInfo: {
+                    b: { nullable: true}
+                }
             }
         );
 
@@ -83,7 +90,7 @@ describe('protocol', () => {
 
         // non-nullable field must throw
         expect(() => serialize({ a: null, b: 'ok' }))
-            .toThrow(/Field 'a' is not nullable/);
+            .toThrow(/Field "a" is not nullable/);
 
         // unspecified nullable field keeps old behavior
         expect(deserialize(serialize({ a: 'ok', b: null })))
