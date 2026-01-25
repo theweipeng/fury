@@ -451,7 +451,9 @@ jobs:
         env:
           FORY_JAVASCRIPT_JAVA_CI: "1"
         run: |
-          cd java
+          cd javascript
+          npm install
+          cd ../java
           mvn -T16 --no-transfer-progress clean install -DskipTests
           cd fory-core
           mvn -T16 --no-transfer-progress test -Dtest=org.apache.fory.xlang.JavaScriptXlangTest

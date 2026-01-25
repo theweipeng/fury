@@ -100,7 +100,8 @@ static void serializeString(const v8::FunctionCallbackInfo<v8::Value> &args) {
       reinterpret_cast<uint8_t *>(dst->Buffer()->GetBackingStore()->Data());
 
   if (is_one_byte && str->IsExternalOneByte()) {
-    offset += writeVarUint32(dst_data, offset, (str->Length() << 2) | Encoding::LATIN1); // length
+    offset += writeVarUint32(dst_data, offset,
+                             (str->Length() << 2) | Encoding::LATIN1); // length
     const auto src = str->GetExternalOneByteStringResource()->data();
     memcpy(dst_data + offset, src, str->Length());
     offset += str->Length();
@@ -109,9 +110,11 @@ static void serializeString(const v8::FunctionCallbackInfo<v8::Value> &args) {
     int flags = String::HINT_MANY_WRITES_EXPECTED |
                 String::NO_NULL_TERMINATION | String::REPLACE_INVALID_UTF8;
     if (is_one_byte) {
-      offset += writeVarUint32(dst_data, offset, (str->Length() << 2) | Encoding::LATIN1); // length
-      offset += str->WriteOneByte(isolate, dst_data + offset, 0, str->Length(),
-                                  flags);
+      offset += writeVarUint32(dst_data, offset,
+                               ((str->Length() * 2) << 2) |
+                                   Encoding::UTF16); // length
+      offset += writeVarUint32(
+          dst_data, offset, (str->Length() << 2) | Encoding::LATIN1); // length
     } else {
       offset += writeVarUint32(dst_data, offset, ((str->Length()  * 2) << 2) | Encoding::UTF16); // length
       offset += writeUCS2(isolate, dst_data + offset, str, flags);
@@ -127,7 +130,8 @@ static uint32_t serializeStringFast(Local<Value> receiver,
                                     uint32_t offset, uint32_t max_length) {
   uint8_t *dst_data;
   dst.getStorageIfAligned(&dst_data);
-  offset += writeVarUint32(dst_data, offset, (src.length << 2 | Encoding::LATIN1)); // length
+  offset += writeVarUint32(dst_data, offset,
+                           (src.length << 2 | Encoding::LATIN1)); // length
   memcpy(dst_data + offset, src.data, src.length);
   return offset + src.length;
 }
