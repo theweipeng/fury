@@ -62,6 +62,8 @@
 namespace fory {
 namespace serialization {
 
+using meta::ForyFieldInfo;
+
 // Forward declarations
 class Fory;
 class TypeResolver;
@@ -608,7 +610,7 @@ template <typename T, size_t Index> struct FieldInfoBuilder {
   static FieldInfo build() {
     const auto meta = ForyFieldInfo(T{});
     const auto field_names = decltype(meta)::Names;
-    const auto field_ptrs = decltype(meta)::Ptrs;
+    const auto &field_ptrs = decltype(meta)::PtrsRef();
 
     // Convert camelCase field name to snake_case for cross-language
     // compatibility
