@@ -62,6 +62,8 @@ class SchemaValidator:
         self._check_duplicate_type_ids()
         self._check_messages()
         self._check_type_references()
+        self._check_ref_rules()
+        self._check_weak_refs()
         return not self.errors
 
     def _error(self, message: str, location: Optional[SourceLocation]) -> None:
@@ -309,6 +311,177 @@ class SchemaValidator:
         for union in self.schema.unions:
             for f in union.fields:
                 check_type_ref(f.field_type, f, None)
+
+    def _check_ref_rules(self) -> None:
+        def resolve_target(
+            target: NamedType,
+            enclosing_messages: Optional[List[Message]],
+        ) -> Optional[TypingUnion[Message, Enum, Union]]:
+            if enclosing_messages is not None:
+                return self._resolve_named_type(target.name, enclosing_messages)
+            return self._find_top_level_type(target.name)
+
+        def ensure_message_or_union(
+            target: FieldType,
+            field: Field,
+            enclosing_messages: Optional[List[Message]],
+            context: str,
+        ) -> None:
+            if not isinstance(target, NamedType):
+                self._error(
+                    f"{context} is only valid for message/union types",
+                    field.location,
+                )
+                return
+            resolved = resolve_target(target, enclosing_messages)
+            if isinstance(resolved, Enum):
+                self._error(
+                    f"{context} is only valid for message/union types, not enums",
+                    field.location,
+                )
+
+        def check_field(
+            field: Field,
+            enclosing_messages: Optional[List[Message]] = None,
+        ) -> None:
+            if field.ref:
+                if isinstance(field.field_type, (ListType, MapType)):
+                    self._error(
+                        "ref is not allowed on repeated/map fields; "
+                        "use `repeated ref` for list elements or `map<..., ref T>` for map values",
+                        field.location,
+                    )
+                else:
+                    ensure_message_or_union(
+                        field.field_type,
+                        field,
+                        enclosing_messages,
+                        "ref",
+                    )
+
+            if field.element_ref:
+                if not isinstance(field.field_type, ListType):
+                    self._error(
+                        "repeated ref is only valid for list fields",
+                        field.location,
+                    )
+                else:
+                    ensure_message_or_union(
+                        field.field_type.element_type,
+                        field,
+                        enclosing_messages,
+                        "ref",
+                    )
+
+            if isinstance(field.field_type, MapType) and field.field_type.value_ref:
+                ensure_message_or_union(
+                    field.field_type.value_type,
+                    field,
+                    enclosing_messages,
+                    "ref",
+                )
+
+        def check_message_fields(
+            message: Message,
+            enclosing_messages: Optional[List[Message]] = None,
+        ) -> None:
+            lineage = (enclosing_messages or []) + [message]
+            for f in message.fields:
+                check_field(f, lineage)
+            for nested_msg in message.nested_messages:
+                check_message_fields(nested_msg, lineage)
+            for nested_union in message.nested_unions:
+                for f in nested_union.fields:
+                    check_field(f, lineage)
+
+        for message in self.schema.messages:
+            check_message_fields(message)
+        for union in self.schema.unions:
+            for f in union.fields:
+                check_field(f, None)
+
+    def _check_weak_refs(self) -> None:
+        def check_field(
+            field: Field,
+            enclosing_messages: Optional[List[Message]] = None,
+        ) -> None:
+            if isinstance(field.field_type, ListType):
+                weak_ref = field.element_ref_options.get("weak_ref")
+            elif isinstance(field.field_type, MapType):
+                weak_ref = field.field_type.value_ref_options.get("weak_ref")
+            else:
+                weak_ref = field.ref_options.get("weak_ref")
+
+            if weak_ref is not True:
+                if field.options.get("weak_ref") is True:
+                    weak_ref = True
+                else:
+                    return
+
+            if isinstance(field.field_type, ListType):
+                if not field.element_ref:
+                    self._error(
+                        "weak_ref requires repeated ref fields (use `repeated ref`)",
+                        field.location,
+                    )
+                    return
+                target_type = field.field_type.element_type
+            elif isinstance(field.field_type, MapType):
+                if not field.field_type.value_ref:
+                    self._error(
+                        "weak_ref requires ref tracking on map values (use `map<..., ref T>`)",
+                        field.location,
+                    )
+                    return
+                target_type = field.field_type.value_type
+            else:
+                if not field.ref:
+                    self._error(
+                        "weak_ref requires ref tracking (use `ref` modifier or `ref = true`)",
+                        field.location,
+                    )
+                    return
+                target_type = field.field_type
+
+            if not isinstance(target_type, NamedType):
+                self._error(
+                    "weak_ref is only valid for named message types",
+                    field.location,
+                )
+                return
+
+            resolved = None
+            if enclosing_messages is not None:
+                resolved = self._resolve_named_type(
+                    target_type.name, enclosing_messages
+                )
+            else:
+                resolved = self._find_top_level_type(target_type.name)
+
+            if isinstance(resolved, Enum):
+                self._error(
+                    "weak_ref is only valid for message/union types, not enums",
+                    field.location,
+                )
+
+        def check_message_fields(
+            message: Message,
+            enclosing_messages: Optional[List[Message]] = None,
+        ) -> None:
+            lineage = (enclosing_messages or []) + [message]
+            for f in message.fields:
+                check_field(f, lineage)
+            for nested_msg in message.nested_messages:
+                check_message_fields(nested_msg, lineage)
+            for nested_union in message.nested_unions:
+                for f in nested_union.fields:
+                    check_field(f, lineage)
+
+        for message in self.schema.messages:
+            check_message_fields(message)
+        for union in self.schema.unions:
+            for f in union.fields:
+                check_field(f, None)
 
 
 def validate_schema(schema: Schema) -> List[str]:

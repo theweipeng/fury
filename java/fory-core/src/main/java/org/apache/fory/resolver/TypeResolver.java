@@ -968,15 +968,7 @@ public abstract class TypeResolver {
     if (!fory.isCrossLanguage()) {
       return getSerializer(typeRef.getRawType());
     }
-    TypeExtMeta extMeta = typeRef.getTypeExtMeta();
-    if (extMeta != null) {
-      return getSerializerByTypeId(extMeta.typeId());
-    }
     Class<?> rawType = typeRef.getRawType();
-    int typeId = Types.getTypeId(fory, rawType);
-    if (typeId != Types.UNKNOWN) {
-      return getSerializerByTypeId(typeId);
-    }
     return getSerializer(rawType);
   }
 
