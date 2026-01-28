@@ -32,8 +32,7 @@ module.exports = {
   testPathIgnorePatterns : (
     !process.env["DATA_FILE"] ? ["test/crossLanguage.test.ts"] : []
   ).concat([
-    "set.test.ts",
-    
+    "set.test.ts", // todo remove
   ]),
   transform: {
     '\\.ts$': ['ts-jest', {
