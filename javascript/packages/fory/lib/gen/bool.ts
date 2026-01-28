@@ -32,11 +32,11 @@ class BoolSerializerGenerator extends BaseSerializerGenerator {
     this.typeInfo = typeInfo;
   }
 
-  xwrite(accessor: string): string {
+  write(accessor: string): string {
     return this.builder.writer.uint8(`${accessor} ? 1 : 0`);
   }
 
-  xread(accessor: (expr: string) => string): string {
+  read(accessor: (expr: string) => string): string {
     return accessor(`${this.builder.reader.uint8()} === 1`);
   }
 

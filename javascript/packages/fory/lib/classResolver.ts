@@ -31,23 +31,16 @@ const uninitSerialize = {
   needToWriteRef: () => {
     throw new Error("uninitSerialize");
   },
-  // for reader
-  read: () => {
-    throw new Error("uninitSerialize");
-  },
-  readInner: () => {
-    throw new Error("uninitSerialize");
-  },
   getHash: () => {
     throw new Error("uninitSerialize");
   },
-  xwrite: (v: any) => {
+  write: (v: any) => {
     throw new Error("uninitSerialize");
   },
-  xwriteRef: (v: any) => {
+  writeRef: (v: any) => {
     throw new Error("uninitSerialize");
   },
-  xwriteNoRef: (v: any) => {
+  writeNoRef: (v: any) => {
     throw new Error("uninitSerialize");
   },
   writeRefOrNull: (v: any) => {
@@ -56,13 +49,13 @@ const uninitSerialize = {
   writeClassInfo: (v: any) => {
     throw new Error("uninitSerialize");
   },
-  xread: (fromRef: boolean) => {
+  read: (fromRef: boolean) => {
     throw new Error("uninitSerialize");
   },
-  xreadRef: () => {
+  readRef: () => {
     throw new Error("uninitSerialize");
   },
-  xreadNoRef: (fromRef: boolean) => {
+  readNoRef: (fromRef: boolean) => {
     throw new Error("uninitSerialize");
   },
   readClassInfo: () => {

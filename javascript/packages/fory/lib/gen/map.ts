@@ -170,16 +170,16 @@ class MapAnySerializer {
       );
 
       this.writeHead(header >> 4, k);
-      keySerializer!.xwrite(k);
+      keySerializer!.write(k);
       this.writeHead(header & 0b00001111, v);
-      valueSerializer!.xwrite(v);
+      valueSerializer!.write(v);
     }
     mapChunkWriter.endChunk();
   }
 
   private readElement(header: number, serializer: Serializer | null) {
     if (header === 0) {
-      return serializer!.xread(false);
+      return serializer!.read(false);
     }
     const isSame = !(header & MapFlags.NOT_SAME_TYPE);
     const includeNone = header & MapFlags.HAS_NULL;
@@ -194,13 +194,13 @@ class MapAnySerializer {
     }
     switch (flag) {
       case RefFlags.RefValueFlag:
-        return serializer!.xread(true);
+        return serializer!.read(true);
       case RefFlags.RefFlag:
         return this.fory.referenceResolver.getReadObject(this.fory.binaryReader.varUInt32());
       case RefFlags.NullFlag:
         return null;
       case RefFlags.NotNullValueFlag:
-        return serializer!.xread(false);
+        return serializer!.read(false);
     }
   }
 
@@ -253,7 +253,7 @@ export class MapSerializerGenerator extends BaseSerializerGenerator {
     return this.typeInfo.options.key.typeId === TypeId.UNKNOWN || this.typeInfo.options.value.typeId === TypeId.UNKNOWN;
   }
 
-  private xwriteSpecificType(accessor: string) {
+  private writeSpecificType(accessor: string) {
     const k = this.scope.uniqueName("k");
     const v = this.scope.uniqueName("v");
     const keyHeader = (this.keyGenerator.needToWriteRef() ? MapFlags.TRACKING_REF : 0);
@@ -304,10 +304,10 @@ export class MapSerializerGenerator extends BaseSerializerGenerator {
               ${this.builder.writer.uint16(keyRef)};
             } else {
               ${this.builder.writer.uint8(RefFlags.RefValueFlag)};
-              ${this.keyGenerator.xwriteEmbed().xwrite(k)}
+              ${this.keyGenerator.writeEmbed().write(k)}
             }
         `
-: this.keyGenerator.xwriteEmbed().xwrite(k)}
+: this.keyGenerator.writeEmbed().write(k)}
        
 
         if (valueIsNull) {
@@ -321,10 +321,10 @@ export class MapSerializerGenerator extends BaseSerializerGenerator {
               ${this.builder.writer.uint16(valueRef)};
             } else {
               ${this.builder.writer.uint8(RefFlags.RefValueFlag)};
-              ${this.valueGenerator.xwriteEmbed().xwrite(v)};
+              ${this.valueGenerator.writeEmbed().write(v)};
             }
         `
-: this.valueGenerator.xwriteEmbed().xwrite(v)}
+: this.valueGenerator.writeEmbed().write(v)}
         
 
         ${chunkSize}++;
@@ -335,10 +335,10 @@ export class MapSerializerGenerator extends BaseSerializerGenerator {
     `;
   }
 
-  xwrite(accessor: string): string {
+  write(accessor: string): string {
     const anySerializer = this.builder.getExternal(MapAnySerializer.name);
     if (!this.isAny()) {
-      return this.xwriteSpecificType(accessor);
+      return this.writeSpecificType(accessor);
     }
     return `new (${anySerializer})(${this.builder.getForyName()}, ${
       this.typeInfo.options.key.typeId !== TypeId.UNKNOWN ? this.typeInfo.options.key.typeId : null
@@ -377,7 +377,7 @@ export class MapSerializerGenerator extends BaseSerializerGenerator {
           }
           switch (flag) {
             case ${RefFlags.RefValueFlag}:
-              ${this.keyGenerator.xread(x => `key = ${x}`, "true")}
+              ${this.keyGenerator.read(x => `key = ${x}`, "true")}
               break;
             case ${RefFlags.RefFlag}:
               key = ${this.builder.referenceResolver.getReadObject(this.builder.reader.varInt32())}
@@ -386,7 +386,7 @@ export class MapSerializerGenerator extends BaseSerializerGenerator {
               key = null;
               break;
             case ${RefFlags.NotNullValueFlag}:
-              ${this.keyGenerator.xread(x => `key = ${x}`, "true")}
+              ${this.keyGenerator.read(x => `key = ${x}`, "true")}
               break;
           }
           flag = 0;
@@ -395,7 +395,7 @@ export class MapSerializerGenerator extends BaseSerializerGenerator {
           }
           switch (flag) {
             case ${RefFlags.RefValueFlag}:
-              ${this.valueGenerator.xread(x => `value = ${x}`, "true")}
+              ${this.valueGenerator.read(x => `value = ${x}`, "true")}
               break;
             case ${RefFlags.RefFlag}:
               value = ${this.builder.referenceResolver.getReadObject(this.builder.reader.varInt32())}
@@ -404,7 +404,7 @@ export class MapSerializerGenerator extends BaseSerializerGenerator {
               value = null;
               break;
             case ${RefFlags.NotNullValueFlag}:
-              ${this.valueGenerator.xread(x => `value = ${x}`, "false")}
+              ${this.valueGenerator.read(x => `value = ${x}`, "false")}
               break;
           }
           ${result}.set(
@@ -418,7 +418,7 @@ export class MapSerializerGenerator extends BaseSerializerGenerator {
     `;
   }
 
-  xread(accessor: (expr: string) => string, refState: string): string {
+  read(accessor: (expr: string) => string, refState: string): string {
     const anySerializer = this.builder.getExternal(MapAnySerializer.name);
     if (!this.isAny()) {
       return this.readStmtSpecificType(accessor, refState);

@@ -33,22 +33,22 @@ export const makeHead = (flag: RefFlags, typeId: number) => {
 };
 
 export interface SerializerGenerator {
-  xwriteRef(accessor: string): string;
-  xwriteNoRef(accessor: string): string;
+  writeRef(accessor: string): string;
+  writeNoRef(accessor: string): string;
   writeRefOrNull(assignStmt: (v: string) => string, accessor: string): string;
   writeClassInfo(accessor: string): string;
-  xwrite(accessor: string): string;
-  xwriteEmbed(): any;
+  write(accessor: string): string;
+  writeEmbed(): any;
 
   toSerializer(): string;
   getFixedSize(): number;
   needToWriteRef(): boolean;
 
-  xreadRef(assignStmt: (v: string) => string): string;
-  xreadNoRef(assignStmt: (v: string) => string, refState: string): string;
+  readRef(assignStmt: (v: string) => string): string;
+  readNoRef(assignStmt: (v: string) => string, refState: string): string;
   readClassInfo(): string;
-  xread(assignStmt: (v: string) => string, refState: string): string;
-  xreadEmbed(): any;
+  read(assignStmt: (v: string) => string, refState: string): string;
+  readEmbed(): any;
   getHash(): string;
 
   getType(): number;
@@ -78,9 +78,9 @@ export abstract class BaseSerializerGenerator implements SerializerGenerator {
     return this.builder.fory.config.refTracking === true;
   }
 
-  abstract xwrite(accessor: string): string;
+  abstract write(accessor: string): string;
 
-  xwriteEmbed() {
+  writeEmbed() {
     const obj = {};
     return new Proxy(obj, {
       get: (target, prop) => {
@@ -91,7 +91,7 @@ export abstract class BaseSerializerGenerator implements SerializerGenerator {
     });
   }
 
-  xreadEmbed() {
+  readEmbed() {
     const obj = {};
     return new Proxy(obj, {
       get: (target, prop) => {
@@ -102,21 +102,21 @@ export abstract class BaseSerializerGenerator implements SerializerGenerator {
     });
   }
 
-  xwriteRef(accessor: string) {
+  writeRef(accessor: string) {
     const noneedWrite = this.scope.uniqueName("noneedWrite");
     return `
       let ${noneedWrite} = false;
       ${this.writeRefOrNull(expr => `${noneedWrite} = ${expr}`, accessor)}
       if (!${noneedWrite}) {
-        ${this.xwriteNoRef(accessor)}
+        ${this.writeNoRef(accessor)}
       }
     `;
   }
 
-  xwriteNoRef(accessor: string) {
+  writeNoRef(accessor: string) {
     return `
       ${this.writeClassInfo(accessor)};
-      ${this.xwrite(accessor)};
+      ${this.write(accessor)};
     `;
   }
 
@@ -169,7 +169,7 @@ export abstract class BaseSerializerGenerator implements SerializerGenerator {
     return this.getTypeId() & 0xff;
   }
 
-  abstract xread(assignStmt: (v: string) => string, refState: string): string;
+  abstract read(assignStmt: (v: string) => string, refState: string): string;
 
   readClassInfo(): string {
     return `
@@ -177,21 +177,21 @@ export abstract class BaseSerializerGenerator implements SerializerGenerator {
     `;
   }
 
-  xreadNoRef(assignStmt: (v: string) => string, refState: string): string {
+  readNoRef(assignStmt: (v: string) => string, refState: string): string {
     return `
       ${this.readClassInfo()}
-      ${this.xread(assignStmt, refState)};
+      ${this.read(assignStmt, refState)};
     `;
   }
 
-  xreadRef(assignStmt: (v: string) => string): string {
+  readRef(assignStmt: (v: string) => string): string {
     const refFlag = this.scope.uniqueName("refFlag");
     return `
         const ${refFlag} = ${this.builder.reader.int8()};
         switch (${refFlag}) {
             case ${RefFlags.NotNullValueFlag}:
             case ${RefFlags.RefValueFlag}:
-                ${this.xreadNoRef(assignStmt, `${refFlag} === ${RefFlags.RefValueFlag}`)}
+                ${this.readNoRef(assignStmt, `${refFlag} === ${RefFlags.RefValueFlag}`)}
                 break;
             case ${RefFlags.RefFlag}:
                 ${assignStmt(this.builder.referenceResolver.getReadObject(this.builder.reader.varUInt32()))}
@@ -235,14 +235,14 @@ export abstract class BaseSerializerGenerator implements SerializerGenerator {
       const getHash = () => {
         return ${this.getHash()};
       }
-      const xwrite = (v) => {
-        ${this.xwrite("v")}
+      const write = (v) => {
+        ${this.write("v")}
       };
-      const xwriteRef = (v) => {
-        ${this.xwriteRef("v")}
+      const writeRef = (v) => {
+        ${this.writeRef("v")}
       };
-      const xwriteNoRef = (v) => {
-        ${this.xwriteNoRef("v")}
+      const writeNoRef = (v) => {
+        ${this.writeNoRef("v")}
       };
       const writeRefOrNull = (v) => {
         ${this.writeRefOrNull(expr => `return ${expr};`, "v")}
@@ -250,14 +250,14 @@ export abstract class BaseSerializerGenerator implements SerializerGenerator {
       const writeClassInfo = (v) => {
         ${this.writeClassInfo("v")}
       };
-      const xread = (fromRef) => {
-        ${this.xread(assignStmt => `return ${assignStmt}`, "fromRef")}
+      const read = (fromRef) => {
+        ${this.read(assignStmt => `return ${assignStmt}`, "fromRef")}
       };
-      const xreadRef = () => {
-        ${this.xreadRef(assignStmt => `return ${assignStmt}`)}
+      const readRef = () => {
+        ${this.readRef(assignStmt => `return ${assignStmt}`)}
       };
-      const xreadNoRef = (fromRef) => {
-        ${this.xreadNoRef(assignStmt => `return ${assignStmt}`, "fromRef")}
+      const readNoRef = (fromRef) => {
+        ${this.readNoRef(assignStmt => `return ${assignStmt}`, "fromRef")}
       };
       const readClassInfo = () => {
         ${this.readClassInfo()}
@@ -273,15 +273,15 @@ export abstract class BaseSerializerGenerator implements SerializerGenerator {
               getTypeId: () => ${this.getTypeId()},
               getHash,
 
-              xwrite,
-              xwriteRef,
-              xwriteNoRef,
+              write,
+              writeRef,
+              writeNoRef,
               writeRefOrNull,
               writeClassInfo,
 
-              xread,
-              xreadRef,
-              xreadNoRef,
+              read,
+              readRef,
+              readNoRef,
               readClassInfo,
             };
         }

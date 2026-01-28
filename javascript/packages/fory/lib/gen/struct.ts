@@ -69,7 +69,7 @@ class StructSerializerGenerator extends BaseSerializerGenerator {
     this.metaChangedSerializer = this.scope.declareVar("metaChangedSerializer", "null");
   }
 
-  xreadField(fieldName: string, fieldTypeInfo: TypeInfo, assignStmt: (expr: string) => string, innerGenerator: SerializerGenerator) {
+  readField(fieldName: string, fieldTypeInfo: TypeInfo, assignStmt: (expr: string) => string, innerGenerator: SerializerGenerator) {
     const { nullable = false, trackingRef = false } = this.typeInfo.options.fieldInfo?.[fieldName] || {};
     const refMode = toRefMode(trackingRef, nullable);
     let stmt = "";
@@ -77,22 +77,22 @@ class StructSerializerGenerator extends BaseSerializerGenerator {
     if (fieldTypeInfo.isMonomorphic()) {
       if (refMode == RefMode.TRACKING || refMode === RefMode.NULL_ONLY) {
         stmt = `
-            ${innerGenerator.xreadRef(assignStmt)}
+            ${innerGenerator.readRef(assignStmt)}
         `;
       } else {
-        stmt = innerGenerator.xread(assignStmt, "false");
+        stmt = innerGenerator.read(assignStmt, "false");
       }
     } else {
       if (refMode == RefMode.TRACKING || refMode === RefMode.NULL_ONLY) {
-        stmt = `${innerGenerator.xreadRef(assignStmt)}`;
+        stmt = `${innerGenerator.readRef(assignStmt)}`;
       } else {
-        stmt = innerGenerator.xreadNoRef(assignStmt, "false");
+        stmt = innerGenerator.readNoRef(assignStmt, "false");
       }
     }
     return stmt;
   }
 
-  xwriteField(fieldName: string, fieldTypeInfo: TypeInfo, fieldAccessor: string, innerGenerator: SerializerGenerator) {
+  writeField(fieldName: string, fieldTypeInfo: TypeInfo, fieldAccessor: string, innerGenerator: SerializerGenerator) {
     const { nullable = false, trackingRef = false } = this.typeInfo.options.fieldInfo?.[fieldName] || {};
     const refMode = toRefMode(trackingRef, nullable);
     let stmt = "";
@@ -104,7 +104,7 @@ class StructSerializerGenerator extends BaseSerializerGenerator {
             let ${noneedWrite} = false;
             ${innerGenerator.writeRefOrNull(expr => `${noneedWrite} = ${expr}`, fieldAccessor)}
             if (!${noneedWrite}) {
-              ${innerGenerator.xwrite(fieldAccessor)}
+              ${innerGenerator.write(fieldAccessor)}
             }
         `;
       } else if (refMode == RefMode.NULL_ONLY) {
@@ -113,7 +113,7 @@ class StructSerializerGenerator extends BaseSerializerGenerator {
               ${this.builder.writer.int8(RefFlags.NullFlag)}
             } else {
               ${this.builder.writer.int8(RefFlags.NotNullValueFlag)}
-              ${innerGenerator.xwrite(fieldAccessor)}
+              ${innerGenerator.write(fieldAccessor)}
             }
           `;
       } else {
@@ -121,20 +121,20 @@ class StructSerializerGenerator extends BaseSerializerGenerator {
             if (${fieldAccessor} === null || ${fieldAccessor} === undefined) {
               throw new Error('Field ${CodecBuilder.safeString(fieldName)} is not nullable');
             } else {
-              ${innerGenerator.xwrite(fieldAccessor)}
+              ${innerGenerator.write(fieldAccessor)}
             }
           `;
       }
     } else {
       if (refMode == RefMode.TRACKING) {
-        stmt = `${innerGenerator.xwriteRef(fieldAccessor)}`;
+        stmt = `${innerGenerator.writeRef(fieldAccessor)}`;
       } else if (refMode == RefMode.NULL_ONLY) {
         stmt = `
             if (${fieldAccessor} === null || ${fieldAccessor} === undefined) {
               ${this.builder.writer.int8(RefFlags.NullFlag)}
             } else {
               ${this.builder.writer.int8(RefFlags.NotNullValueFlag)}
-              ${innerGenerator.xwriteNoRef(fieldAccessor)}
+              ${innerGenerator.writeNoRef(fieldAccessor)}
             }
           `;
       } else {
@@ -142,7 +142,7 @@ class StructSerializerGenerator extends BaseSerializerGenerator {
             if (${fieldAccessor} === null || ${fieldAccessor} === undefined) {
               throw new Error('Field ${CodecBuilder.safeString(fieldName)} is not nullable');
             } else {
-              ${innerGenerator.xwriteNoRef(fieldAccessor)}
+              ${innerGenerator.writeNoRef(fieldAccessor)}
             }
           `;
       }
@@ -150,7 +150,7 @@ class StructSerializerGenerator extends BaseSerializerGenerator {
     return stmt;
   }
 
-  xwrite(accessor: string): string {
+  write(accessor: string): string {
     return `
       ${this.sortedProps.map(({ key, typeInfo }) => {
       const InnerGeneratorClass = CodegenRegistry.get(typeInfo.typeId);
@@ -160,12 +160,12 @@ class StructSerializerGenerator extends BaseSerializerGenerator {
       const innerGenerator = new InnerGeneratorClass(typeInfo, this.builder, this.scope);
 
       const fieldAccessor = `${accessor}${CodecBuilder.safePropAccessor(key)}`;
-      return this.xwriteField(key, typeInfo, fieldAccessor, innerGenerator.xwriteEmbed());
+      return this.writeField(key, typeInfo, fieldAccessor, innerGenerator.writeEmbed());
     }).join(";\n")}
     `;
   }
 
-  xread(accessor: (expr: string) => string, refState: string): string {
+  read(accessor: (expr: string) => string, refState: string): string {
     const result = this.scope.uniqueName("result");
     return `
       ${this.typeInfo.options.withConstructor
@@ -187,19 +187,19 @@ class StructSerializerGenerator extends BaseSerializerGenerator {
           throw new Error(`${typeInfo.typeId} generator not exists`);
         }
         const innerGenerator = new InnerGeneratorClass(typeInfo, this.builder, this.scope);
-        return this.xreadField(key, typeInfo, expr => `${result}${CodecBuilder.safePropAccessor(key)} = ${expr}`, innerGenerator.xreadEmbed());
+        return this.readField(key, typeInfo, expr => `${result}${CodecBuilder.safePropAccessor(key)} = ${expr}`, innerGenerator.readEmbed());
       }).join(";\n")}
       ${accessor(result)}
     `;
   }
 
-  xreadNoRef(assignStmt: (v: string) => string, refState: string): string {
+  readNoRef(assignStmt: (v: string) => string, refState: string): string {
     return `
       ${this.readClassInfo()}
       if (${this.metaChangedSerializer} !== null) {
-        ${assignStmt(`${this.metaChangedSerializer}.xread(${refState})`)}
+        ${assignStmt(`${this.metaChangedSerializer}.read(${refState})`)}
       } else {
-        ${this.xread(assignStmt, refState)};
+        ${this.read(assignStmt, refState)};
       }
     `;
   }
@@ -239,7 +239,7 @@ class StructSerializerGenerator extends BaseSerializerGenerator {
     `;
   }
 
-  xreadEmbed() {
+  readEmbed() {
     return new Proxy({}, {
       get: (target, prop: string) => {
         return (accessor: (expr: string) => string, ...args: string[]) => {
@@ -255,7 +255,7 @@ class StructSerializerGenerator extends BaseSerializerGenerator {
     });
   }
 
-  xwriteEmbed() {
+  writeEmbed() {
     return new Proxy({}, {
       get: (target, prop: string) => {
         return (accessor: string) => {

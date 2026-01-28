@@ -33,11 +33,11 @@ function buildNumberSerializer(writeFun: (builder: CodecBuilder, accessor: strin
       this.typeInfo = typeInfo;
     }
 
-    xwrite(accessor: string): string {
+    write(accessor: string): string {
       return writeFun(this.builder, accessor);
     }
 
-    xread(accessor: (expr: string) => string): string {
+    read(accessor: (expr: string) => string): string {
       return accessor(read(this.builder));
     }
 

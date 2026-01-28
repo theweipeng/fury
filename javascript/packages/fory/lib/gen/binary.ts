@@ -32,7 +32,7 @@ class BinarySerializerGenerator extends BaseSerializerGenerator {
     this.typeInfo = typeInfo;
   }
 
-  xwrite(accessor: string): string {
+  write(accessor: string): string {
     return `
         ${this.builder.writer.uint8(1)}
         ${this.builder.writer.uint32(`${accessor}.byteLength`)}
@@ -40,7 +40,7 @@ class BinarySerializerGenerator extends BaseSerializerGenerator {
         `;
   }
 
-  xread(accessor: (expr: string) => string, refState: string): string {
+  read(accessor: (expr: string) => string, refState: string): string {
     const result = this.scope.uniqueName("result");
     return `
         ${this.builder.reader.uint8()}

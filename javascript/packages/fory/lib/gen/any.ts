@@ -106,9 +106,9 @@ class AnySerializerGenerator extends BaseSerializerGenerator {
     this.writerSerializer = this.scope.declareVar("writerSerializer", "null");
   }
 
-  xwrite(accessor: string): string {
+  write(accessor: string): string {
     return `
-      ${this.writerSerializer}.xwrite(${accessor});;
+      ${this.writerSerializer}.write(${accessor});;
     `;
   }
 
@@ -125,8 +125,8 @@ class AnySerializerGenerator extends BaseSerializerGenerator {
     `;
   }
 
-  xread(assignStmt: (v: string) => string, refState: string): string {
-    return assignStmt(`${this.detectedSerializer}.xread(${refState});`);
+  read(assignStmt: (v: string) => string, refState: string): string {
+    return assignStmt(`${this.detectedSerializer}.read(${refState});`);
   }
 
   getFixedSize(): number {

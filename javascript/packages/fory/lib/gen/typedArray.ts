@@ -35,18 +35,18 @@ function build(inner: TypeInfo) {
       this.innerGenerator = CodegenRegistry.newGeneratorByTypeInfo(inner, builder, scope);
     }
 
-    xwrite(accessor: string): string {
+    write(accessor: string): string {
       const item = this.scope.uniqueName("item");
       return `
                 ${this.builder.writer.varUInt32(`${accessor}.length`)}
                 ${this.builder.writer.reserve(`${this.innerGenerator.getFixedSize()} * ${accessor}.length`)};
                 for (const ${item} of ${accessor}) {
-                    ${this.innerGenerator.xwriteEmbed().xwrite(item)}
+                    ${this.innerGenerator.writeEmbed().write(item)}
                 }
             `;
     }
 
-    xread(accessor: (expr: string) => string, refState: string): string {
+    read(accessor: (expr: string) => string, refState: string): string {
       const result = this.scope.uniqueName("result");
       const len = this.scope.uniqueName("len");
       const idx = this.scope.uniqueName("idx");
@@ -56,7 +56,7 @@ function build(inner: TypeInfo) {
                 const ${result} = new Array(${len});
                 ${this.maybeReference(result, refState)}
                 for (let ${idx} = 0; ${idx} < ${len}; ${idx}++) {
-                    ${this.innerGenerator.xread(x => `${result}[${idx}] = ${x};`, "false")}
+                    ${this.innerGenerator.read(x => `${result}[${idx}] = ${x};`, "false")}
                 }
                 ${accessor(result)}
              `;

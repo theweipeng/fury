@@ -119,9 +119,9 @@ export default class {
     const serializer = new Gen(this, { constroctor: (typeInfo as StructTypeInfo).options.constructor }).reGenerateSerializer(typeInfo);
     const result = this.classResolver.registerSerializer(typeInfo, {
       getHash: serializer.getHash,
-      xread: serializer.xread,
-      xreadNoRef: serializer.xreadNoRef,
-      xreadRef: serializer.xreadRef,
+      read: serializer.read,
+      readNoRef: serializer.readNoRef,
+      readRef: serializer.readRef,
       readClassInfo: serializer.readClassInfo,
     } as any)!;
     TypeInfo.detach();
@@ -146,7 +146,7 @@ export default class {
       throw new Error("outofband mode is not supported now");
     }
     this.binaryReader.uint8(); // skip language
-    return serializer.xreadRef();
+    return serializer.readRef();
   }
 
   private serializeInternal<T = any>(data: T, serializer: Serializer) {
@@ -169,7 +169,7 @@ export default class {
     // reserve fixed size
     this.binaryWriter.reserve(serializer.fixedSize);
     // start write
-    serializer.xwriteRef(data);
+    serializer.writeRef(data);
     return this.binaryWriter;
   }
 

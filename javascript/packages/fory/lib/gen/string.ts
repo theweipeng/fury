@@ -32,11 +32,11 @@ class StringSerializerGenerator extends BaseSerializerGenerator {
     this.typeInfo = typeInfo;
   }
 
-  xwrite(accessor: string): string {
+  write(accessor: string): string {
     return this.builder.writer.stringWithHeader(accessor);
   }
 
-  xread(accessor: (expr: string) => string, refState: string): string {
+  read(accessor: (expr: string) => string, refState: string): string {
     const result = this.scope.uniqueName("result");
     return `
         const ${result} = ${this.builder.reader.stringWithHeader()};

@@ -32,7 +32,7 @@ class EnumSerializerGenerator extends BaseSerializerGenerator {
     this.typeInfo = <EnumTypeInfo>typeInfo;
   }
 
-  xwrite(accessor: string): string {
+  write(accessor: string): string {
     if (Object.values(this.typeInfo.options.inner).length < 1) {
       throw new Error("An enum must contain at least one field");
     }
@@ -105,7 +105,7 @@ class EnumSerializerGenerator extends BaseSerializerGenerator {
       `;
   }
 
-  xread(accessor: (expr: string) => string): string {
+  read(accessor: (expr: string) => string): string {
     const enumValue = this.scope.uniqueName("enum_v");
     return `
         const ${enumValue} = ${this.builder.reader.varUInt32()};
