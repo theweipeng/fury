@@ -83,7 +83,7 @@ class AnyHelper {
 
   static getSerializer(fory: Fory, v: any) {
     if (v === null || v === undefined) {
-      throw new Error("can not guess the type of null or undefined")
+      throw new Error("can not guess the type of null or undefined");
     }
 
     const serializer = fory.classResolver.getSerializerByData(v);
@@ -98,7 +98,7 @@ class AnyHelper {
 class AnySerializerGenerator extends BaseSerializerGenerator {
   typeInfo: TypeInfo;
   detectedSerializer: string;
-  writerSerializer: string
+  writerSerializer: string;
   constructor(typeInfo: TypeInfo, builder: CodecBuilder, scope: Scope) {
     super(typeInfo, builder, scope);
     this.typeInfo = typeInfo;
@@ -109,20 +109,20 @@ class AnySerializerGenerator extends BaseSerializerGenerator {
   xwrite(accessor: string): string {
     return `
       ${this.writerSerializer}.xwrite(${accessor});;
-    `
+    `;
   }
 
   writeClassInfo(accessor: string): string {
     return `
       ${this.writerSerializer} = ${this.builder.getExternal(AnyHelper.name)}.getSerializer(${this.builder.getForyName()}, ${accessor});
       ${this.writerSerializer}.writeClassInfo();
-    `
+    `;
   }
 
   readClassInfo(): string {
     return `
       ${this.detectedSerializer} = ${this.builder.getExternal(AnyHelper.name)}.detectSerializer(${this.builder.getForyName()});
-    `
+    `;
   }
 
   xread(assignStmt: (v: string) => string, refState: string): string {

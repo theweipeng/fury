@@ -48,7 +48,7 @@ export class TypeMetaResolver {
         nullable: x.nullable,
         trackingRef: x.trackingRef,
         ...typeInfo.options.fieldInfo[x.fieldName],
-      }
+      };
       return [fieldName, fieldTypeInfo];
     }));
   }

@@ -61,6 +61,7 @@ export default class {
       mode: config?.mode || Mode.SchemaConsistent,
     };
   }
+
   isCompatible() {
     return this.config.mode === Mode.Compatible;
   }
@@ -115,14 +116,13 @@ export default class {
 
   replaceSerializerReader(typeInfo: TypeInfo) {
     TypeInfo.attach(this);
-    let serializer: Serializer;
-    serializer = new Gen(this, { constroctor: (typeInfo as StructTypeInfo).options.constructor }).reGenerateSerializer(typeInfo);
+    const serializer = new Gen(this, { constroctor: (typeInfo as StructTypeInfo).options.constructor }).reGenerateSerializer(typeInfo);
     const result = this.classResolver.registerSerializer(typeInfo, {
       getHash: serializer.getHash,
       xread: serializer.xread,
       xreadNoRef: serializer.xreadNoRef,
       xreadRef: serializer.xreadRef,
-      readClassInfo: serializer.readClassInfo
+      readClassInfo: serializer.readClassInfo,
     } as any)!;
     TypeInfo.detach();
     return result;

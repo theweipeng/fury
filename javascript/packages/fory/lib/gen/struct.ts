@@ -17,57 +17,24 @@
  * under the License.
  */
 
-import { TypeId, MaxInt32, Mode, RefFlags } from "../type";
+import { TypeId, Mode, RefFlags } from "../type";
 import { Scope } from "./scope";
 import { CodecBuilder } from "./builder";
 import { StructTypeInfo, TypeInfo } from "../typeInfo";
 import { CodegenRegistry } from "./router";
 import { BaseSerializerGenerator, SerializerGenerator } from "./serializer";
-import { fromString } from "../platformBuffer";
 import { TypeMeta } from "../meta/TypeMeta";
-
-function computeFieldHash(hash: number, id: number): number {
-  let newHash = (hash) * 31 + (id);
-  while (newHash >= MaxInt32) {
-    newHash = Math.floor(newHash / 7);
-  }
-  return newHash;
-}
-
-const computeStringHash = (str: string) => {
-  const bytes = fromString(str);
-  let hash = 17;
-  bytes.forEach((b) => {
-    hash = hash * 31 + b;
-    while (hash >= MaxInt32) {
-      hash = Math.floor(hash / 7);
-    }
-  });
-  return hash;
-};
-
-const computeStructHash = (typeInfo: TypeInfo) => {
-  let hash = 17;
-  for (const [, value] of Object.entries((<StructTypeInfo>typeInfo).options.props!).sort()) {
-    let id = value.typeId;
-    if (TypeId.isNamedType(value.typeId!)) {
-      id = computeStringHash((<StructTypeInfo>value).namespace! + (<StructTypeInfo>value).typeName!);
-    }
-    hash = computeFieldHash(hash, id || 0);
-  }
-  return hash;
-};
 
 const sortProps = (typeInfo: StructTypeInfo) => {
   const names = TypeMeta.fromTypeInfo(typeInfo).getFieldInfo();
   const props = typeInfo.options.props;
-  return names.map(x => {
+  return names.map((x) => {
     return {
       key: x.fieldName,
-      typeInfo: props![x.fieldName]
+      typeInfo: props![x.fieldName],
     };
   });
-}
+};
 
 enum RefMode {
   /** No ref tracking, field is non-nullable. Write data directly. */
@@ -77,8 +44,7 @@ enum RefMode {
   NULL_ONLY,
 
   /** Ref tracking enabled (implies nullable). Write ref flags and handle shared references. */
-  TRACKING
-
+  TRACKING,
 
 }
 
@@ -94,7 +60,7 @@ function toRefMode(trackingRef: boolean, nullable: boolean) {
 
 class StructSerializerGenerator extends BaseSerializerGenerator {
   typeInfo: StructTypeInfo;
-  sortedProps: { key: string, typeInfo: TypeInfo }[];
+  sortedProps: { key: string; typeInfo: TypeInfo }[];
   metaChangedSerializer: string;
   constructor(typeInfo: TypeInfo, builder: CodecBuilder, scope: Scope) {
     super(typeInfo, builder, scope);
@@ -106,30 +72,30 @@ class StructSerializerGenerator extends BaseSerializerGenerator {
   xreadField(fieldName: string, fieldTypeInfo: TypeInfo, assignStmt: (expr: string) => string, innerGenerator: SerializerGenerator) {
     const { nullable = false, trackingRef = false } = this.typeInfo.options.fieldInfo?.[fieldName] || {};
     const refMode = toRefMode(trackingRef, nullable);
-    let stmt = '';
+    let stmt = "";
     // polymorphic type
     if (fieldTypeInfo.isMonomorphic()) {
       if (refMode == RefMode.TRACKING || refMode === RefMode.NULL_ONLY) {
         stmt = `
             ${innerGenerator.xreadRef(assignStmt)}
-        `
-        } else {
-          stmt = innerGenerator.xread(assignStmt, "false");
-        }
+        `;
+      } else {
+        stmt = innerGenerator.xread(assignStmt, "false");
+      }
     } else {
-        if (refMode == RefMode.TRACKING || refMode === RefMode.NULL_ONLY) {
-           stmt = `${innerGenerator.xreadRef(assignStmt)}`
-        } else {
-          stmt = innerGenerator.xreadNoRef(assignStmt, "false");
-        }
+      if (refMode == RefMode.TRACKING || refMode === RefMode.NULL_ONLY) {
+        stmt = `${innerGenerator.xreadRef(assignStmt)}`;
+      } else {
+        stmt = innerGenerator.xreadNoRef(assignStmt, "false");
+      }
     }
     return stmt;
   }
 
-  xwriteField(fieldName:string, fieldTypeInfo: TypeInfo, fieldAccessor: string, innerGenerator: SerializerGenerator) {
+  xwriteField(fieldName: string, fieldTypeInfo: TypeInfo, fieldAccessor: string, innerGenerator: SerializerGenerator) {
     const { nullable = false, trackingRef = false } = this.typeInfo.options.fieldInfo?.[fieldName] || {};
     const refMode = toRefMode(trackingRef, nullable);
-    let stmt = '';
+    let stmt = "";
     // polymorphic type
     if (fieldTypeInfo.isMonomorphic()) {
       if (refMode == RefMode.TRACKING) {
@@ -140,9 +106,9 @@ class StructSerializerGenerator extends BaseSerializerGenerator {
             if (!${noneedWrite}) {
               ${innerGenerator.xwrite(fieldAccessor)}
             }
-        `
-        } else if (refMode == RefMode.NULL_ONLY) {
-          stmt = `
+        `;
+      } else if (refMode == RefMode.NULL_ONLY) {
+        stmt = `
             if (${fieldAccessor} === null || ${fieldAccessor} === undefined) {
               ${this.builder.writer.int8(RefFlags.NullFlag)}
             } else {
@@ -150,36 +116,36 @@ class StructSerializerGenerator extends BaseSerializerGenerator {
               ${innerGenerator.xwrite(fieldAccessor)}
             }
           `;
-        } else {
-          stmt = `
+      } else {
+        stmt = `
             if (${fieldAccessor} === null || ${fieldAccessor} === undefined) {
               throw new Error('Field ${CodecBuilder.safeString(fieldName)} is not nullable');
             } else {
               ${innerGenerator.xwrite(fieldAccessor)}
             }
-          `
-        }
+          `;
+      }
     } else {
-        if (refMode == RefMode.TRACKING) {
-           stmt = `${innerGenerator.xwriteRef(fieldAccessor)}`
-        } else if (refMode == RefMode.NULL_ONLY) {
-          stmt = `
+      if (refMode == RefMode.TRACKING) {
+        stmt = `${innerGenerator.xwriteRef(fieldAccessor)}`;
+      } else if (refMode == RefMode.NULL_ONLY) {
+        stmt = `
             if (${fieldAccessor} === null || ${fieldAccessor} === undefined) {
               ${this.builder.writer.int8(RefFlags.NullFlag)}
             } else {
               ${this.builder.writer.int8(RefFlags.NotNullValueFlag)}
               ${innerGenerator.xwriteNoRef(fieldAccessor)}
             }
-          `
-        } else {
-          stmt = `
+          `;
+      } else {
+        stmt = `
             if (${fieldAccessor} === null || ${fieldAccessor} === undefined) {
               throw new Error('Field ${CodecBuilder.safeString(fieldName)} is not nullable');
             } else {
               ${innerGenerator.xwriteNoRef(fieldAccessor)}
             }
-          `
-        }
+          `;
+      }
     }
     return stmt;
   }
@@ -235,12 +201,12 @@ class StructSerializerGenerator extends BaseSerializerGenerator {
       } else {
         ${this.xread(assignStmt, refState)};
       }
-    `
+    `;
   }
 
   readClassInfo(): string {
     const typeMeta = this.scope.uniqueName("typeMeta");
-    let namesStmt = '';
+    let namesStmt = "";
     if (!this.builder.fory.isCompatible() && TypeId.isNamedType(this.getTypeId())) {
       namesStmt = `
         ${
@@ -249,16 +215,16 @@ class StructSerializerGenerator extends BaseSerializerGenerator {
         ${
           this.builder.metaStringResolver.readTypeName(this.builder.reader.ownName())
         };
-      `
+      `;
     }
-    let typeMetaStmt = '';
+    let typeMetaStmt = "";
     if (this.builder.fory.isCompatible()) {
       typeMetaStmt = `
       const ${typeMeta} = ${this.builder.typeMetaResolver.readTypeMeta(this.builder.reader.ownName())};
       if (getHash() !== ${typeMeta}.getHash()) {
         ${this.metaChangedSerializer} = ${this.builder.typeMetaResolver.genSerializerByTypeMetaRuntime(typeMeta)}
       }
-      `
+      `;
     }
     return `
       ${
@@ -270,44 +236,44 @@ class StructSerializerGenerator extends BaseSerializerGenerator {
       ${
         typeMetaStmt
       }
-    `
+    `;
   }
 
   xreadEmbed() {
     return new Proxy({}, {
-        get: (target, prop: string) => {
-          return (accessor: (expr: string) => string, ...args: string[]) => {
-            const name = this.scope.declare(
-              "tag_ser",
-              TypeId.isNamedType(this.typeInfo.typeId)
-                ? this.builder.classResolver.getSerializerByName(CodecBuilder.replaceBackslashAndQuote(this.typeInfo.named!))
-                : this.builder.classResolver.getSerializerById(this.typeInfo.typeId)
-            );
-            return accessor(`${name}.${prop}(${args.join(',')})`);
-          }
-        }
+      get: (target, prop: string) => {
+        return (accessor: (expr: string) => string, ...args: string[]) => {
+          const name = this.scope.declare(
+            "tag_ser",
+            TypeId.isNamedType(this.typeInfo.typeId)
+              ? this.builder.classResolver.getSerializerByName(CodecBuilder.replaceBackslashAndQuote(this.typeInfo.named!))
+              : this.builder.classResolver.getSerializerById(this.typeInfo.typeId)
+          );
+          return accessor(`${name}.${prop}(${args.join(",")})`);
+        };
+      },
     });
   }
 
   xwriteEmbed() {
     return new Proxy({}, {
-        get: (target, prop: string) => {
-          return (accessor: string) => {
-            const name = this.scope.declare(
-              "tag_ser",
-              TypeId.isNamedType(this.typeInfo.typeId)
-                ? this.builder.classResolver.getSerializerByName(CodecBuilder.replaceBackslashAndQuote(this.typeInfo.named!))
-                : this.builder.classResolver.getSerializerById(this.typeInfo.typeId)
-            );
-            return `${name}.${prop}(${accessor})`;
-          }
-        }
+      get: (target, prop: string) => {
+        return (accessor: string) => {
+          const name = this.scope.declare(
+            "tag_ser",
+            TypeId.isNamedType(this.typeInfo.typeId)
+              ? this.builder.classResolver.getSerializerByName(CodecBuilder.replaceBackslashAndQuote(this.typeInfo.named!))
+              : this.builder.classResolver.getSerializerById(this.typeInfo.typeId)
+          );
+          return `${name}.${prop}(${accessor})`;
+        };
+      },
     });
   }
 
   writeClassInfo(): string {
     const internalTypeId = this.getInternalTypeId();
-    let typeMeta = '';
+    let typeMeta = "";
     switch (internalTypeId) {
       case TypeId.NAMED_STRUCT:
       case TypeId.NAMED_COMPATIBLE_STRUCT:
@@ -319,15 +285,16 @@ class StructSerializerGenerator extends BaseSerializerGenerator {
             ${this.builder.metaStringResolver.writeBytes(this.builder.writer.ownName(), nsBytes)}
             ${this.builder.metaStringResolver.writeBytes(this.builder.writer.ownName(), typeNameBytes)}
           `;
-
         } else {
-          const bytes = this.scope.declare("typeInfoBytes", `new Uint8Array([${TypeMeta.fromTypeInfo(<StructTypeInfo>this.typeInfo).toBytes().join(",")}])`);
+          const bytes = this.scope.declare("typeInfoBytes", `new Uint8Array([${TypeMeta.fromTypeInfo(<StructTypeInfo> this.typeInfo).toBytes().join(",")}])`);
           typeMeta = this.builder.typeMetaResolver.writeTypeMeta(this.builder.getTypeInfo(), this.builder.writer.ownName(), bytes);
         }
         break;
       case TypeId.COMPATIBLE_STRUCT:
-        const bytes = this.scope.declare("typeInfoBytes", `new Uint8Array([${TypeMeta.fromTypeInfo(<StructTypeInfo>this.typeInfo).toBytes().join(",")}])`);
-        typeMeta = this.builder.typeMetaResolver.writeTypeMeta(this.builder.getTypeInfo(), this.builder.writer.ownName(), bytes);
+        {
+          const bytes = this.scope.declare("typeInfoBytes", `new Uint8Array([${TypeMeta.fromTypeInfo(<StructTypeInfo> this.typeInfo).toBytes().join(",")}])`);
+          typeMeta = this.builder.typeMetaResolver.writeTypeMeta(this.builder.getTypeInfo(), this.builder.writer.ownName(), bytes);
+        }
         break;
       default:
         break;
@@ -335,11 +302,11 @@ class StructSerializerGenerator extends BaseSerializerGenerator {
     return ` 
       ${this.builder.writer.writeVarUint32Small7(this.getTypeId())};
       ${typeMeta}
-    `
+    `;
   }
 
   getFixedSize(): number {
-    const typeInfo = <StructTypeInfo>this.typeInfo;
+    const typeInfo = <StructTypeInfo> this.typeInfo;
     const options = typeInfo.options;
     let fixedSize = 8;
     if (options.props) {

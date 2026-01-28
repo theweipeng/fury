@@ -20,7 +20,7 @@
 import { BinaryWriter } from "../writer";
 import { BinaryReader } from "../reader";
 import { Encoding, MetaStringDecoder, MetaStringEncoder } from "./MetaString";
-import { StructTypeInfo, TypeInfo } from "../typeInfo";
+import { StructTypeInfo } from "../typeInfo";
 import { TypeId } from "../type";
 import { x64hash128 } from "../murmurHash3";
 
@@ -43,7 +43,7 @@ const PRIMITIVE_TYPE_IDS = [
   TypeId.INT64, TypeId.VARINT64, TypeId.TAGGED_INT64, TypeId.UINT8,
   TypeId.UINT16, TypeId.UINT32, TypeId.VAR_UINT32, TypeId.UINT64,
   TypeId.VAR_UINT64, TypeId.TAGGED_UINT64, TypeId.FLOAT16,
-  TypeId.FLOAT32, TypeId.FLOAT64
+  TypeId.FLOAT32, TypeId.FLOAT64,
 ];
 
 export const isPrimitiveTypeId = (typeId: number): boolean => {
@@ -66,7 +66,7 @@ export const isInternalTypeId = (typeId: number): boolean => {
     TypeId.FLOAT64_ARRAY,
     TypeId.UINT16_ARRAY,
     TypeId.UINT32_ARRAY,
-    TypeId.UINT64_ARRAY
+    TypeId.UINT64_ARRAY,
   ].includes(typeId as any);
 };
 
@@ -108,19 +108,17 @@ function getPrimitiveTypeSize(typeId: number) {
       return 8;
     case TypeId.TAGGED_UINT64:
       return 8;
-    case TypeId.UINT64:
-      return 8;
     default:
       return 0;
   }
 }
 
-type InnerFieldInfoOptions = { key?: InnerFieldInfo, value?: InnerFieldInfo, inner?: InnerFieldInfo };
+type InnerFieldInfoOptions = { key?: InnerFieldInfo; value?: InnerFieldInfo; inner?: InnerFieldInfo };
 interface InnerFieldInfo {
   typeId: number;
   trackingRef: boolean;
   nullable: boolean;
-  options?: InnerFieldInfoOptions
+  options?: InnerFieldInfoOptions;
 }
 class FieldInfo {
   constructor(
@@ -141,7 +139,7 @@ class FieldInfo {
   }
 
   hasFieldId() {
-    return false; //todo not impl yet.
+    return false; // todo not impl yet.
   }
 
   getFieldId() {
@@ -149,7 +147,8 @@ class FieldInfo {
   }
 
   static writeTypeId(writer: BinaryWriter, typeInfo: InnerFieldInfo, writeFlags = false) {
-    let { typeId, trackingRef, nullable } = typeInfo;
+    let { typeId } = typeInfo;
+    const { trackingRef, nullable } = typeInfo;
     if (writeFlags) {
       typeId = (typeId << 2);
       if (nullable) {
@@ -197,9 +196,9 @@ const fieldNameEncoding = [Encoding.UTF_8, Encoding.ALL_TO_LOWER_SPECIAL, Encodi
 const typeNameEncoding = [Encoding.UTF_8, Encoding.ALL_TO_LOWER_SPECIAL, Encoding.LOWER_UPPER_DIGIT_SPECIAL, Encoding.FIRST_TO_LOWER_SPECIAL];
 export class TypeMeta {
   private constructor(private fields: FieldInfo[], private type: {
-    typeId: number,
-    typeName: string,
-    namespace: string,
+    typeId: number;
+    typeName: string;
+    namespace: string;
   }) {
   }
 
@@ -211,7 +210,7 @@ export class TypeMeta {
     let fieldInfo = Object.entries(typeInfo.options.props!).map(([fieldName, typeInfo]) => {
       return new FieldInfo(fieldName, typeInfo.typeId, false, false, typeInfo.options);
     });
-    fieldInfo = TypeMeta.groupFieldsByType(fieldInfo)
+    fieldInfo = TypeMeta.groupFieldsByType(fieldInfo);
     return new TypeMeta(fieldInfo, {
       typeId: typeInfo.typeId,
       namespace: typeInfo.namespace,
@@ -222,8 +221,9 @@ export class TypeMeta {
   static fromBytes(reader: BinaryReader): TypeMeta {
     // Read header with hash and flags
     const headerLong = reader.int64();
-    const isCompressed = (headerLong & COMPRESS_META_FLAG) !== 0n;
-    const hasFieldsMeta = (headerLong & HAS_FIELDS_META_FLAG) !== 0n;
+    // todo support compress.
+    // const isCompressed = (headerLong & COMPRESS_META_FLAG) !== 0n;
+    // const hasFieldsMeta = (headerLong & HAS_FIELDS_META_FLAG) !== 0n;
     let metaSize = Number(headerLong & BigInt(META_SIZE_MASKS));
 
     if (metaSize === META_SIZE_MASKS) {
@@ -464,7 +464,7 @@ export class TypeMeta {
         writer.int8(header);
       }
 
-      FieldInfo.writeTypeId(writer, fieldInfo)
+      FieldInfo.writeTypeId(writer, fieldInfo);
       // Write field name if not using field ID
       if (!fieldInfo.hasFieldId() && encoded) {
         writer.buffer(encoded);
@@ -511,21 +511,19 @@ export class TypeMeta {
     const mapFields: Array<T> = [];
     const otherFields: Array<T> = [];
 
-
-
     const toSnakeCase = (name: string) => {
-      let result = [];
+      const result = [];
       const chars = Array.from(name);
 
       for (let i = 0; i < chars.length; i++) {
         const c = chars[i];
-        if (c >= 'A' && c <= 'Z') {
+        if (c >= "A" && c <= "Z") {
           if (i > 0) {
-            const prevUpper = chars[i - 1] >= 'A' && chars[i - 1] <= 'Z';
-            const nextUpperOrEnd = i + 1 >= chars.length || (chars[i + 1] >= 'A' && chars[i + 1] <= 'Z');
+            const prevUpper = chars[i - 1] >= "A" && chars[i - 1] <= "Z";
+            const nextUpperOrEnd = i + 1 >= chars.length || (chars[i + 1] >= "A" && chars[i + 1] <= "Z");
 
             if (!prevUpper || !nextUpperOrEnd) {
-              result.push('_');
+              result.push("_");
             }
           }
           result.push(c.toLowerCase());
@@ -533,8 +531,8 @@ export class TypeMeta {
           result.push(c);
         }
       }
-      return result.join('');
-    }
+      return result.join("");
+    };
 
     for (const typeInfo of typeInfos) {
       const typeId = typeInfo.typeId;
@@ -606,7 +604,7 @@ export class TypeMeta {
       listFields,
       setFields,
       mapFields,
-      otherFields
+      otherFields,
     ].flat();
   }
 }

@@ -17,7 +17,7 @@
  * under the License.
  */
 
-import { ForyTypeInfoSymbol, WithForyClsInfo, Serializer, TypeId, Mode } from "./type";
+import { ForyTypeInfoSymbol, WithForyClsInfo, Serializer, TypeId } from "./type";
 import { Gen } from "./gen";
 import { Type, TypeInfo } from "./typeInfo";
 import Fory from "./fory";
@@ -67,7 +67,7 @@ const uninitSerialize = {
   },
   readClassInfo: () => {
     throw new Error("uninitSerialize");
-  }
+  },
 };
 
 export default class ClassResolver {

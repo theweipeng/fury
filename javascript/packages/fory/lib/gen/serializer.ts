@@ -17,12 +17,11 @@
  * under the License.
  */
 
-import { TypeId, Mode } from "../type";
 import { CodecBuilder } from "./builder";
 import { RefFlags } from "../type";
 import { Scope } from "./scope";
-import { TypeInfo, StructTypeInfo } from "../typeInfo";
-import { isInternalTypeId, isPrimitiveTypeId, TypeMeta } from "../meta/TypeMeta";
+import { TypeInfo } from "../typeInfo";
+import { isPrimitiveTypeId } from "../meta/TypeMeta";
 import { BinaryWriter } from "../writer";
 
 export const makeHead = (flag: RefFlags, typeId: number) => {
@@ -47,11 +46,10 @@ export interface SerializerGenerator {
 
   xreadRef(assignStmt: (v: string) => string): string;
   xreadNoRef(assignStmt: (v: string) => string, refState: string): string;
-  readClassInfo(): string
+  readClassInfo(): string;
   xread(assignStmt: (v: string) => string, refState: string): string;
   xreadEmbed(): any;
   getHash(): string;
-
 
   getType(): number;
   getTypeId(): number | undefined;
@@ -88,8 +86,8 @@ export abstract class BaseSerializerGenerator implements SerializerGenerator {
       get: (target, prop) => {
         return (...args: any[]) => {
           return (this as any)[prop](...args);
-        }
-      }
+        };
+      },
     });
   }
 
@@ -99,8 +97,8 @@ export abstract class BaseSerializerGenerator implements SerializerGenerator {
       get: (target, prop) => {
         return (...args: any[]) => {
           return (this as any)[prop](...args);
-        }
-      }
+        };
+      },
     });
   }
 
@@ -112,18 +110,18 @@ export abstract class BaseSerializerGenerator implements SerializerGenerator {
       if (!${noneedWrite}) {
         ${this.xwriteNoRef(accessor)}
       }
-    `
+    `;
   }
 
   xwriteNoRef(accessor: string) {
     return `
       ${this.writeClassInfo(accessor)};
       ${this.xwrite(accessor)};
-    `
+    `;
   }
 
   writeRefOrNull(assignStmt: (expr: string) => string, accessor: string) {
-    let refFlagStmt = '';
+    let refFlagStmt = "";
     if (this.needToWriteRef()) {
       const existsId = this.scope.uniqueName("existsId");
       refFlagStmt = `
@@ -135,27 +133,26 @@ export abstract class BaseSerializerGenerator implements SerializerGenerator {
             ${this.builder.writer.int8(RefFlags.RefValueFlag)}
             ${this.builder.referenceResolver.writeRef(accessor)}
         }
-      `
+      `;
     } else {
       refFlagStmt = this.builder.writer.int8(RefFlags.NotNullValueFlag);
     }
     return `
       if (${accessor} === null || ${accessor} === undefined) {
         ${this.builder.writer.int8(RefFlags.NullFlag)};
-        ${assignStmt('true')};
+        ${assignStmt("true")};
       } else {
         ${refFlagStmt}
-        ${assignStmt('false')};
+        ${assignStmt("false")};
       }
-    `
+    `;
   }
 
-  writeClassInfo(v: string) {
+  writeClassInfo() {
     return ` 
       ${this.builder.writer.writeVarUint32Small7(this.getTypeId())};
-    `
+    `;
   }
-
 
   getType() {
     return this.typeInfo.typeId;
@@ -177,14 +174,14 @@ export abstract class BaseSerializerGenerator implements SerializerGenerator {
   readClassInfo(): string {
     return `
       ${this.builder.reader.readVarUint32Small7()};
-    `
+    `;
   }
 
   xreadNoRef(assignStmt: (v: string) => string, refState: string): string {
     return `
       ${this.readClassInfo()}
       ${this.xread(assignStmt, refState)};
-    `
+    `;
   }
 
   xreadRef(assignStmt: (v: string) => string): string {
@@ -207,10 +204,10 @@ export abstract class BaseSerializerGenerator implements SerializerGenerator {
   }
 
   protected maybeReference(accessor: string, refState: string) {
-    if (refState === 'false') {
+    if (refState === "false") {
       return "";
     }
-    if (refState === 'true') {
+    if (refState === "true") {
       return this.builder.referenceResolver.reference(accessor);
     }
     return `
@@ -221,7 +218,7 @@ export abstract class BaseSerializerGenerator implements SerializerGenerator {
   }
 
   getHash(): string {
-    return "0"
+    return "0";
   }
 
   toSerializer() {
@@ -248,7 +245,7 @@ export abstract class BaseSerializerGenerator implements SerializerGenerator {
         ${this.xwriteNoRef("v")}
       };
       const writeRefOrNull = (v) => {
-        ${this.writeRefOrNull((expr) => `return ${expr};`, "v")}
+        ${this.writeRefOrNull(expr => `return ${expr};`, "v")}
       };
       const writeClassInfo = (v) => {
         ${this.writeClassInfo("v")}

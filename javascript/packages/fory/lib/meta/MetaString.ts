@@ -223,7 +223,7 @@ export class MetaStringDecoder {
         builder.push(chars[i]);
       }
     }
-    return builder.join('');
+    return builder.join("");
   }
 }
 

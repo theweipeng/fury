@@ -154,15 +154,15 @@ export const TypeId = {
   userDefinedType(id: number) {
     const internalId = id & 0xff;
     return this.structType(id)
-        || this.extType(id)
-        || this.enumType(id)
-        || internalId == TypeId.TYPED_UNION
-        || internalId == TypeId.NAMED_UNION
+      || this.extType(id)
+      || this.enumType(id)
+      || internalId == TypeId.TYPED_UNION
+      || internalId == TypeId.NAMED_UNION;
   },
   isBuiltin(id: number) {
     const internalId = id & 0xff;
-    return !this.userDefinedType(id) && internalId !== TypeId.UNKNOWN
-  }
+    return !this.userDefinedType(id) && internalId !== TypeId.UNKNOWN;
+  },
 } as const;
 
 export enum ConfigFlags {
@@ -179,16 +179,16 @@ export type Serializer<T = any, T2 = any> = {
   getHash: () => number;
 
   // for writing
-  xwrite: (v: T2) => void,
-  xwriteRef: (v: T2) => void,
-  xwriteNoRef: (v: T2) => void,
-  writeRefOrNull: (v: T2) => void,
-  writeClassInfo: (v: T2) => void
+  xwrite: (v: T2) => void;
+  xwriteRef: (v: T2) => void;
+  xwriteNoRef: (v: T2) => void;
+  writeRefOrNull: (v: T2) => void;
+  writeClassInfo: (v: T2) => void;
 
-  xread: (fromRef: boolean) => T2,
-  xreadRef: () => T2,
-  xreadNoRef: (fromRef: boolean) => T2,
-  readClassInfo: () => void,
+  xread: (fromRef: boolean) => T2;
+  xreadRef: () => T2;
+  xreadNoRef: (fromRef: boolean) => T2;
+  readClassInfo: () => void;
 };
 
 export enum RefFlags {
