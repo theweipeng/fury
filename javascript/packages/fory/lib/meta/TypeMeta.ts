@@ -52,7 +52,6 @@ export const isPrimitiveTypeId = (typeId: number): boolean => {
 export const isInternalTypeId = (typeId: number): boolean => {
   return [
     TypeId.STRING,
-    TypeId.LOCAL_DATE,
     TypeId.TIMESTAMP,
     TypeId.DURATION,
     TypeId.DECIMAL,
