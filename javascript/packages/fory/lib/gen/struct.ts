@@ -175,9 +175,8 @@ class StructSerializerGenerator extends BaseSerializerGenerator {
             if (${fieldAccessor} === null || ${fieldAccessor} === undefined) {
               throw new Error('Field ${CodecBuilder.safeString(fieldName)} is not nullable');
             } else {
-              ${innerGenerator.xwrite(fieldAccessor)}
+              ${innerGenerator.xwriteNoRef(fieldAccessor)}
             }
-            ${innerGenerator.xwriteNoRef(fieldAccessor)}
           `
         }
     }
@@ -232,18 +231,16 @@ class StructSerializerGenerator extends BaseSerializerGenerator {
     let namesStmt = '';
     if (!this.builder.fory.isCompatible() && TypeId.isNamedType(this.getTypeId())) {
       namesStmt = `
-      ${
-          // skip the namespace
+        ${
           this.builder.metaStringResolver.readNamespace(this.builder.reader.ownName())
         };
         ${
-          // skip the namespace
           this.builder.metaStringResolver.readTypeName(this.builder.reader.ownName())
         };
       `
     }
     let typeMetaStmt = '';
-    if (this.builder.fory.isCompatible() && TypeId.isNamedType(this.getTypeId())) {
+    if (this.builder.fory.isCompatible()) {
       typeMetaStmt = `
       const ${typeMeta} = ${this.builder.typeMetaResolver.readTypeMeta(this.builder.reader.ownName())};
       if (getHash() !== ${typeMeta}.getHash()) {
