@@ -148,7 +148,7 @@ export abstract class BaseSerializerGenerator implements SerializerGenerator {
     `;
   }
 
-  writeClassInfo() {
+  writeClassInfo(accessor: string) {
     return ` 
       ${this.builder.writer.writeVarUint32Small7(this.getTypeId())};
     `;
