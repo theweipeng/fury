@@ -24,20 +24,19 @@ import (
 	"reflect"
 
 	"github.com/apache/fory/go/fory/meta"
-	"github.com/spaolacci/murmur3"
 )
 
 const (
-	META_SIZE_MASK       = 0xFFF
-	COMPRESS_META_FLAG   = 0b1 << 13
-	HAS_FIELDS_META_FLAG = 0b1 << 12
+	META_SIZE_MASK       = 0xFF
+	COMPRESS_META_FLAG   = 0b1 << 9
+	HAS_FIELDS_META_FLAG = 0b1 << 8
 	NUM_HASH_BITS        = 50
 )
 
 /*
 TypeDef represents a transportable value object containing type information and field definitions.
 typeDef are layout as following:
-  - first 8 bytes: global header (50 bits hash + 1 bit compress flag + write fields meta + 12 bits meta size)
+  - first 8 bytes: global header (50 bits hash + 1 bit compress flag + write fields meta + 8 bits meta size)
   - next 1 byte: meta header (2 bits reserved + 1 bit register by name flag + 5 bits num fields)
   - next variable bytes: type id (varint) or ns name + type name
   - next variable bytes: field definitions (see below)
@@ -427,6 +426,13 @@ func buildFieldDefs(fory *Fory, value reflect.Value) ([]FieldDef, error) {
 
 		nameEncoding := fory.typeResolver.typeNameEncoder.ComputeEncodingWith(fieldName, fieldNameEncodings)
 
+		fieldType := field.Type
+		optionalInfo, isOptional := getOptionalInfo(fieldType)
+		baseType := fieldType
+		if isOptional {
+			baseType = optionalInfo.valueType
+		}
+
 		ft, err := buildFieldType(fory, fieldValue)
 		if err != nil {
 			return nil, fmt.Errorf("failed to build field type for field %s: %w", fieldName, err)
@@ -434,10 +440,10 @@ func buildFieldDefs(fory *Fory, value reflect.Value) ([]FieldDef, error) {
 
 		// Apply encoding override from struct tags if set
 		// This works for both direct types and pointer-wrapped types
-		baseKind := field.Type.Kind()
+		baseKind := baseType.Kind()
 		// Handle pointer types - get the element kind
 		if baseKind == reflect.Ptr {
-			baseKind = field.Type.Elem().Kind()
+			baseKind = baseType.Elem().Kind()
 		}
 
 		// Check if we need to override the TypeID based on compress/encoding tags
@@ -512,16 +518,16 @@ func buildFieldDefs(fory *Fory, value reflect.Value) ([]FieldDef, error) {
 		if fory.config.IsXlang {
 			// xlang mode: only pointer types are nullable by default per xlang spec
 			// Slices and maps are NOT nullable - they serialize as empty when nil
-			nullableFlag = field.Type.Kind() == reflect.Ptr
+			nullableFlag = isOptional || field.Type.Kind() == reflect.Ptr
 		} else {
 			// Native mode: Go's natural semantics - all nil-able types are nullable
-			nullableFlag = field.Type.Kind() == reflect.Ptr ||
+			nullableFlag = isOptional || field.Type.Kind() == reflect.Ptr ||
 				field.Type.Kind() == reflect.Slice ||
 				field.Type.Kind() == reflect.Map ||
 				field.Type.Kind() == reflect.Interface
 		}
 		// Override nullable flag if explicitly set in fory tag
-		if foryTag.NullableSet {
+		if foryTag.NullableSet && !isOptional {
 			nullableFlag = foryTag.Nullable
 		}
 		// Primitives are never nullable, regardless of tag
@@ -968,6 +974,10 @@ func (d *DynamicFieldType) getTypeInfoWithResolver(resolver *TypeResolver) (Type
 // buildFieldType builds field type from reflect.Type, handling collection, map recursively
 func buildFieldType(fory *Fory, fieldValue reflect.Value) (FieldType, error) {
 	fieldType := fieldValue.Type()
+	if info, ok := getOptionalInfo(fieldType); ok {
+		fieldType = info.valueType
+		fieldValue = reflect.Zero(fieldType)
+	}
 	// Handle Interface type, we can't determine the actual type here, so leave it as dynamic type
 	if fieldType.Kind() == reflect.Interface {
 		return NewDynamicFieldType(UNKNOWN), nil
@@ -1090,7 +1100,7 @@ func getFieldNameEncodingIndex(encoding meta.Encoding) int {
 /*
 encodingTypeDef encodes a TypeDef into binary format according to the specification
 typeDef are layout as following:
-- first 8 bytes: global header (50 bits hash + 1 bit compress flag + write fields meta + 12 bits meta size)
+- first 8 bytes: global header (50 bits hash + 1 bit compress flag + write fields meta + 8 bits meta size)
 - next 1 byte: meta header (2 bits reserved + 1 bit register by name flag + 5 bits num fields)
 - next variable bytes: type id (varint) or ns name + type name
 - next variable bytes: field defs (see below)
@@ -1222,7 +1232,7 @@ func prependGlobalHeader(buffer *ByteBuffer, isCompressed bool, hasFieldsMeta bo
 	var header uint64
 	metaSize := buffer.WriterIndex()
 
-	hashValue := murmur3.Sum64WithSeed(buffer.GetByteSlice(0, metaSize), 47)
+	hashValue := Murmur3Sum64WithSeed(buffer.GetByteSlice(0, metaSize), 47)
 	header |= hashValue << (64 - NUM_HASH_BITS)
 
 	if hasFieldsMeta {
@@ -1234,9 +1244,9 @@ func prependGlobalHeader(buffer *ByteBuffer, isCompressed bool, hasFieldsMeta bo
 	}
 
 	if metaSize < META_SIZE_MASK {
-		header |= uint64(metaSize) & 0xFFF
+		header |= uint64(metaSize) & META_SIZE_MASK
 	} else {
-		header |= 0xFFF // Set to max value, actual size will follow
+		header |= META_SIZE_MASK // Set to max value, actual size will follow
 	}
 
 	result := NewByteBuffer(make([]byte, metaSize+8))
@@ -1351,7 +1361,7 @@ func writeFieldDef(typeResolver *TypeResolver, buffer *ByteBuffer, field FieldDe
 /*
 decodeTypeDef decodes a TypeDef from the buffer
 typeDef are layout as following:
-  - first 8 bytes: global header (50 bits hash + 1 bit compress flag + write fields meta + 12 bits meta size)
+  - first 8 bytes: global header (50 bits hash + 1 bit compress flag + write fields meta + 8 bits meta size)
   - next 1 byte: meta header (2 bits reserved + 1 bit register by name flag + 5 bits num fields)
   - next variable bytes: type id (varint) or ns name + type name
   - next variable bytes: field definitions (see below)

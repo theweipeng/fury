@@ -157,7 +157,7 @@ public class Types {
    * A naive date without timezone. The count is days relative to an epoch at UTC midnight on Jan 1,
    * 1970.
    */
-  public static final int LOCAL_DATE = 37;
+  public static final int DATE = 37;
 
   /** Exact decimal value represented as an integer value in two's complement. */
   public static final int DECIMAL = 38;
@@ -351,7 +351,7 @@ public class Types {
   }
 
   private static int getUnionDescriptorTypeId(Fory fory, Class<?> rawType) {
-    ClassInfo classInfo = fory._getTypeResolver().getClassInfo(rawType, false);
+    ClassInfo classInfo = fory.getTypeResolver().getClassInfo(rawType, false);
     if (classInfo == null) {
       return -1;
     }
@@ -385,7 +385,7 @@ public class Types {
         return Types.FLOAT64;
       }
     }
-    ClassInfo classInfo = fory._getTypeResolver().getClassInfo(clz, false);
+    ClassInfo classInfo = fory.getTypeResolver().getClassInfo(clz, false);
     if (classInfo != null) {
       return classInfo.getTypeId();
     }

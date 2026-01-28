@@ -28,6 +28,10 @@ import addressbook.Person;
 import addressbook.Person.PhoneNumber;
 import addressbook.Person.PhoneType;
 import addressbook.PrimitiveTypes;
+import any_example.AnyExampleForyRegistration;
+import any_example.AnyHolder;
+import any_example.AnyInner;
+import any_example.AnyUnion;
 import complex_fbs.ComplexFbsForyRegistration;
 import complex_fbs.Container;
 import complex_fbs.Metric;
@@ -35,6 +39,16 @@ import complex_fbs.Note;
 import complex_fbs.Payload;
 import complex_fbs.ScalarPack;
 import complex_fbs.Status;
+import graph.Edge;
+import graph.Graph;
+import graph.GraphForyRegistration;
+import graph.Node;
+import optional_types.AllOptionalTypes;
+import optional_types.OptionalHolder;
+import optional_types.OptionalTypesForyRegistration;
+import optional_types.OptionalUnion;
+import tree.TreeForyRegistration;
+import tree.TreeNode;
 import monster.Color;
 import monster.Monster;
 import monster.MonsterForyRegistration;
@@ -44,6 +58,8 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -114,6 +130,108 @@ public class IdlRoundTripTest {
       Object roundTrip = fory.deserialize(peerBytes);
       Assert.assertTrue(roundTrip instanceof PrimitiveTypes);
       Assert.assertEquals(roundTrip, types);
+    }
+  }
+
+  @Test
+  public void testOptionalTypesRoundTrip() throws Exception {
+    Fory fory = Fory.builder().withLanguage(Language.XLANG).build();
+    OptionalTypesForyRegistration.register(fory);
+
+    OptionalHolder holder = buildOptionalHolder();
+    byte[] bytes = fory.serialize(holder);
+    Object decoded = fory.deserialize(bytes);
+
+    Assert.assertTrue(decoded instanceof OptionalHolder);
+    Assert.assertEquals(decoded, holder);
+
+    for (String peer : resolvePeers()) {
+      Path dataFile = Files.createTempFile("idl-optional-" + peer + "-", ".bin");
+      dataFile.toFile().deleteOnExit();
+      Files.write(dataFile, bytes);
+
+      Map<String, String> env = new HashMap<>();
+      env.put("DATA_FILE_OPTIONAL_TYPES", dataFile.toAbsolutePath().toString());
+      PeerCommand command = buildPeerCommand(peer, env);
+      runPeer(command, peer);
+
+      byte[] peerBytes = Files.readAllBytes(dataFile);
+      Object roundTrip = fory.deserialize(peerBytes);
+      Assert.assertTrue(roundTrip instanceof OptionalHolder);
+      Assert.assertEquals(roundTrip, holder);
+    }
+  }
+
+  @Test
+  public void testAnyRoundTrip() {
+    Fory fory = Fory.builder().withLanguage(Language.XLANG).build();
+    AnyExampleForyRegistration.register(fory);
+
+    AnyHolder holder = buildAnyHolder();
+    byte[] bytes = fory.serialize(holder);
+    Object decoded = fory.deserialize(bytes);
+
+    Assert.assertTrue(decoded instanceof AnyHolder);
+    Assert.assertEquals(decoded, holder);
+  }
+
+  @Test
+  public void testTreeRoundTrip() throws Exception {
+    Fory fory = Fory.builder().withLanguage(Language.XLANG).withRefTracking(true).build();
+    TreeForyRegistration.register(fory);
+
+    TreeNode tree = buildTree();
+    byte[] bytes = fory.serialize(tree);
+    Object decoded = fory.deserialize(bytes);
+
+    Assert.assertTrue(decoded instanceof TreeNode);
+    TreeNode roundTrip = (TreeNode) decoded;
+    assertTree(roundTrip);
+
+    for (String peer : resolvePeers()) {
+      Path dataFile = Files.createTempFile("idl-tree-" + peer + "-", ".bin");
+      dataFile.toFile().deleteOnExit();
+      Files.write(dataFile, bytes);
+
+      Map<String, String> env = new HashMap<>();
+      env.put("DATA_FILE_TREE", dataFile.toAbsolutePath().toString());
+      PeerCommand command = buildPeerCommand(peer, env);
+      runPeer(command, peer);
+
+      byte[] peerBytes = Files.readAllBytes(dataFile);
+      Object peerRoundTrip = fory.deserialize(peerBytes);
+      Assert.assertTrue(peerRoundTrip instanceof TreeNode);
+      assertTree((TreeNode) peerRoundTrip);
+    }
+  }
+
+  @Test
+  public void testGraphRoundTrip() throws Exception {
+    Fory fory = Fory.builder().withLanguage(Language.XLANG).withRefTracking(true).build();
+    GraphForyRegistration.register(fory);
+
+    Graph graph = buildGraph();
+    byte[] bytes = fory.serialize(graph);
+    Object decoded = fory.deserialize(bytes);
+
+    Assert.assertTrue(decoded instanceof Graph);
+    Graph roundTrip = (Graph) decoded;
+    assertGraph(roundTrip);
+
+    for (String peer : resolvePeers()) {
+      Path dataFile = Files.createTempFile("idl-graph-" + peer + "-", ".bin");
+      dataFile.toFile().deleteOnExit();
+      Files.write(dataFile, bytes);
+
+      Map<String, String> env = new HashMap<>();
+      env.put("DATA_FILE_GRAPH", dataFile.toAbsolutePath().toString());
+      PeerCommand command = buildPeerCommand(peer, env);
+      runPeer(command, peer);
+
+      byte[] peerBytes = Files.readAllBytes(dataFile);
+      Object peerRoundTrip = fory.deserialize(peerBytes);
+      Assert.assertTrue(peerRoundTrip instanceof Graph);
+      assertGraph((Graph) peerRoundTrip);
     }
   }
 
@@ -321,7 +439,6 @@ public class IdlRoundTripTest {
     types.setUint64Value(9876543210L);
     types.setVarUint64Value(12345678901L);
     types.setTaggedUint64Value(2222222222L);
-    types.setFloat16Value(1.5f);
     types.setFloat32Value(2.5f);
     types.setFloat64Value(3.5d);
     PrimitiveTypes.Contact contact = PrimitiveTypes.Contact.ofEmail("alice@example.com");
@@ -345,6 +462,130 @@ public class IdlRoundTripTest {
     monster.setInventory(new byte[] {(byte) 1, (byte) 2, (byte) 3});
     monster.setColor(Color.Blue);
     return monster;
+  }
+
+  private OptionalHolder buildOptionalHolder() {
+    AllOptionalTypes allTypes = new AllOptionalTypes();
+    allTypes.setBoolValue(true);
+    allTypes.setInt8Value((byte) 12);
+    allTypes.setInt16Value((short) 1234);
+    allTypes.setInt32Value(-123456);
+    allTypes.setFixedInt32Value(-123456);
+    allTypes.setVarint32Value(-12345);
+    allTypes.setInt64Value(-123456789L);
+    allTypes.setFixedInt64Value(-123456789L);
+    allTypes.setVarint64Value(-987654321L);
+    allTypes.setTaggedInt64Value(123456789L);
+    allTypes.setUint8Value((byte) 200);
+    allTypes.setUint16Value((short) 60000);
+    allTypes.setUint32Value(1234567890);
+    allTypes.setFixedUint32Value(1234567890);
+    allTypes.setVarUint32Value(1234567890);
+    allTypes.setUint64Value(9876543210L);
+    allTypes.setFixedUint64Value(9876543210L);
+    allTypes.setVarUint64Value(12345678901L);
+    allTypes.setTaggedUint64Value(2222222222L);
+    allTypes.setFloat32Value(2.5f);
+    allTypes.setFloat64Value(3.5);
+    allTypes.setStringValue("optional");
+    allTypes.setBytesValue(new byte[] {1, 2, 3});
+    allTypes.setDateValue(LocalDate.of(2024, 1, 2));
+    allTypes.setTimestampValue(Instant.parse("2024-01-02T03:04:05Z"));
+    allTypes.setInt32List(new int[] {1, 2, 3});
+    allTypes.setStringList(Arrays.asList("alpha", "beta"));
+    Map<String, Long> int64Map = new HashMap<>();
+    int64Map.put("alpha", 10L);
+    int64Map.put("beta", 20L);
+    allTypes.setInt64Map(int64Map);
+
+    OptionalHolder holder = new OptionalHolder();
+    holder.setAllTypes(allTypes);
+    holder.setChoice(OptionalUnion.ofNote("optional"));
+    return holder;
+  }
+
+  private AnyHolder buildAnyHolder() {
+    AnyInner inner = new AnyInner();
+    inner.setName("inner");
+
+    AnyHolder holder = new AnyHolder();
+    holder.setBoolValue(Boolean.TRUE);
+    holder.setStringValue("hello");
+    holder.setDateValue(LocalDate.of(2024, 1, 2));
+    holder.setTimestampValue(Instant.ofEpochSecond(1704164645L));
+    holder.setMessageValue(inner);
+    holder.setUnionValue(AnyUnion.ofText("union"));
+    holder.setListValue(Arrays.asList("alpha", "beta"));
+    holder.setMapValue(new HashMap<>(Map.of("k1", "v1", "k2", "v2")));
+    return holder;
+  }
+
+  private TreeNode buildTree() {
+    TreeNode childA = new TreeNode();
+    childA.setId("child-a");
+    childA.setName("child-a");
+    childA.setChildren(Collections.emptyList());
+
+    TreeNode childB = new TreeNode();
+    childB.setId("child-b");
+    childB.setName("child-b");
+    childB.setChildren(Collections.emptyList());
+
+    childA.setParent(childB);
+    childB.setParent(childA);
+
+    TreeNode root = new TreeNode();
+    root.setId("root");
+    root.setName("root");
+    root.setChildren(Arrays.asList(childA, childA, childB));
+    return root;
+  }
+
+  private void assertTree(TreeNode root) {
+    List<TreeNode> children = root.getChildren();
+    Assert.assertNotNull(children);
+    Assert.assertEquals(children.size(), 3);
+    Assert.assertSame(children.get(0), children.get(1));
+    Assert.assertNotSame(children.get(0), children.get(2));
+    Assert.assertSame(children.get(0).getParent(), children.get(2));
+    Assert.assertSame(children.get(2).getParent(), children.get(0));
+  }
+
+  private Graph buildGraph() {
+    Node nodeA = new Node();
+    nodeA.setId("node-a");
+    Node nodeB = new Node();
+    nodeB.setId("node-b");
+
+    Edge edge = new Edge();
+    edge.setId("edge-1");
+    edge.setWeight(1.5f);
+    edge.setFrom(nodeA);
+    edge.setTo(nodeB);
+
+    nodeA.setOutEdges(Collections.singletonList(edge));
+    nodeA.setInEdges(Collections.singletonList(edge));
+    nodeB.setInEdges(Collections.singletonList(edge));
+    nodeB.setOutEdges(Collections.emptyList());
+
+    Graph graph = new Graph();
+    graph.setNodes(Arrays.asList(nodeA, nodeB));
+    graph.setEdges(Collections.singletonList(edge));
+    return graph;
+  }
+
+  private void assertGraph(Graph graph) {
+    Assert.assertNotNull(graph.getNodes());
+    Assert.assertNotNull(graph.getEdges());
+    Assert.assertEquals(graph.getNodes().size(), 2);
+    Assert.assertEquals(graph.getEdges().size(), 1);
+    Node nodeA = graph.getNodes().get(0);
+    Node nodeB = graph.getNodes().get(1);
+    Edge edge = graph.getEdges().get(0);
+    Assert.assertSame(edge, nodeA.getOutEdges().get(0));
+    Assert.assertSame(edge, nodeA.getInEdges().get(0));
+    Assert.assertSame(edge.getFrom(), nodeA);
+    Assert.assertSame(edge.getTo(), nodeB);
   }
 
   private Container buildContainer() {

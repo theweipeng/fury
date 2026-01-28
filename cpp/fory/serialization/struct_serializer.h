@@ -547,7 +547,10 @@ template <typename T> struct CompileTimeFieldHelpers {
       }
       // Else if FORY_FIELD_TAGS is defined, use that metadata
       else if constexpr (::fory::detail::has_field_tags_v<T>) {
-        return ::fory::detail::GetFieldTagEntry<T, Index>::is_nullable;
+        if constexpr (::fory::detail::GetFieldTagEntry<T, Index>::has_entry) {
+          return ::fory::detail::GetFieldTagEntry<T, Index>::is_nullable;
+        }
+        return field_is_nullable_v<RawFieldType>;
       }
       // For non-wrapped types, use xlang defaults:
       // Only std::optional is nullable (field_is_nullable_v returns true for
@@ -601,7 +604,7 @@ template <typename T> struct CompileTimeFieldHelpers {
   }
 
   /// Returns true if reference tracking is enabled for the field at Index.
-  /// Only valid for std::shared_ptr fields with fory::ref tag.
+  /// Defaults to true for std::shared_ptr/SharedWeak fields.
   template <size_t Index> static constexpr bool field_track_ref() {
     if constexpr (FieldCount == 0) {
       return false;
@@ -617,9 +620,9 @@ template <typename T> struct CompileTimeFieldHelpers {
       else if constexpr (::fory::detail::has_field_tags_v<T>) {
         return ::fory::detail::GetFieldTagEntry<T, Index>::track_ref;
       }
-      // Default: no reference tracking
+      // Default: shared_ptr/SharedWeak track refs
       else {
-        return false;
+        return field_track_ref_v<RawFieldType>;
       }
     }
   }
@@ -1041,7 +1044,7 @@ template <typename T> struct CompileTimeFieldHelpers {
   }
 
   /// Check if a type ID is an internal (built-in, final) type for group 2.
-  /// Internal types are STRING, DURATION, TIMESTAMP, LOCAL_DATE, DECIMAL,
+  /// Internal types are STRING, DURATION, TIMESTAMP, DATE, DECIMAL,
   /// BINARY, ARRAY, and primitive arrays. Java xlang DescriptorGrouper excludes
   /// enums from finals (line 897 in XtypeResolver). Excludes: ENUM (13-14),
   /// STRUCT (15-18), EXT (19-20), LIST (21), SET (22), MAP (23)
@@ -2788,11 +2791,9 @@ struct Serializer<T, std::enable_if_t<is_fory_serializable_v<T>>> {
       return;
     }
     const TypeInfo *type_info = type_info_res.value();
-    ctx.write_varuint32(type_info->type_id);
-
-    // In compatible mode, write type meta inline (streaming protocol)
-    if (ctx.is_compatible() && type_info->type_meta) {
-      ctx.write_type_meta(type_info);
+    auto write_result = ctx.write_struct_type_info(type_info);
+    if (FORY_PREDICT_FALSE(!write_result.ok())) {
+      ctx.set_error(std::move(write_result).error());
     }
   }
 

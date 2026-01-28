@@ -608,10 +608,18 @@ class DataClassSerializer(Serializer):
                 # Use gen_write_nullable_basic_stmts for nullable basic types
                 if isinstance(serializer, BooleanSerializer):
                     stmts.extend(gen_write_nullable_basic_stmts(buffer, field_value, bool))
-                elif isinstance(serializer, (ByteSerializer, Int16Serializer, Int32Serializer, Int64Serializer)):
-                    stmts.extend(gen_write_nullable_basic_stmts(buffer, field_value, int))
-                elif isinstance(serializer, (Float32Serializer, Float64Serializer)):
-                    stmts.extend(gen_write_nullable_basic_stmts(buffer, field_value, float))
+                elif isinstance(serializer, ByteSerializer):
+                    stmts.extend(gen_write_nullable_basic_stmts(buffer, field_value, "int8"))
+                elif isinstance(serializer, Int16Serializer):
+                    stmts.extend(gen_write_nullable_basic_stmts(buffer, field_value, "int16"))
+                elif isinstance(serializer, Int32Serializer):
+                    stmts.extend(gen_write_nullable_basic_stmts(buffer, field_value, "int32"))
+                elif isinstance(serializer, Int64Serializer):
+                    stmts.extend(gen_write_nullable_basic_stmts(buffer, field_value, "int64"))
+                elif isinstance(serializer, Float32Serializer):
+                    stmts.extend(gen_write_nullable_basic_stmts(buffer, field_value, "float32"))
+                elif isinstance(serializer, Float64Serializer):
+                    stmts.extend(gen_write_nullable_basic_stmts(buffer, field_value, "float64"))
                 elif isinstance(serializer, StringSerializer):
                     stmts.extend(gen_write_nullable_basic_stmts(buffer, field_value, str))
                 else:
@@ -698,10 +706,18 @@ class DataClassSerializer(Serializer):
                 # Use gen_read_nullable_basic_stmts for nullable basic types
                 if isinstance(serializer, BooleanSerializer):
                     field_stmts.extend(gen_read_nullable_basic_stmts(buffer, bool, lambda v: f"{field_value} = {v}"))
-                elif isinstance(serializer, (ByteSerializer, Int16Serializer, Int32Serializer, Int64Serializer)):
-                    field_stmts.extend(gen_read_nullable_basic_stmts(buffer, int, lambda v: f"{field_value} = {v}"))
-                elif isinstance(serializer, (Float32Serializer, Float64Serializer)):
-                    field_stmts.extend(gen_read_nullable_basic_stmts(buffer, float, lambda v: f"{field_value} = {v}"))
+                elif isinstance(serializer, ByteSerializer):
+                    field_stmts.extend(gen_read_nullable_basic_stmts(buffer, "int8", lambda v: f"{field_value} = {v}"))
+                elif isinstance(serializer, Int16Serializer):
+                    field_stmts.extend(gen_read_nullable_basic_stmts(buffer, "int16", lambda v: f"{field_value} = {v}"))
+                elif isinstance(serializer, Int32Serializer):
+                    field_stmts.extend(gen_read_nullable_basic_stmts(buffer, "int32", lambda v: f"{field_value} = {v}"))
+                elif isinstance(serializer, Int64Serializer):
+                    field_stmts.extend(gen_read_nullable_basic_stmts(buffer, "int64", lambda v: f"{field_value} = {v}"))
+                elif isinstance(serializer, Float32Serializer):
+                    field_stmts.extend(gen_read_nullable_basic_stmts(buffer, "float32", lambda v: f"{field_value} = {v}"))
+                elif isinstance(serializer, Float64Serializer):
+                    field_stmts.extend(gen_read_nullable_basic_stmts(buffer, "float64", lambda v: f"{field_value} = {v}"))
                 elif isinstance(serializer, StringSerializer):
                     field_stmts.extend(gen_read_nullable_basic_stmts(buffer, str, lambda v: f"{field_value} = {v}"))
                 else:
@@ -1057,7 +1073,7 @@ class DataClassSerializer(Serializer):
                 if ref_id == -3:
                     field_value = None
                 else:
-                    buffer.reader_index -= 1
+                    buffer.set_reader_index(buffer.get_reader_index() - 1)
                     # dynamic=True: don't pass serializer, read type info from buffer
                     # dynamic=False: pass serializer, use declared type
                     field_value = self.fory.xread_ref(buffer, serializer=None if is_dynamic else serializer)

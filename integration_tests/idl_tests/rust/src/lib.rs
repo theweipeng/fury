@@ -16,5 +16,9 @@
 // under the License.
 
 pub mod addressbook;
+pub mod any_example;
 pub mod complex_fbs;
 pub mod monster;
+pub mod optional_types;
+pub mod graph;
+pub mod tree;

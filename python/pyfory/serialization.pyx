@@ -363,7 +363,7 @@ cdef class MetaStringResolver:
             hashcode = ((v1 * 31 + v2) >> 8 << 8) | encoding
             enum_str_ptr = self._c_hash_to_small_metastring_bytes[hashcode]
             if enum_str_ptr == NULL:
-                reader_index = buffer.reader_index
+                reader_index = buffer.get_reader_index()
                 str_bytes = buffer.get_bytes(reader_index - length, length)
                 enum_str = MetaStringBytes(str_bytes, hashcode=hashcode)
                 self._enum_str_set.add(enum_str)
@@ -371,9 +371,9 @@ cdef class MetaStringResolver:
                 self._c_hash_to_small_metastring_bytes[hashcode] = enum_str_ptr
         else:
             hashcode = buffer.read_int64()
-            reader_index = buffer.reader_index
+            reader_index = buffer.get_reader_index()
             buffer.check_bound(reader_index, length)
-            buffer.reader_index = reader_index + length
+            buffer.set_reader_index(reader_index + length)
             enum_str_ptr = self._c_hash_to_metastr_bytes[hashcode]
             if enum_str_ptr == NULL:
                 str_bytes = buffer.get_bytes(reader_index, length)
@@ -943,6 +943,7 @@ cdef class Fory:
     cdef object _unsupported_callback
     cdef object _unsupported_objects  # iterator
     cdef object _peer_language
+    cdef public bint is_peer_out_of_band_enabled
     cdef int32_t max_depth
     cdef int32_t depth
 
@@ -1030,6 +1031,7 @@ cdef class Fory:
         self._unsupported_callback = None
         self._unsupported_objects = None
         self._peer_language = None
+        self.is_peer_out_of_band_enabled = False
         self.depth = 0
         self.max_depth = max_depth
 
@@ -1220,12 +1222,12 @@ cdef class Fory:
         self.buffer_callback = buffer_callback
         self._unsupported_callback = unsupported_callback
         if buffer is None:
-            self.buffer.writer_index = 0
+            self.buffer.set_writer_index(0)
             buffer = self.buffer
-        cdef int32_t mask_index = buffer.writer_index
+        cdef int32_t mask_index = buffer.get_writer_index()
         # 1byte used for bit mask
         buffer.grow(1)
-        buffer.writer_index = mask_index + 1
+        buffer.set_writer_index(mask_index + 1)
         if obj is None:
             set_bit(buffer, mask_index, 0)
         else:
@@ -1252,7 +1254,7 @@ cdef class Fory:
         if buffer is not self.buffer:
             return buffer
         else:
-            return buffer.to_bytes(0, buffer.writer_index)
+            return buffer.to_bytes(0, buffer.get_writer_index())
 
     cpdef inline write_ref(
             self, Buffer buffer, obj, TypeInfo typeinfo=None):
@@ -1367,8 +1369,8 @@ cdef class Fory:
         self.depth += 1
         if unsupported_objects is not None:
             self._unsupported_objects = iter(unsupported_objects)
-        cdef int32_t reader_index = buffer.reader_index
-        buffer.reader_index = reader_index + 1
+        cdef int32_t reader_index = buffer.get_reader_index()
+        buffer.set_reader_index(reader_index + 1)
         if get_bit(buffer, reader_index, 0):
             return None
         cdef c_bool is_target_x_lang = get_bit(buffer, reader_index, 1)
@@ -1376,9 +1378,8 @@ cdef class Fory:
             self._peer_language = Language(buffer.read_int8())
         else:
             self._peer_language = Language.PYTHON
-        cdef c_bool is_out_of_band_serialization_enabled = \
-            get_bit(buffer, reader_index, 2)
-        if is_out_of_band_serialization_enabled:
+        self.is_peer_out_of_band_enabled = get_bit(buffer, reader_index, 2)
+        if self.is_peer_out_of_band_enabled:
             assert buffers is not None, (
                 "buffers shouldn't be null when the serialized stream is "
                 "produced with buffer_callback not null."
@@ -1495,27 +1496,47 @@ cdef class Fory:
         cdef int32_t size
         cdef int32_t writer_index
         cdef Buffer buf
-        if self.buffer_callback is None or self.buffer_callback(buffer_object):
+        if self.buffer_callback is None:
+            size = buffer_object.total_bytes()
+            # writer length.
+            buffer.write_varuint32(size)
+            writer_index = buffer.get_writer_index()
+            buffer.ensure(writer_index + size)
+            buf = buffer.slice(writer_index, size)
+            buffer_object.write_to(buf)
+            buffer.set_writer_index(writer_index + size)
+            return
+        if self.buffer_callback(buffer_object):
             buffer.write_bool(True)
             size = buffer_object.total_bytes()
             # writer length.
             buffer.write_varuint32(size)
-            writer_index = buffer.writer_index
+            writer_index = buffer.get_writer_index()
             buffer.ensure(writer_index + size)
-            buf = buffer.slice(buffer.writer_index, size)
+            buf = buffer.slice(writer_index, size)
             buffer_object.write_to(buf)
-            buffer.writer_index += size
+            buffer.set_writer_index(writer_index + size)
         else:
             buffer.write_bool(False)
 
     cpdef inline object read_buffer_object(self, Buffer buffer):
-        cdef c_bool in_band = buffer.read_bool()
+        cdef c_bool in_band
+        cdef int32_t size
+        cdef Buffer buf
+        if not self.is_peer_out_of_band_enabled:
+            size = buffer.read_varuint32()
+            reader_index = buffer.get_reader_index()
+            buf = buffer.slice(reader_index, size)
+            buffer.set_reader_index(reader_index + size)
+            return buf
+        in_band = buffer.read_bool()
         if not in_band:
             assert self._buffers is not None
             return next(self._buffers)
-        cdef int32_t size = buffer.read_varuint32()
-        cdef Buffer buf = buffer.slice(buffer.reader_index, size)
-        buffer.reader_index += size
+        size = buffer.read_varuint32()
+        reader_index = buffer.get_reader_index()
+        buf = buffer.slice(reader_index, size)
+        buffer.set_reader_index(reader_index + size)
         return buf
 
     cpdef handle_unsupported_write(self, buffer, obj):
@@ -1576,6 +1597,7 @@ cdef class Fory:
         self.serialization_context.reset_read()
         self._buffers = None
         self._unsupported_objects = None
+        self.is_peer_out_of_band_enabled = False
 
     cpdef inline reset(self):
         """
@@ -1595,12 +1617,40 @@ cpdef inline write_nullable_pybool(Buffer buffer, value):
         buffer.write_int8(NOT_NULL_VALUE_FLAG)
         buffer.write_bool(value)
 
+cpdef inline write_nullable_int8(Buffer buffer, value):
+    if value is None:
+        buffer.write_int8(NULL_FLAG)
+    else:
+        buffer.write_int8(NOT_NULL_VALUE_FLAG)
+        buffer.write_int8(value)
+
+cpdef inline write_nullable_int16(Buffer buffer, value):
+    if value is None:
+        buffer.write_int8(NULL_FLAG)
+    else:
+        buffer.write_int8(NOT_NULL_VALUE_FLAG)
+        buffer.write_int16(value)
+
+cpdef inline write_nullable_int32(Buffer buffer, value):
+    if value is None:
+        buffer.write_int8(NULL_FLAG)
+    else:
+        buffer.write_int8(NOT_NULL_VALUE_FLAG)
+        buffer.write_varint32(value)
+
 cpdef inline write_nullable_pyint64(Buffer buffer, value):
     if value is None:
         buffer.write_int8(NULL_FLAG)
     else:
         buffer.write_int8(NOT_NULL_VALUE_FLAG)
         buffer.write_varint64(value)
+
+cpdef inline write_nullable_float32(Buffer buffer, value):
+    if value is None:
+        buffer.write_int8(NULL_FLAG)
+    else:
+        buffer.write_int8(NOT_NULL_VALUE_FLAG)
+        buffer.write_float32(value)
 
 cpdef inline write_nullable_pyfloat64(Buffer buffer, value):
     if value is None:
@@ -1622,9 +1672,33 @@ cpdef inline read_nullable_pybool(Buffer buffer):
     else:
         return None
 
+cpdef inline read_nullable_int8(Buffer buffer):
+    if buffer.read_int8() == NOT_NULL_VALUE_FLAG:
+        return buffer.read_int8()
+    else:
+        return None
+
+cpdef inline read_nullable_int16(Buffer buffer):
+    if buffer.read_int8() == NOT_NULL_VALUE_FLAG:
+        return buffer.read_int16()
+    else:
+        return None
+
+cpdef inline read_nullable_int32(Buffer buffer):
+    if buffer.read_int8() == NOT_NULL_VALUE_FLAG:
+        return buffer.read_varint32()
+    else:
+        return None
+
 cpdef inline read_nullable_pyint64(Buffer buffer):
     if buffer.read_int8() == NOT_NULL_VALUE_FLAG:
         return buffer.read_varint64()
+    else:
+        return None
+
+cpdef inline read_nullable_float32(Buffer buffer):
+    if buffer.read_int8() == NOT_NULL_VALUE_FLAG:
+        return buffer.read_float32()
     else:
         return None
 

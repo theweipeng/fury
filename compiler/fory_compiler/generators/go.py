@@ -182,8 +182,9 @@ class GoGenerator(BaseGenerator):
         PrimitiveKind.FLOAT64: "float64",
         PrimitiveKind.STRING: "string",
         PrimitiveKind.BYTES: "[]byte",
-        PrimitiveKind.DATE: "time.Time",
+        PrimitiveKind.DATE: "fory.Date",
         PrimitiveKind.TIMESTAMP: "time.Time",
+        PrimitiveKind.ANY: "any",
     }
 
     def generate(self) -> List[GeneratedFile]:
@@ -268,6 +269,8 @@ class GoGenerator(BaseGenerator):
         """Collect imports for a message and its nested types recursively."""
         for field in message.fields:
             self.collect_imports(field.field_type, imports)
+            if self.field_uses_option(field):
+                imports.add('optional "github.com/apache/fory/go/fory/optional"')
         for nested_msg in message.nested_messages:
             self.collect_message_imports(nested_msg, imports)
         for nested_union in message.nested_unions:
@@ -458,8 +461,9 @@ class GoGenerator(BaseGenerator):
                 PrimitiveKind.FLOAT64: "fory.FLOAT64",
                 PrimitiveKind.STRING: "fory.STRING",
                 PrimitiveKind.BYTES: "fory.BINARY",
-                PrimitiveKind.DATE: "fory.LOCAL_DATE",
+                PrimitiveKind.DATE: "fory.DATE",
                 PrimitiveKind.TIMESTAMP: "fory.TIMESTAMP",
+                PrimitiveKind.ANY: "fory.UNKNOWN",
             }
             return primitive_type_ids.get(kind, "fory.UNKNOWN")
         if isinstance(field.field_type, ListType):
@@ -471,15 +475,15 @@ class GoGenerator(BaseGenerator):
             if isinstance(type_def, Enum):
                 if type_def.type_id is None:
                     return "fory.NAMED_ENUM"
-                return f"({type_def.type_id} << 8) | fory.ENUM"
+                return "fory.ENUM"
             if isinstance(type_def, Union):
                 if type_def.type_id is None:
                     return "fory.NAMED_UNION"
-                return f"({type_def.type_id} << 8) | fory.UNION"
+                return "fory.UNION"
             if isinstance(type_def, Message):
                 if type_def.type_id is None:
                     return "fory.NAMED_STRUCT"
-                return f"({type_def.type_id} << 8) | fory.STRUCT"
+                return "fory.STRUCT"
         return "fory.UNKNOWN"
 
     def get_union_case_reflect_type_expr(
@@ -603,11 +607,15 @@ class GoGenerator(BaseGenerator):
         is_list = isinstance(field.field_type, ListType)
         is_map = isinstance(field.field_type, MapType)
         is_collection = is_list or is_map
+        is_any = (
+            isinstance(field.field_type, PrimitiveType)
+            and field.field_type.kind == PrimitiveKind.ANY
+        )
         nullable_tag: Optional[bool] = None
         ref_tag: Optional[bool] = None
         if field.tag_id is not None:
             tags.append(f"id={field.tag_id}")
-        if field.optional:
+        if field.optional or is_any:
             nullable_tag = True
         elif is_collection and (
             field.ref or (is_list and (field.element_optional or field.element_ref))
@@ -616,8 +624,6 @@ class GoGenerator(BaseGenerator):
 
         if field.ref:
             ref_tag = True
-        elif is_list and field.element_ref:
-            ref_tag = False
 
         if nullable_tag is True:
             tags.append("nullable")
@@ -677,6 +683,20 @@ class GoGenerator(BaseGenerator):
             return "type=uint8_array"
         return None
 
+    def field_uses_option(self, field: Field) -> bool:
+        """Return True if field should use optional.Optional in generated Go code."""
+        if not field.optional or field.ref:
+            return False
+        if isinstance(field.field_type, PrimitiveType):
+            if field.field_type.kind == PrimitiveKind.ANY:
+                return False
+            base_type = self.PRIMITIVE_MAP[field.field_type.kind]
+            return base_type not in ("[]byte", "time.Time", "fory.Date")
+        if isinstance(field.field_type, NamedType):
+            named_type = self.schema.get_type(field.field_type.name)
+            return isinstance(named_type, Enum)
+        return False
+
     def generate_type(
         self,
         field_type: FieldType,
@@ -685,17 +705,32 @@ class GoGenerator(BaseGenerator):
         element_optional: bool = False,
         element_ref: bool = False,
         parent_stack: Optional[List[Message]] = None,
+        use_option: bool = True,
     ) -> str:
         """Generate Go type string."""
         if isinstance(field_type, PrimitiveType):
+            if field_type.kind == PrimitiveKind.ANY:
+                return "any"
             base_type = self.PRIMITIVE_MAP[field_type.kind]
             if nullable and base_type not in ("[]byte",):
+                if (
+                    use_option
+                    and not ref
+                    and base_type not in ("time.Time", "fory.Date")
+                ):
+                    return f"optional.Optional[{base_type}]"
                 return f"*{base_type}"
             return base_type
 
         elif isinstance(field_type, NamedType):
             type_name = self.resolve_nested_type_name(field_type.name, parent_stack)
-            if nullable or ref:
+            if nullable:
+                if use_option and not ref:
+                    named_type = self.schema.get_type(field_type.name)
+                    if isinstance(named_type, Enum):
+                        return f"optional.Optional[{type_name}]"
+                return f"*{type_name}"
+            if ref:
                 return f"*{type_name}"
             return type_name
 
@@ -707,6 +742,7 @@ class GoGenerator(BaseGenerator):
                 False,
                 False,
                 parent_stack,
+                use_option=False,
             )
             return f"[]{element_type}"
 
@@ -722,7 +758,7 @@ class GoGenerator(BaseGenerator):
             value_type = self.generate_type(
                 field_type.value_type,
                 False,
-                False,
+                field_type.value_ref,
                 False,
                 False,
                 parent_stack,

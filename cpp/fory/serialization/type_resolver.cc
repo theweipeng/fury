@@ -37,9 +37,9 @@ constexpr size_t SMALL_NUM_FIELDS_THRESHOLD = 0b11111;
 constexpr uint8_t REGISTER_BY_NAME_FLAG = 0b100000;
 constexpr size_t FIELD_NAME_SIZE_THRESHOLD = 0b1111;
 constexpr size_t BIG_NAME_THRESHOLD = 0b111111;
-constexpr int64_t META_SIZE_MASK = 0xfff;
-// constexpr int64_t COMPRESS_META_FLAG = 0b1 << 13;
-constexpr int64_t HAS_FIELDS_META_FLAG = 0b1 << 12;
+constexpr int64_t META_SIZE_MASK = 0xff;
+// constexpr int64_t COMPRESS_META_FLAG = 0b1 << 9;
+constexpr int64_t HAS_FIELDS_META_FLAG = 0b1 << 8;
 constexpr int8_t NUM_HASH_BITS = 50;
 
 // ============================================================================
@@ -719,7 +719,7 @@ bool name_sorter(const FieldInfo &a, const FieldInfo &b) {
 }
 
 // Check if a type ID is a "final" type for field group 2 in field ordering.
-// Final types are STRING, DURATION, TIMESTAMP, LOCAL_DATE, DECIMAL, BINARY,
+// Final types are STRING, DURATION, TIMESTAMP, DATE, DECIMAL, BINARY,
 // ARRAY, and primitive arrays.
 // These are types with fixed serializers that don't need type info written.
 // Excludes: ENUM (13-14), STRUCT (15-18), EXT (19-20), LIST (21), SET (22), MAP
@@ -1220,6 +1220,7 @@ TypeResolver::build_final_type_resolver() {
   for (const auto &[key, old_ptr] : type_info_by_runtime_type_) {
     final_resolver->type_info_by_runtime_type_[key] = ptr_map[old_ptr];
   }
+
   for (const auto &[key, old_ptr] : partial_type_infos_) {
     final_resolver->partial_type_infos_.put(key, ptr_map[old_ptr]);
   }
@@ -1371,7 +1372,7 @@ void TypeResolver::register_builtin_types() {
   register_type_id_only(TypeId::NONE);
   register_type_id_only(TypeId::DURATION);
   register_type_id_only(TypeId::TIMESTAMP);
-  register_type_id_only(TypeId::LOCAL_DATE);
+  register_type_id_only(TypeId::DATE);
   register_type_id_only(TypeId::DECIMAL);
   register_type_id_only(TypeId::ARRAY);
 }

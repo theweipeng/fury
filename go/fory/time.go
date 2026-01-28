@@ -29,6 +29,8 @@ type Date struct {
 	Day   int
 }
 
+var dateReflectType = reflect.TypeFor[Date]()
+
 type dateSerializer struct{}
 
 func (s dateSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool, hasGenerics bool, value reflect.Value) {
@@ -36,7 +38,7 @@ func (s dateSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool
 		ctx.buffer.WriteInt8(NotNullValueFlag)
 	}
 	if writeType {
-		ctx.buffer.WriteVaruint32Small7(uint32(LOCAL_DATE))
+		ctx.buffer.WriteVaruint32Small7(uint32(DATE))
 	}
 	s.WriteData(ctx, value)
 }
@@ -77,8 +79,12 @@ func (s dateSerializer) ReadWithTypeInfo(ctx *ReadContext, refMode RefMode, type
 
 type timeSerializer struct{}
 
+var timeReflectType = reflect.TypeFor[time.Time]()
+
 func (s timeSerializer) WriteData(ctx *WriteContext, value reflect.Value) {
-	ctx.buffer.WriteInt64(GetUnixMicro(value.Interface().(time.Time)))
+	seconds, nanos := GetUnixSecondsAndNanos(value.Interface().(time.Time))
+	ctx.buffer.WriteInt64(seconds)
+	ctx.buffer.WriteUint32(nanos)
 }
 
 func (s timeSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool, hasGenerics bool, value reflect.Value) {
@@ -93,7 +99,9 @@ func (s timeSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool
 
 func (s timeSerializer) ReadData(ctx *ReadContext, value reflect.Value) {
 	err := ctx.Err()
-	value.Set(reflect.ValueOf(CreateTimeFromUnixMicro(ctx.buffer.ReadInt64(err))))
+	seconds := ctx.buffer.ReadInt64(err)
+	nanos := ctx.buffer.ReadUint32(err)
+	value.Set(reflect.ValueOf(CreateTimeFromUnixSecondsAndNanos(seconds, nanos)))
 }
 
 func (s timeSerializer) Read(ctx *ReadContext, refMode RefMode, readType bool, hasGenerics bool, value reflect.Value) {

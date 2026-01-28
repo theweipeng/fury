@@ -113,7 +113,7 @@ TEST(Field, SharedPtrNonNullable) {
   using FieldType = field<std::shared_ptr<int32_t>, 3>;
   static_assert(FieldType::tag_id == 3);
   static_assert(FieldType::is_nullable == false);
-  static_assert(FieldType::track_ref == false);
+  static_assert(FieldType::track_ref == true);
 
   FieldType f;
   f = std::make_shared<int32_t>(99);
@@ -126,7 +126,7 @@ TEST(Field, SharedPtrNullable) {
   using FieldType = field<std::shared_ptr<int32_t>, 4, nullable>;
   static_assert(FieldType::tag_id == 4);
   static_assert(FieldType::is_nullable == true);
-  static_assert(FieldType::track_ref == false);
+  static_assert(FieldType::track_ref == true);
 
   FieldType f;
   EXPECT_EQ(f.value, nullptr); // Default is null
@@ -169,7 +169,7 @@ TEST(Field, SharedPtrNotNull) {
   using FieldType = field<std::shared_ptr<int32_t>, 9, not_null>;
   static_assert(FieldType::tag_id == 9);
   static_assert(FieldType::is_nullable == false);
-  static_assert(FieldType::track_ref == false);
+  static_assert(FieldType::track_ref == true);
 }
 
 TEST(Field, SharedPtrNotNullWithRef) {
@@ -222,9 +222,9 @@ TEST(FieldTraits, FieldIsNullable) {
 
 TEST(FieldTraits, FieldTrackRef) {
   static_assert(field_track_ref_v<int> == false);
-  static_assert(field_track_ref_v<std::shared_ptr<int>> == false);
+  static_assert(field_track_ref_v<std::shared_ptr<int>> == true);
   static_assert(field_track_ref_v<field<int, 0>> == false);
-  static_assert(field_track_ref_v<field<std::shared_ptr<int>, 1>> == false);
+  static_assert(field_track_ref_v<field<std::shared_ptr<int>, 1>> == true);
   static_assert(field_track_ref_v<field<std::shared_ptr<int>, 2, ref>> == true);
   static_assert(
       field_track_ref_v<field<std::shared_ptr<int>, 3, nullable, ref>> == true);
@@ -278,7 +278,6 @@ TEST(FieldStruct, FieldInfo) {
 
 // ============================================================================
 // FORY_FIELD_TAGS Macro Tests
-// Must be in global namespace to specialize fory::detail::ForyFieldTagsImpl
 // ============================================================================
 
 namespace field_tags_test {
@@ -310,23 +309,21 @@ struct SingleField {
   FORY_STRUCT(SingleField, value);
 };
 
-} // namespace field_tags_test
-
-// FORY_FIELD_TAGS must be in global namespace
-
-// Define field tags separately (non-invasive)
-FORY_FIELD_TAGS(field_tags_test::Document, (title, 0), // string: non-nullable
-                (version, 1),                          // int: non-nullable
+// Define field tags in the same namespace as the types.
+FORY_FIELD_TAGS(Document, (title, 0),     // string: non-nullable
+                (version, 1),             // int: non-nullable
                 (description, 2),         // optional: inherently nullable
                 (author, 3),              // shared_ptr: non-nullable (default)
                 (reviewer, 4, nullable),  // shared_ptr: nullable
-                (parent, 5, ref),         // shared_ptr: non-nullable, with ref
+                (parent, 5, ref),         // shared_ptr: non-nullable, ref
                 (metadata, 6, nullable)); // unique_ptr: nullable
 
-FORY_FIELD_TAGS(field_tags_test::Node, (name, 0), (left, 1, nullable, ref),
+FORY_FIELD_TAGS(Node, (name, 0), (left, 1, nullable, ref),
                 (right, 2, nullable, ref));
 
-FORY_FIELD_TAGS(field_tags_test::SingleField, (value, 0));
+FORY_FIELD_TAGS(SingleField, (value, 0));
+
+} // namespace field_tags_test
 
 namespace fory {
 namespace test {
@@ -342,7 +339,7 @@ TEST(FieldTags, HasTags) {
 }
 
 TEST(FieldTags, FieldCount) {
-  static_assert(detail::ForyFieldTagsImpl<Document>::field_count == 7);
+  static_assert(detail::FieldTagsInfo<Document>::field_count == 7);
 }
 
 TEST(FieldTags, TagIds) {
@@ -374,12 +371,12 @@ TEST(FieldTags, Nullability) {
 }
 
 TEST(FieldTags, RefTracking) {
-  // Only parent has ref tracking
+  // shared_ptr fields track refs by default
   static_assert(detail::GetFieldTagEntry<Document, 0>::track_ref == false);
   static_assert(detail::GetFieldTagEntry<Document, 1>::track_ref == false);
   static_assert(detail::GetFieldTagEntry<Document, 2>::track_ref == false);
-  static_assert(detail::GetFieldTagEntry<Document, 3>::track_ref == false);
-  static_assert(detail::GetFieldTagEntry<Document, 4>::track_ref == false);
+  static_assert(detail::GetFieldTagEntry<Document, 3>::track_ref == true);
+  static_assert(detail::GetFieldTagEntry<Document, 4>::track_ref == true);
   static_assert(detail::GetFieldTagEntry<Document, 5>::track_ref == true);
   static_assert(detail::GetFieldTagEntry<Document, 6>::track_ref == false);
 }
@@ -403,7 +400,7 @@ TEST(FieldTags, NullableWithRef) {
 
 TEST(FieldTags, SingleField) {
   static_assert(detail::has_field_tags_v<SingleField> == true);
-  static_assert(detail::ForyFieldTagsImpl<SingleField>::field_count == 1);
+  static_assert(detail::FieldTagsInfo<SingleField>::field_count == 1);
   static_assert(detail::GetFieldTagEntry<SingleField, 0>::id == 0);
   static_assert(detail::GetFieldTagEntry<SingleField, 0>::is_nullable == false);
   static_assert(detail::GetFieldTagEntry<SingleField, 0>::track_ref == false);

@@ -51,7 +51,8 @@ import org.apache.fory.util.StringUtils;
 import org.apache.fory.util.Utils;
 
 /**
- * An encoder which encode {@link ClassDef} into binary. See spec documentation:
+ * An encoder which encode {@link ClassDef} into binary. Global header layout follows the xlang spec
+ * with an 8-bit meta size and flags at bits 8/9. See spec documentation:
  * docs/specification/fory_xlang_serialization_spec.md <a
  * href="https://fory.apache.org/docs/specification/fory_xlang_serialization_spec">...</a>
  */
@@ -66,7 +67,7 @@ class TypeDefEncoder {
                 fory.getXtypeResolver().getFieldDescriptors(type, true),
                 false,
                 Function.identity());
-    ClassInfo classInfo = fory._getTypeResolver().getClassInfo(type);
+    ClassInfo classInfo = fory.getTypeResolver().getClassInfo(type);
     List<Field> fields;
     int typeId = classInfo.getTypeId();
     if (Types.isStructType(typeId & 0xff)) {

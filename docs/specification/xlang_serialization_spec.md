@@ -69,9 +69,9 @@ This specification defines the Fory xlang binary format. The format is dynamic r
 - set: an unordered set of unique elements.
 - map: a map of key-value pairs. Mutable types such as `list/map/set/array` are not allowed as key of map.
 - duration: an absolute length of time, independent of any calendar/timezone, as a count of nanoseconds.
-- timestamp: a point in time, independent of any calendar/timezone, as a count of nanoseconds. The count is relative
-  to an epoch at UTC midnight on January 1, 1970.
-- local_date: a naive date without timezone. The count is days relative to an epoch at UTC midnight on Jan 1, 1970.
+- timestamp: a point in time, independent of any calendar/timezone, encoded as seconds (int64) and nanoseconds
+  (uint32) since the epoch at UTC midnight on January 1, 1970.
+- date: a naive date without timezone. The count is days relative to an epoch at UTC midnight on Jan 1, 1970.
 - decimal: exact decimal value represented as an integer value in two's complement.
 - binary: an variable-length array of bytes.
 - array: only allow 1d numeric components. Other arrays will be taken as List. The implementation should support the
@@ -197,8 +197,8 @@ Named types (`NAMED_*`) do not embed a user ID; their names are carried in metad
 | 33      | NAMED_UNION             | Union with embedded union type name/TypeDef         |
 | 34      | NONE                    | Empty/unit type (no data)                           |
 | 35      | DURATION                | Time duration (seconds + nanoseconds)               |
-| 36      | TIMESTAMP               | Point in time (nanoseconds since epoch)             |
-| 37      | LOCAL_DATE              | Date without timezone (days since epoch)            |
+| 36      | TIMESTAMP               | Point in time (seconds + nanoseconds since epoch)   |
+| 37      | DATE                    | Date without timezone (days since epoch)            |
 | 38      | DECIMAL                 | Arbitrary precision decimal                         |
 | 39      | BINARY                  | Raw binary data                                     |
 | 40      | ARRAY                   | Generic array type                                  |
@@ -489,11 +489,12 @@ resolution. It is encoded as:
 
 The 8-byte header is a little-endian uint64:
 
-- Low 12 bits: meta size (number of bytes in the TypeDef body).
-  - If meta size >= 0xFFF, the low 12 bits are set to 0xFFF and an extra
-    `varuint32(meta_size - 0xFFF)` follows immediately after the header.
-- Bit 12: `HAS_FIELDS_META` (1 = fields metadata present).
-- Bit 13: `COMPRESS_META` (1 = body is compressed; decompress before parsing).
+- Low 8 bits: meta size (number of bytes in the TypeDef body).
+  - If meta size >= 0xFF, the low 8 bits are set to 0xFF and an extra
+    `varuint32(meta_size - 0xFF)` follows immediately after the header.
+- Bit 8: `HAS_FIELDS_META` (1 = fields metadata present).
+- Bit 9: `COMPRESS_META` (1 = body is compressed; decompress before parsing).
+- Bits 10-13: reserved for future extension (must be zero).
 - High 50 bits: hash of the TypeDef body.
 
 #### TypeDef body
@@ -1220,6 +1221,21 @@ Enums are serialized as an unsigned var int. If the order of enum values change,
 the value users expect. In such cases, users must register enum serializer by make it write enum value as an enumerated
 string with unique hash disabled.
 
+### timestamp
+
+Timestamp represents a point in time independent of any calendar/timezone. It is encoded as:
+
+- `seconds` (int64): seconds since Unix epoch (1970-01-01T00:00:00Z)
+- `nanos` (uint32): nanosecond adjustment within the second
+
+On write, implementations must normalize negative timestamps so that `nanos` is always in `[0, 1_000_000_000)`.
+This is a fixed-size 12-byte payload (8 bytes seconds + 4 bytes nanos).
+
+### date
+
+Date represents a date without timezone. It is encoded as an `int32` count of days since the Unix epoch
+(1970-01-01). This is a fixed-size 4-byte payload.
+
 ### decimal
 
 Not supported for now.
@@ -1532,8 +1548,8 @@ This section provides a step-by-step guide for implementing Fory xlang serializa
 
 6. **Temporal Types**
    - [ ] Duration (seconds + nanoseconds)
-   - [ ] Timestamp (nanoseconds since epoch)
-   - [ ] LocalDate (days since epoch)
+   - [ ] Timestamp (seconds + nanoseconds since epoch)
+   - [ ] Date (days since epoch)
 
 7. **Reference Tracking**
    - [ ] Implement write-side object tracking (object → ref_id map)
