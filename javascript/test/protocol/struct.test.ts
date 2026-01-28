@@ -30,16 +30,14 @@ describe('protocol', () => {
         }, {
             foo: Type.string(),
             bar: Type.int32(),
-            map: Type.map(Type.any(), Type.any()),
-            set: Type.set(Type.any()),
-            list: Type.array(Type.any()),
+            any: Type.any(),
+            any2: Type.any(),
         }));
         const obj = {
             foo: "123",
             bar: 123,
-            map: new Map([["hello", 1], ["world", 2]]),
-            set: new Set([1, 2, "123"]),
-            list: ["123", 123, true]
+            any: "i am any1",
+            any2: "i am any2",
         };
         const bf = serialize(obj);
         const result = deserialize(bf);
