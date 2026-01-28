@@ -95,11 +95,12 @@ function toRefMode(trackingRef: boolean, nullable: boolean) {
 class StructSerializerGenerator extends BaseSerializerGenerator {
   typeInfo: StructTypeInfo;
   sortedProps: { key: string, typeInfo: TypeInfo }[];
-
+  metaChangedSerializer: string;
   constructor(typeInfo: TypeInfo, builder: CodecBuilder, scope: Scope) {
     super(typeInfo, builder, scope);
     this.typeInfo = <StructTypeInfo>typeInfo;
     this.sortedProps = sortProps(this.typeInfo);
+    this.metaChangedSerializer = this.scope.declareVar("metaChangedSerializer", "null");
   }
 
   xreadField(fieldName: string, fieldTypeInfo: TypeInfo, assignStmt: (expr: string) => string, innerGenerator: SerializerGenerator) {
@@ -226,6 +227,17 @@ class StructSerializerGenerator extends BaseSerializerGenerator {
     `;
   }
 
+  xreadNoRef(assignStmt: (v: string) => string, refState: string): string {
+    return `
+      ${this.readClassInfo()}
+      if (${this.metaChangedSerializer} !== null) {
+        ${assignStmt(`${this.metaChangedSerializer}.xread(${refState})`)}
+      } else {
+        ${this.xread(assignStmt, refState)};
+      }
+    `
+  }
+
   readClassInfo(): string {
     const typeMeta = this.scope.uniqueName("typeMeta");
     let namesStmt = '';
@@ -244,7 +256,7 @@ class StructSerializerGenerator extends BaseSerializerGenerator {
       typeMetaStmt = `
       const ${typeMeta} = ${this.builder.typeMetaResolver.readTypeMeta(this.builder.reader.ownName())};
       if (getHash() !== ${typeMeta}.getHash()) {
-        ${this.builder.typeMetaResolver.genSerializerByTypeMetaRuntime(typeMeta)}
+        ${this.metaChangedSerializer} = ${this.builder.typeMetaResolver.genSerializerByTypeMetaRuntime(typeMeta)}
       }
       `
     }

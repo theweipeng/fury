@@ -28,6 +28,7 @@ const initMeta = (target: new () => any, typeInfo: TypeInfo) => {
     typeInfo.options = {};
   }
   typeInfo.options.withConstructor = true;
+  typeInfo.options.constructor = target;
   Object.assign(typeInfo.options.props, targetFields.get(target) || {})
   Object.defineProperties(target.prototype, {
     [ForyTypeInfoSymbol]: {
@@ -277,6 +278,7 @@ export interface StructTypeInfo extends TypeInfo {
     props?: { [key: string]: TypeInfo };
     fieldInfo?: {[key: string]: StructFieldInfo};
     withConstructor?: boolean;
+    constructor?: Function;
   };
 }
 

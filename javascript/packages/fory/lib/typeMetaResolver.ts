@@ -35,11 +35,11 @@ export class TypeMetaResolver {
 
   private updateTypeInfo(typeMeta: TypeMeta, typeInfo: TypeInfo) {
     typeInfo.options.props = Object.fromEntries(typeMeta.getFieldInfo().map((x) => {
-      const typeId = x.getFieldId();
+      const typeId = x.getTypeId();
       const fieldName = x.getFieldName();
-      const typeInfo = this.fory.classResolver.getTypeInfo(typeId);
-      if (!typeInfo) {
-        throw new Error(`${typeId} not registered`); // todo
+      const fieldTypeInfo = this.fory.classResolver.getTypeInfo(typeId);
+      if (!fieldTypeInfo) {
+        throw new Error(`typeid: ${typeId} in prop ${fieldName} not registered`);
       }
       if (!typeInfo.options.fieldInfo) {
         typeInfo.options.fieldInfo = {};
@@ -49,7 +49,7 @@ export class TypeMetaResolver {
         trackingRef: x.trackingRef,
         ...typeInfo.options.fieldInfo[x.fieldName],
       }
-      return [fieldName, typeInfo];
+      return [fieldName, fieldTypeInfo];
     }));
   }
 

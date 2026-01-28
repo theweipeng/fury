@@ -23,7 +23,7 @@ import { BinaryReader } from "./reader";
 import { ReferenceResolver } from "./referenceResolver";
 import { ConfigFlags, Serializer, Config, Language, Mode, ForyTypeInfoSymbol, WithForyClsInfo, TypeId } from "./type";
 import { OwnershipError } from "./error";
-import { InputType, ResultType, TypeInfo } from "./typeInfo";
+import { InputType, ResultType, StructTypeInfo, TypeInfo } from "./typeInfo";
 import { Gen } from "./gen";
 import { TypeMeta } from "./meta/TypeMeta";
 import { PlatformBuffer } from "./platformBuffer";
@@ -116,7 +116,7 @@ export default class {
   replaceSerializerReader(typeInfo: TypeInfo) {
     TypeInfo.attach(this);
     let serializer: Serializer;
-    serializer = new Gen(this).reGenerateSerializer(typeInfo);
+    serializer = new Gen(this, { constroctor: (typeInfo as StructTypeInfo).options.constructor }).reGenerateSerializer(typeInfo);
     const result = this.classResolver.registerSerializer(typeInfo, {
       getHash: serializer.getHash,
       xread: serializer.xread,
