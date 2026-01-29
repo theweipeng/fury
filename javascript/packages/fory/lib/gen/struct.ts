@@ -69,31 +69,39 @@ class StructSerializerGenerator extends BaseSerializerGenerator {
     this.metaChangedSerializer = this.scope.declareVar("metaChangedSerializer", "null");
   }
 
-  readField(fieldName: string, fieldTypeInfo: TypeInfo, assignStmt: (expr: string) => string, innerGenerator: SerializerGenerator) {
-    const { nullable = false, trackingRef = false } = this.typeInfo.options.fieldInfo?.[fieldName] || {};
+  readField(fieldName: string, fieldTypeInfo: TypeInfo, assignStmt: (expr: string) => string, embedGenerator: SerializerGenerator, needToWriteRef: boolean) {
+    const { nullable = false } = this.typeInfo.options.fieldInfo?.[fieldName] || {};
+    let { trackingRef } = this.typeInfo.options.fieldInfo?.[fieldName] || {};
+    if (typeof trackingRef !== "boolean") {
+      trackingRef = needToWriteRef;
+    }
     const refMode = toRefMode(trackingRef, nullable);
     let stmt = "";
     // polymorphic type
     if (fieldTypeInfo.isMonomorphic()) {
       if (refMode == RefMode.TRACKING || refMode === RefMode.NULL_ONLY) {
         stmt = `
-            ${innerGenerator.readRef(assignStmt)}
+            ${embedGenerator.readRef(assignStmt, true)}
         `;
       } else {
-        stmt = innerGenerator.read(assignStmt, "false");
+        stmt = embedGenerator.read(assignStmt, "false");
       }
     } else {
       if (refMode == RefMode.TRACKING || refMode === RefMode.NULL_ONLY) {
-        stmt = `${innerGenerator.readRef(assignStmt)}`;
+        stmt = `${embedGenerator.readRef(assignStmt)}`;
       } else {
-        stmt = innerGenerator.readNoRef(assignStmt, "false");
+        stmt = embedGenerator.readNoRef(assignStmt, "false");
       }
     }
     return stmt;
   }
 
-  writeField(fieldName: string, fieldTypeInfo: TypeInfo, fieldAccessor: string, innerGenerator: SerializerGenerator) {
-    const { nullable = false, trackingRef = false } = this.typeInfo.options.fieldInfo?.[fieldName] || {};
+  writeField(fieldName: string, fieldTypeInfo: TypeInfo, fieldAccessor: string, embedGenerator: SerializerGenerator, needToWriteRef: boolean) {
+    const { nullable = false } = this.typeInfo.options.fieldInfo?.[fieldName] || {};
+    let { trackingRef } = this.typeInfo.options.fieldInfo?.[fieldName] || {};
+    if (typeof trackingRef !== "boolean") {
+      trackingRef = needToWriteRef;
+    }
     const refMode = toRefMode(trackingRef, nullable);
     let stmt = "";
     // polymorphic type
@@ -102,9 +110,9 @@ class StructSerializerGenerator extends BaseSerializerGenerator {
         const noneedWrite = this.scope.uniqueName("noneedWrite");
         stmt = `
             let ${noneedWrite} = false;
-            ${innerGenerator.writeRefOrNull(expr => `${noneedWrite} = ${expr}`, fieldAccessor)}
+            ${embedGenerator.writeRefOrNull(expr => `${noneedWrite} = ${expr}`, fieldAccessor)}
             if (!${noneedWrite}) {
-              ${innerGenerator.write(fieldAccessor)}
+              ${embedGenerator.write(fieldAccessor)}
             }
         `;
       } else if (refMode == RefMode.NULL_ONLY) {
@@ -113,7 +121,7 @@ class StructSerializerGenerator extends BaseSerializerGenerator {
               ${this.builder.writer.int8(RefFlags.NullFlag)}
             } else {
               ${this.builder.writer.int8(RefFlags.NotNullValueFlag)}
-              ${innerGenerator.write(fieldAccessor)}
+              ${embedGenerator.write(fieldAccessor)}
             }
           `;
       } else {
@@ -121,20 +129,20 @@ class StructSerializerGenerator extends BaseSerializerGenerator {
             if (${fieldAccessor} === null || ${fieldAccessor} === undefined) {
               throw new Error('Field ${CodecBuilder.safeString(fieldName)} is not nullable');
             } else {
-              ${innerGenerator.write(fieldAccessor)}
+              ${embedGenerator.write(fieldAccessor)}
             }
           `;
       }
     } else {
       if (refMode == RefMode.TRACKING) {
-        stmt = `${innerGenerator.writeRef(fieldAccessor)}`;
+        stmt = `${embedGenerator.writeRef(fieldAccessor)}`;
       } else if (refMode == RefMode.NULL_ONLY) {
         stmt = `
             if (${fieldAccessor} === null || ${fieldAccessor} === undefined) {
               ${this.builder.writer.int8(RefFlags.NullFlag)}
             } else {
               ${this.builder.writer.int8(RefFlags.NotNullValueFlag)}
-              ${innerGenerator.writeNoRef(fieldAccessor)}
+              ${embedGenerator.writeNoRef(fieldAccessor)}
             }
           `;
       } else {
@@ -142,7 +150,7 @@ class StructSerializerGenerator extends BaseSerializerGenerator {
             if (${fieldAccessor} === null || ${fieldAccessor} === undefined) {
               throw new Error('Field ${CodecBuilder.safeString(fieldName)} is not nullable');
             } else {
-              ${innerGenerator.writeNoRef(fieldAccessor)}
+              ${embedGenerator.writeNoRef(fieldAccessor)}
             }
           `;
       }
@@ -160,7 +168,7 @@ class StructSerializerGenerator extends BaseSerializerGenerator {
       const innerGenerator = new InnerGeneratorClass(typeInfo, this.builder, this.scope);
 
       const fieldAccessor = `${accessor}${CodecBuilder.safePropAccessor(key)}`;
-      return this.writeField(key, typeInfo, fieldAccessor, innerGenerator.writeEmbed());
+      return this.writeField(key, typeInfo, fieldAccessor, innerGenerator.writeEmbed(), innerGenerator.needToWriteRef());
     }).join(";\n")}
     `;
   }
@@ -187,7 +195,8 @@ class StructSerializerGenerator extends BaseSerializerGenerator {
           throw new Error(`${typeInfo.typeId} generator not exists`);
         }
         const innerGenerator = new InnerGeneratorClass(typeInfo, this.builder, this.scope);
-        return this.readField(key, typeInfo, expr => `${result}${CodecBuilder.safePropAccessor(key)} = ${expr}`, innerGenerator.readEmbed());
+        const needToWriteRef = innerGenerator.needToWriteRef();
+        return this.readField(key, typeInfo, expr => `${result}${CodecBuilder.safePropAccessor(key)} = ${expr}`, innerGenerator.readEmbed(), needToWriteRef);
       }).join(";\n")}
       ${accessor(result)}
     `;

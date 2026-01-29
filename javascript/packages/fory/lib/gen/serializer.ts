@@ -21,7 +21,7 @@ import { CodecBuilder } from "./builder";
 import { RefFlags } from "../type";
 import { Scope } from "./scope";
 import { TypeInfo } from "../typeInfo";
-import { isPrimitiveTypeId } from "../meta/TypeMeta";
+import { refTrackingAbleTypeId } from "../meta/TypeMeta";
 import { BinaryWriter } from "../writer";
 
 export const makeHead = (flag: RefFlags, typeId: number) => {
@@ -44,7 +44,7 @@ export interface SerializerGenerator {
   getFixedSize(): number;
   needToWriteRef(): boolean;
 
-  readRef(assignStmt: (v: string) => string): string;
+  readRef(assignStmt: (v: string) => string, withoutClassInfo?: boolean): string;
   readNoRef(assignStmt: (v: string) => string, refState: string): string;
   readClassInfo(): string;
   read(assignStmt: (v: string) => string, refState: string): string;
@@ -72,7 +72,7 @@ export abstract class BaseSerializerGenerator implements SerializerGenerator {
   abstract getFixedSize(): number;
 
   needToWriteRef(): boolean {
-    if (isPrimitiveTypeId(this.typeInfo.typeId)) {
+    if (refTrackingAbleTypeId(this.typeInfo.typeId)) {
       return false;
     }
     return this.builder.fory.config.refTracking === true;
@@ -129,6 +129,7 @@ export abstract class BaseSerializerGenerator implements SerializerGenerator {
         if (typeof ${existsId} === "number") {
             ${this.builder.writer.int8(RefFlags.RefFlag)}
             ${this.builder.writer.varUInt32(existsId)}
+            ${assignStmt("true")};
         } else {
             ${this.builder.writer.int8(RefFlags.RefValueFlag)}
             ${this.builder.referenceResolver.writeRef(accessor)}
@@ -143,7 +144,6 @@ export abstract class BaseSerializerGenerator implements SerializerGenerator {
         ${assignStmt("true")};
       } else {
         ${refFlagStmt}
-        ${assignStmt("false")};
       }
     `;
   }
@@ -184,14 +184,14 @@ export abstract class BaseSerializerGenerator implements SerializerGenerator {
     `;
   }
 
-  readRef(assignStmt: (v: string) => string): string {
+  readRef(assignStmt: (v: string) => string, withoutClassInfo = false): string {
     const refFlag = this.scope.uniqueName("refFlag");
     return `
         const ${refFlag} = ${this.builder.reader.int8()};
         switch (${refFlag}) {
             case ${RefFlags.NotNullValueFlag}:
             case ${RefFlags.RefValueFlag}:
-                ${this.readNoRef(assignStmt, `${refFlag} === ${RefFlags.RefValueFlag}`)}
+                ${!withoutClassInfo ? this.readNoRef(assignStmt, `${refFlag} === ${RefFlags.RefValueFlag}`) : this.read(assignStmt, `${refFlag} === ${RefFlags.RefValueFlag}`)}
                 break;
             case ${RefFlags.RefFlag}:
                 ${assignStmt(this.builder.referenceResolver.getReadObject(this.builder.reader.varUInt32()))}

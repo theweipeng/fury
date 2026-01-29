@@ -82,14 +82,13 @@ class DurationSerializerGenerator extends BaseSerializerGenerator {
 
   write(accessor: string): string {
     const epoch = this.scope.declareByName("epoch", `new Date("1970/01/01 00:00").getTime()`);
-    if (/^-?[0-9]+$/.test(accessor)) {
-      return `
-            ${this.builder.writer.int32(`Math.floor((${accessor} - ${epoch}) / 1000 / (24 * 60 * 60))`)}
-        `;
-    }
     return `
-            ${this.builder.writer.int32(`Math.floor((${accessor}.getTime() - ${epoch}) / 1000 / (24 * 60 * 60))`)}
-        `;
+      if (${accessor} instanceof Date) {
+        ${this.builder.writer.int32(`Math.floor((${accessor}.getTime() - ${epoch}) / 1000 / (24 * 60 * 60))`)}
+      } else {
+        ${this.builder.writer.int32(`Math.floor((${accessor} - ${epoch}) / 1000 / (24 * 60 * 60))`)}
+      }
+    `;
   }
 
   read(accessor: (expr: string) => string): string {

@@ -19,6 +19,7 @@
 
 import Fory, { Type, TypeInfo } from '../packages/fory/index';
 import { describe, expect, test } from '@jest/globals';
+import * as beautify from 'js-beautify';
 
 describe('object', () => {
   test('should descoration work', () => {
@@ -39,7 +40,7 @@ describe('object', () => {
     );
 
     expect(result instanceof Foo);
-    
+
     expect(result).toEqual({ a: 123 })
   });
 
@@ -83,7 +84,7 @@ describe('object', () => {
         b: Type.string()
       })
     }, {
-      fieldInfo: { a: { nullable: true }}
+      fieldInfo: { a: { nullable: true } }
     })
     const fory = new Fory({ refTracking: true });
     const { serialize, deserialize } = fory.registerSerializer(typeInfo);
@@ -104,15 +105,15 @@ describe('object', () => {
         f: Type.binary(),
       }))
     })
-    
+
     const fory = new Fory({ refTracking: true });
     const serializer = fory.registerSerializer(typeInfo).serializer;
-    const input = fory.serialize({ a: [{ b: "hel", c: true, d: 123, e: 123, f: new Uint8Array([1,2,3]) }] }, serializer);
+    const input = fory.serialize({ a: [{ b: "hel", c: true, d: 123, e: 123, f: new Uint8Array([1, 2, 3]) }] }, serializer);
     const result = fory.deserialize(
       input
     );
     result.a.forEach(x => x.e = Number(x.e))
-    expect(result).toEqual({ a: [{ b: "hel", c: true, d: 123, e: 123, f: Buffer.from([1,2,3]) }] })
+    expect(result).toEqual({ a: [{ b: "hel", c: true, d: 123, e: 123, f: Buffer.from([1, 2, 3]) }] })
   });
 
   test('should write tag and read tag work', () => {
@@ -131,27 +132,32 @@ describe('object', () => {
     expect(result).toEqual({ a: { b: "hel" }, a2: { b: "hel2" } })
   });
 
-  // todo recover xlang refTracking
-  // test('should ciycle ref work', () => {
-  //   const typeInfo = Type.struct( "example.foo", {
-  //     a: Type.struct("example.bar", {
-  //       b: Type.string(),
-  //     }),
-  //     a2: Type.struct("example.foo")
-  //   })
-    
-  //   const fory = new Fory({ refTracking: true });
-  //   const serialize = fory.registerSerializer(typeInfo).serializer;
-  //   const param: any = {};
-  //   param.a = { b: "hel" };
-  //   param.a2 = param;
-  //   const input = fory.serialize(param, serialize);
-  //   const result = fory.deserialize(
-  //     input
-  //   );
-  //   expect(result.a).toEqual({ b: "hel" })
-  //   expect(result.a2).toEqual(result)
-  // });
+  test('should ciycle ref work', () => {
+    const typeInfo = Type.struct("example.foo", {
+      a: Type.struct("example.bar", {
+        b: Type.string(),
+      }),
+      a2: Type.struct("example.foo")
+    })
+
+    const fory = new Fory({
+      refTracking: true, hooks: {
+        afterCodeGenerated: (code) => {
+          return beautify.js(code, { indent_size: 2, space_in_empty_paren: true, indent_empty_lines: true });
+        }
+      }
+    });
+    const serialize = fory.registerSerializer(typeInfo).serializer;
+    const param: any = {};
+    param.a = { b: "hel" };
+    param.a2 = param;
+    const input = fory.serialize(param, serialize);
+    const result = fory.deserialize(
+      input
+    );
+    expect(result.a).toEqual({ b: "hel" })
+    expect(result.a2).toEqual(result)
+  });
 
   test('should dot prop accessor work', () => {
     const typeInfo = Type.struct("example.foo", {
@@ -162,7 +168,7 @@ describe('object', () => {
         }))
       }),
     })
-    
+
     const fory = new Fory({ refTracking: true });
     const { serialize, deserialize } = fory.registerSerializer(typeInfo);
     const input = serialize({ "+a": { "delete": "hel", c: [{ d: "hello" }] } });
@@ -182,7 +188,7 @@ describe('object', () => {
         }))
       }),
     })
-    
+
     const fory = new Fory({ refTracking: true });
     const { serialize, deserialize } = fory.registerSerializer(typeInfo);
     const input = serialize({ a: { b: "hel", c: [{ d: "hello" }] } });
@@ -195,8 +201,8 @@ describe('object', () => {
   test("should partial record work", () => {
     const hps = undefined;
     const typeInfo = Type.struct('ws-channel-protocol', {
-        kind: Type.string(),
-        path: Type.string(),
+      kind: Type.string(),
+      path: Type.string(),
     }, {
       fieldInfo: {
         path: { nullable: true }
@@ -206,17 +212,17 @@ describe('object', () => {
     const fory = new Fory({ hps });
     const { serialize, deserialize } = fory.registerSerializer(typeInfo);
     const bin = serialize({
-        kind: "123",
+      kind: "123",
     });
     const obj = deserialize(bin);
-    expect({kind: "123", path: null}).toEqual(obj)
-})
+    expect({ kind: "123", path: null }).toEqual(obj)
+  })
 
   test('should handle emojis', () => {
     const typeInfo = Type.struct("example.emoji", {
       a: Type.string()
     });
-    
+
     const fory = new Fory({ refTracking: true });
     const { serialize, deserialize } = fory.registerSerializer(typeInfo);
     const input = serialize({ a: "Hello, world! 🌍😊" });
