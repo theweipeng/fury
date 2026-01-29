@@ -131,7 +131,7 @@ class CollectionAnySerializer {
       if (!isSame) {
         serializer = this.fory.classResolver.getSerializerById(this.fory.binaryReader.int16());
       }
-      accessor(result, index, serializer!.readRef());
+      accessor(result, index, serializer!.read(false));
     }
     return result;
   }
