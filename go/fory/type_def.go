@@ -345,7 +345,7 @@ func buildTypeDef(fory *Fory, value reflect.Value) (*TypeDef, error) {
 	}
 
 	typeDef.encoded = encoded
-	if DebugOutputEnabled() {
+	if DebugOutputEnabled {
 		fmt.Printf("[Go TypeDef BUILT] %s\n", typeDef.String())
 	}
 	return typeDef, nil
@@ -542,14 +542,13 @@ func buildFieldDefs(fory *Fory, value reflect.Value) ([]FieldDef, error) {
 		if foryTag.RefSet {
 			trackingRef = foryTag.Ref
 		}
-		// Disable ref tracking for simple types (primitives, strings) in xlang mode
-		// These types don't benefit from ref tracking and Java doesn't expect ref flags for them
-		if fory.config.IsXlang && trackingRef {
-			// Check if this is a simple field type (primitives, strings, enums, etc.)
-			// SimpleFieldType represents built-in types that don't need ref tracking
-			if _, ok := ft.(*SimpleFieldType); ok {
-				trackingRef = false
-			}
+		if trackingRef && !NeedWriteRef(ft.TypeId()) {
+			trackingRef = false
+		}
+		// Disable ref tracking for simple types (primitives, strings) in xlang mode.
+		// Collection fields only write ref flags when explicitly tagged.
+		if fory.config.IsXlang && trackingRef && isCollectionType(ft.TypeId()) && !foryTag.RefSet {
+			trackingRef = false
 		}
 
 		fieldInfo := FieldDef{
@@ -1552,7 +1551,7 @@ func decodeTypeDef(fory *Fory, buffer *ByteBuffer, header int64) (*TypeDef, erro
 	typeDef.encoded = encoded
 	typeDef.type_ = type_
 
-	if DebugOutputEnabled() {
+	if DebugOutputEnabled {
 		fmt.Printf("[Go TypeDef DECODED] %s\n", typeDef.String())
 		// Compute and print diff with local TypeDef
 		if type_ != nil {

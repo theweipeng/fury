@@ -169,19 +169,24 @@ public abstract class XlangTestBase extends ForyTestBase {
   protected abstract CommandContext buildCommandContext(String caseName, Path dataFile)
       throws IOException;
 
-  protected ImmutableMap.Builder<String, String> envBuilder(Path dataFile) {
-    ImmutableMap.Builder<String, String> builder =
-        ImmutableMap.<String, String>builder()
-            .put("DATA_FILE", dataFile.toAbsolutePath().toString());
+  protected Map<String, String> envBuilder(Path dataFile) {
+    Map<String, String> envMap = new HashMap<>();
+    envMap.put("DATA_FILE", dataFile.toAbsolutePath().toString());
     String dumpCase = System.getenv("FORY_CPP_DUMP_CASE");
     if (dumpCase != null) {
-      builder.put("FORY_CPP_DUMP_CASE", dumpCase);
+      envMap.put("FORY_CPP_DUMP_CASE", dumpCase);
     }
     String dumpDir = System.getenv("FORY_CPP_DUMP_DIR");
     if (dumpDir != null) {
-      builder.put("FORY_CPP_DUMP_DIR", dumpDir);
+      envMap.put("FORY_CPP_DUMP_DIR", dumpDir);
     }
-    return builder;
+    Map<String, String> env = System.getenv();
+    for (Map.Entry<String, String> entry : env.entrySet()) {
+      if (entry.getKey().toLowerCase().contains("fory")) {
+        envMap.put(entry.getKey(), entry.getValue());
+      }
+    }
+    return envMap;
   }
 
   protected ExecutionContext prepareExecution(String caseName, byte[] payload) throws IOException {
