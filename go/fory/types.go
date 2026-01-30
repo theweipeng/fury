@@ -17,7 +17,10 @@
 
 package fory
 
-import "reflect"
+import (
+	"reflect"
+	"strings"
+)
 
 type TypeId = int16
 
@@ -315,6 +318,7 @@ const (
 	PrimitiveUint64DispatchId  // 17 - uint64 with fixed encoding
 	PrimitiveFloat32DispatchId // 18
 	PrimitiveFloat64DispatchId // 19
+	PrimitiveFloat16DispatchId // 20
 
 	// ========== NULLABLE DISPATCH IDs ==========
 	NullableBoolDispatchId
@@ -327,6 +331,7 @@ const (
 	NullableTaggedInt64DispatchId
 	NullableFloat32DispatchId
 	NullableFloat64DispatchId
+	NullableFloat16DispatchId
 	NullableUint8DispatchId
 	NullableUint16DispatchId
 	NullableUint32DispatchId
@@ -350,6 +355,7 @@ const (
 	UintSliceDispatchId
 	Float32SliceDispatchId
 	Float64SliceDispatchId
+	Float16SliceDispatchId
 	BoolSliceDispatchId
 	StringSliceDispatchId
 
@@ -390,6 +396,10 @@ func GetDispatchId(t reflect.Type) DispatchId {
 	case reflect.Uint8:
 		return PrimitiveUint8DispatchId
 	case reflect.Uint16:
+		// Check for fory.Float16 (aliased to uint16)
+		if t.Name() == "Float16" && (t.PkgPath() == "github.com/apache/fory/go/fory/float16" || strings.HasSuffix(t.PkgPath(), "/float16")) {
+			return PrimitiveFloat16DispatchId
+		}
 		return PrimitiveUint16DispatchId
 	case reflect.Uint32:
 		// Default to varint encoding (VAR_UINT32) for xlang compatibility
@@ -426,6 +436,15 @@ func GetDispatchId(t reflect.Type) DispatchId {
 			return Float32SliceDispatchId
 		case reflect.Float64:
 			return Float64SliceDispatchId
+		case reflect.Uint16:
+			// Check if it's float16 slice
+			if t.Elem().Name() == "Float16" && (t.Elem().PkgPath() == "github.com/apache/fory/go/fory/float16" || strings.HasSuffix(t.Elem().PkgPath(), "/float16")) {
+				return Float16SliceDispatchId
+			}
+			// Use Int16SliceDispatchId for Uint16 as they share the same 2-byte size
+			// and serialization logic in many cases, or it falls back to generic if needed.
+			return Int16SliceDispatchId
+
 		case reflect.Bool:
 			return BoolSliceDispatchId
 		case reflect.String:
@@ -480,7 +499,8 @@ func isFixedSizePrimitive(dispatchId DispatchId) bool {
 		PrimitiveInt16DispatchId, PrimitiveUint16DispatchId,
 		PrimitiveInt32DispatchId, PrimitiveUint32DispatchId,
 		PrimitiveInt64DispatchId, PrimitiveUint64DispatchId,
-		PrimitiveFloat32DispatchId, PrimitiveFloat64DispatchId:
+		PrimitiveFloat32DispatchId, PrimitiveFloat64DispatchId,
+		PrimitiveFloat16DispatchId:
 		return true
 	default:
 		return false
@@ -495,7 +515,8 @@ func isNullableFixedSizePrimitive(dispatchId DispatchId) bool {
 		NullableInt16DispatchId, NullableUint16DispatchId,
 		NullableInt32DispatchId, NullableUint32DispatchId,
 		NullableInt64DispatchId, NullableUint64DispatchId,
-		NullableFloat32DispatchId, NullableFloat64DispatchId:
+		NullableFloat32DispatchId, NullableFloat64DispatchId,
+		NullableFloat16DispatchId:
 		return true
 	default:
 		return false
@@ -536,7 +557,7 @@ func isPrimitiveDispatchId(dispatchId DispatchId) bool {
 	case PrimitiveBoolDispatchId, PrimitiveInt8DispatchId, PrimitiveInt16DispatchId, PrimitiveInt32DispatchId,
 		PrimitiveInt64DispatchId, PrimitiveIntDispatchId, PrimitiveUint8DispatchId, PrimitiveUint16DispatchId,
 		PrimitiveUint32DispatchId, PrimitiveUint64DispatchId, PrimitiveUintDispatchId,
-		PrimitiveFloat32DispatchId, PrimitiveFloat64DispatchId:
+		PrimitiveFloat32DispatchId, PrimitiveFloat64DispatchId, PrimitiveFloat16DispatchId:
 		return true
 	default:
 		return false
@@ -558,7 +579,7 @@ func isPrimitiveDispatchKind(kind reflect.Kind) bool {
 	switch kind {
 	case reflect.Bool, reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
-		reflect.Float32, reflect.Float64:
+		reflect.Float32, reflect.Float64: // Note: Float16 is uint16 kind, handled by dispatch ID logic
 		return true
 	default:
 		return false
@@ -589,6 +610,8 @@ func getDispatchIdFromTypeId(typeId TypeId, nullable bool) DispatchId {
 			return NullableTaggedInt64DispatchId
 		case FLOAT32:
 			return NullableFloat32DispatchId
+		case FLOAT16:
+			return NullableFloat16DispatchId
 		case FLOAT64:
 			return NullableFloat64DispatchId
 		case UINT8:
@@ -631,6 +654,8 @@ func getDispatchIdFromTypeId(typeId TypeId, nullable bool) DispatchId {
 			return PrimitiveTaggedInt64DispatchId
 		case FLOAT32:
 			return PrimitiveFloat32DispatchId
+		case FLOAT16:
+			return PrimitiveFloat16DispatchId
 		case FLOAT64:
 			return PrimitiveFloat64DispatchId
 		case UINT8:
@@ -674,6 +699,8 @@ func getFixedSizeByDispatchId(dispatchId DispatchId) int {
 		return 2
 	case PrimitiveInt32DispatchId, PrimitiveUint32DispatchId, PrimitiveFloat32DispatchId:
 		return 4
+	case PrimitiveFloat16DispatchId:
+		return 2
 	case PrimitiveInt64DispatchId, PrimitiveUint64DispatchId, PrimitiveFloat64DispatchId:
 		return 8
 	default:
@@ -721,7 +748,8 @@ func isPrimitiveFixedDispatchId(id DispatchId) bool {
 		// Fixed-size int32/int64/uint32/uint64 - only when explicitly specified via TypeId
 		PrimitiveInt32DispatchId, PrimitiveUint32DispatchId,
 		PrimitiveInt64DispatchId, PrimitiveUint64DispatchId,
-		PrimitiveFloat32DispatchId, PrimitiveFloat64DispatchId:
+		PrimitiveFloat32DispatchId, PrimitiveFloat64DispatchId,
+		PrimitiveFloat16DispatchId:
 		return true
 	default:
 		return false
@@ -737,6 +765,8 @@ func getFixedSizeByPrimitiveDispatchId(id DispatchId) int {
 		return 2
 	case PrimitiveInt32DispatchId, PrimitiveUint32DispatchId, PrimitiveFloat32DispatchId:
 		return 4
+	case PrimitiveFloat16DispatchId:
+		return 2
 	case PrimitiveInt64DispatchId, PrimitiveUint64DispatchId, PrimitiveFloat64DispatchId:
 		return 8
 	default:
