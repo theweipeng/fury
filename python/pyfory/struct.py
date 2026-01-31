@@ -46,17 +46,19 @@ from pyfory.types import (
     tagged_uint64,
     float32,
     float64,
-    is_py_array_type,
+    is_primitive_array_type,
     is_list_type,
     is_map_type,
     get_primitive_type_size,
     is_polymorphic_type,
     is_primitive_type,
+    is_union_type,
 )
 from pyfory.type_util import (
     TypeVisitor,
     infer_field,
     is_subclass,
+    get_type_hints,
     unwrap_optional,
 )
 from pyfory.buffer import Buffer
@@ -297,6 +299,10 @@ _ENABLE_FORY_PYTHON_JIT = os.environ.get("ENABLE_FORY_PYTHON_JIT", "True").lower
     "true",
     "1",
 )
+_ENABLE_FORY_DEBUG_OUTPUT = os.environ.get("ENABLE_FORY_DEBUG_OUTPUT", "False").lower() in (
+    "true",
+    "1",
+)
 
 
 class DataClassSerializer(Serializer):
@@ -312,7 +318,7 @@ class DataClassSerializer(Serializer):
         super().__init__(fory, clz)
         self._xlang = xlang
 
-        self._type_hints = typing.get_type_hints(clz)
+        self._type_hints = get_type_hints(clz)
         self._has_slots = hasattr(clz, "__slots__")
 
         # When field_names is explicitly passed (from TypeDef.create_serializer during schema evolution),
@@ -440,7 +446,7 @@ class DataClassSerializer(Serializer):
         if not self.fory.compatible:
             buffer.write_int32(self._hash)
         else:
-            buffer.write_varuint32(len(self._field_names))
+            buffer.write_var_uint32(len(self._field_names))
 
     def _read_header(self, buffer):
         """Read serialization header and return number of fields written.
@@ -458,7 +464,7 @@ class DataClassSerializer(Serializer):
                 raise TypeNotCompatibleError(f"Hash {hash_} is not consistent with {expected_hash} for type {self.type_}")
             return len(self._field_names)
         else:
-            return buffer.read_varuint32()
+            return buffer.read_var_uint32()
 
     def _get_write_stmt_for_codegen(self, serializer, buffer, field_value):
         """Generate write statement for code generation based on serializer type."""
@@ -581,7 +587,7 @@ class DataClassSerializer(Serializer):
         if not self.fory.compatible:
             stmts.append(f"{buffer}.write_int32({self._hash})")
         else:
-            stmts.append(f"{buffer}.write_varuint32({len(self._field_names)})")
+            stmts.append(f"{buffer}.write_var_uint32({len(self._field_names)})")
 
         if not self._has_slots:
             stmts.append(f"{value_dict} = {value}.__dict__")
@@ -608,10 +614,18 @@ class DataClassSerializer(Serializer):
                 # Use gen_write_nullable_basic_stmts for nullable basic types
                 if isinstance(serializer, BooleanSerializer):
                     stmts.extend(gen_write_nullable_basic_stmts(buffer, field_value, bool))
-                elif isinstance(serializer, (ByteSerializer, Int16Serializer, Int32Serializer, Int64Serializer)):
-                    stmts.extend(gen_write_nullable_basic_stmts(buffer, field_value, int))
-                elif isinstance(serializer, (Float32Serializer, Float64Serializer)):
-                    stmts.extend(gen_write_nullable_basic_stmts(buffer, field_value, float))
+                elif isinstance(serializer, ByteSerializer):
+                    stmts.extend(gen_write_nullable_basic_stmts(buffer, field_value, "int8"))
+                elif isinstance(serializer, Int16Serializer):
+                    stmts.extend(gen_write_nullable_basic_stmts(buffer, field_value, "int16"))
+                elif isinstance(serializer, Int32Serializer):
+                    stmts.extend(gen_write_nullable_basic_stmts(buffer, field_value, "int32"))
+                elif isinstance(serializer, Int64Serializer):
+                    stmts.extend(gen_write_nullable_basic_stmts(buffer, field_value, "int64"))
+                elif isinstance(serializer, Float32Serializer):
+                    stmts.extend(gen_write_nullable_basic_stmts(buffer, field_value, "float32"))
+                elif isinstance(serializer, Float64Serializer):
+                    stmts.extend(gen_write_nullable_basic_stmts(buffer, field_value, "float64"))
                 elif isinstance(serializer, StringSerializer):
                     stmts.extend(gen_write_nullable_basic_stmts(buffer, field_value, str))
                 else:
@@ -671,7 +685,7 @@ class DataClassSerializer(Serializer):
                 ]
             )
         else:
-            stmts.append(f"num_fields_written = {buffer}.read_varuint32()")
+            stmts.append(f"num_fields_written = {buffer}.read_var_uint32()")
 
         stmts.extend(
             [
@@ -698,10 +712,18 @@ class DataClassSerializer(Serializer):
                 # Use gen_read_nullable_basic_stmts for nullable basic types
                 if isinstance(serializer, BooleanSerializer):
                     field_stmts.extend(gen_read_nullable_basic_stmts(buffer, bool, lambda v: f"{field_value} = {v}"))
-                elif isinstance(serializer, (ByteSerializer, Int16Serializer, Int32Serializer, Int64Serializer)):
-                    field_stmts.extend(gen_read_nullable_basic_stmts(buffer, int, lambda v: f"{field_value} = {v}"))
-                elif isinstance(serializer, (Float32Serializer, Float64Serializer)):
-                    field_stmts.extend(gen_read_nullable_basic_stmts(buffer, float, lambda v: f"{field_value} = {v}"))
+                elif isinstance(serializer, ByteSerializer):
+                    field_stmts.extend(gen_read_nullable_basic_stmts(buffer, "int8", lambda v: f"{field_value} = {v}"))
+                elif isinstance(serializer, Int16Serializer):
+                    field_stmts.extend(gen_read_nullable_basic_stmts(buffer, "int16", lambda v: f"{field_value} = {v}"))
+                elif isinstance(serializer, Int32Serializer):
+                    field_stmts.extend(gen_read_nullable_basic_stmts(buffer, "int32", lambda v: f"{field_value} = {v}"))
+                elif isinstance(serializer, Int64Serializer):
+                    field_stmts.extend(gen_read_nullable_basic_stmts(buffer, "int64", lambda v: f"{field_value} = {v}"))
+                elif isinstance(serializer, Float32Serializer):
+                    field_stmts.extend(gen_read_nullable_basic_stmts(buffer, "float32", lambda v: f"{field_value} = {v}"))
+                elif isinstance(serializer, Float64Serializer):
+                    field_stmts.extend(gen_read_nullable_basic_stmts(buffer, "float64", lambda v: f"{field_value} = {v}"))
                 elif isinstance(serializer, StringSerializer):
                     field_stmts.extend(gen_read_nullable_basic_stmts(buffer, str, lambda v: f"{field_value} = {v}"))
                 else:
@@ -817,7 +839,7 @@ class DataClassSerializer(Serializer):
                         stmts.extend(
                             [
                                 f"if {field_value} is None:",
-                                f"    {buffer}.write_varuint32(0)",
+                                f"    {buffer}.write_var_uint32(0)",
                                 "else:",
                                 f"    {stmt}",
                             ]
@@ -1015,6 +1037,11 @@ class DataClassSerializer(Serializer):
             serializer = self._serializers[index]
             is_nullable = self._nullable_fields.get(field_name, False)
             is_dynamic = self._dynamic_fields.get(field_name, False)
+            if _ENABLE_FORY_DEBUG_OUTPUT:
+                print(
+                    f"xwrite field '{field_name}': {field_value!r}, writer_index={buffer.get_writer_index()}, "
+                    f"nullable={is_nullable}, dynamic={is_dynamic}, serializer={serializer}"
+                )
             if is_nullable:
                 if field_value is None:
                     buffer.write_int8(-3)
@@ -1052,12 +1079,17 @@ class DataClassSerializer(Serializer):
             serializer = self._serializers[index]
             is_nullable = self._nullable_fields.get(field_name, False)
             is_dynamic = self._dynamic_fields.get(field_name, False)
+            if _ENABLE_FORY_DEBUG_OUTPUT:
+                print(
+                    f"xread field '{field_name}': reader_index={buffer.get_reader_index()}, "
+                    f"nullable={is_nullable}, dynamic={is_dynamic}, serializer={serializer}"
+                )
             if is_nullable:
                 ref_id = buffer.read_int8()
                 if ref_id == -3:
                     field_value = None
                 else:
-                    buffer.reader_index -= 1
+                    buffer.set_reader_index(buffer.get_reader_index() - 1)
                     # dynamic=True: don't pass serializer, read type info from buffer
                     # dynamic=False: pass serializer, use declared type
                     field_value = self.fory.xread_ref(buffer, serializer=None if is_dynamic else serializer)
@@ -1148,25 +1180,39 @@ class StructFieldSerializerVisitor(TypeVisitor):
 
     def visit_list(self, field_name, elem_type, types_path=None):
         from pyfory.serializer import ListSerializer  # Local import
+        from pyfory.type_util import unwrap_ref
 
         # Infer type recursively for type such as List[Dict[str, str]]
+        elem_type, elem_ref_override = unwrap_ref(elem_type)
         elem_serializer = infer_field("item", elem_type, self, types_path=types_path)
-        return ListSerializer(self.fory, list, elem_serializer)
+        return ListSerializer(self.fory, list, elem_serializer, elem_ref_override)
 
     def visit_set(self, field_name, elem_type, types_path=None):
         from pyfory.serializer import SetSerializer  # Local import
+        from pyfory.type_util import unwrap_ref
 
         # Infer type recursively for type such as Set[Dict[str, str]]
+        elem_type, elem_ref_override = unwrap_ref(elem_type)
         elem_serializer = infer_field("item", elem_type, self, types_path=types_path)
-        return SetSerializer(self.fory, set, elem_serializer)
+        return SetSerializer(self.fory, set, elem_serializer, elem_ref_override)
 
     def visit_dict(self, field_name, key_type, value_type, types_path=None):
         from pyfory.serializer import MapSerializer  # Local import
+        from pyfory.type_util import unwrap_ref
 
         # Infer type recursively for type such as Dict[str, Dict[str, str]]
+        key_type, key_ref_override = unwrap_ref(key_type)
+        value_type, value_ref_override = unwrap_ref(value_type)
         key_serializer = infer_field("key", key_type, self, types_path=types_path)
         value_serializer = infer_field("value", value_type, self, types_path=types_path)
-        return MapSerializer(self.fory, dict, key_serializer, value_serializer)
+        return MapSerializer(
+            self.fory,
+            dict,
+            key_serializer,
+            value_serializer,
+            key_ref_override,
+            value_ref_override,
+        )
 
     def visit_customized(self, field_name, type_, types_path=None):
         if issubclass(type_, enum.Enum):
@@ -1181,7 +1227,7 @@ class StructFieldSerializerVisitor(TypeVisitor):
     def visit_other(self, field_name, type_, types_path=None):
         if is_subclass(type_, enum.Enum):
             return self.fory.type_resolver.get_serializer(type_)
-        if type_ not in basic_types and not is_py_array_type(type_):
+        if type_ not in basic_types and not is_primitive_array_type(type_):
             return None
         serializer = self.fory.type_resolver.get_serializer(type_)
         return serializer
@@ -1190,16 +1236,19 @@ class StructFieldSerializerVisitor(TypeVisitor):
 _UNKNOWN_TYPE_ID = -1
 
 
-def _sort_fields(type_resolver, field_names, serializers, nullable_map=None):
+def _sort_fields(type_resolver, field_names, serializers, nullable_map=None, field_infos_list=None):
     (boxed_types, nullable_boxed_types, internal_types, collection_types, set_types, map_types, other_types) = group_fields(
-        type_resolver, field_names, serializers, nullable_map
+        type_resolver, field_names, serializers, nullable_map, field_infos_list
     )
     all_types = boxed_types + nullable_boxed_types + internal_types + collection_types + set_types + map_types + other_types
     return [t[2] for t in all_types], [t[1] for t in all_types]
 
 
-def group_fields(type_resolver, field_names, serializers, nullable_map=None):
+def group_fields(type_resolver, field_names, serializers, nullable_map=None, field_infos_list=None):
     nullable_map = nullable_map or {}
+    field_info_map = {}
+    if field_infos_list:
+        field_info_map = {fi.name: fi for fi in field_infos_list}
     boxed_types = []
     nullable_boxed_types = []
     collection_types = []
@@ -1209,17 +1258,26 @@ def group_fields(type_resolver, field_names, serializers, nullable_map=None):
     other_types = []
     type_ids = []
     for field_name, serializer in zip(field_names, serializers):
+        fi = field_info_map.get(field_name)
+        tag_id = fi.tag_id if fi else -1
+        if tag_id >= 0:
+            sort_key = (0, str(tag_id), "")
+        else:
+            sort_key = (1, field_name, "")
         if serializer is None:
-            other_types.append((_UNKNOWN_TYPE_ID, serializer, field_name))
+            other_types.append((_UNKNOWN_TYPE_ID, serializer, field_name, sort_key))
         else:
             type_ids.append(
                 (
                     type_resolver.get_typeinfo(serializer.type_).type_id & 0xFF,
                     serializer,
                     field_name,
+                    sort_key,
                 )
             )
-    for type_id, serializer, field_name in type_ids:
+    for type_id, serializer, field_name, sort_key in type_ids:
+        if is_union_type(type_id):
+            type_id = TypeId.UNION
         is_nullable = nullable_map.get(field_name, False)
         if is_primitive_type(type_id):
             container = nullable_boxed_types if is_nullable else boxed_types
@@ -1229,10 +1287,7 @@ def group_fields(type_resolver, field_names, serializers, nullable_map=None):
             container = collection_types
         elif is_map_type(serializer.type_):
             container = map_types
-        elif is_polymorphic_type(type_id) or type_id in {
-            TypeId.ENUM,
-            TypeId.NAMED_ENUM,
-        }:
+        elif is_polymorphic_type(type_id) or type_id in {TypeId.ENUM, TypeId.NAMED_ENUM} or is_union_type(type_id):
             container = other_types
         elif type_id >= TypeId.BOUND:
             # Native mode user-registered types have type_id >= BOUND
@@ -1240,17 +1295,15 @@ def group_fields(type_resolver, field_names, serializers, nullable_map=None):
         else:
             assert TypeId.UNKNOWN < type_id < TypeId.BOUND, (type_id,)
             container = internal_types
-        container.append((type_id, serializer, field_name))
+        container.append((type_id, serializer, field_name, sort_key))
 
     def sorter(item):
-        return item[0], item[2]
+        return item[0], item[3]
 
     def numeric_sorter(item):
         id_ = item[0]
         compress = id_ in {
             # Signed compressed types
-            TypeId.INT32,
-            TypeId.INT64,
             TypeId.VARINT32,
             TypeId.VARINT64,
             TypeId.TAGGED_INT64,
@@ -1261,7 +1314,7 @@ def group_fields(type_resolver, field_names, serializers, nullable_map=None):
         }
         # Sort by: compress flag, -size (largest first), -type_id (higher type ID first), field_name
         # Java sorts by size (largest first), then by primitive type ID (descending)
-        return int(compress), -get_primitive_type_size(id_), -id_, item[2]
+        return int(compress), -get_primitive_type_size(id_), -id_, item[3]
 
     boxed_types = sorted(boxed_types, key=numeric_sorter)
     nullable_boxed_types = sorted(nullable_boxed_types, key=numeric_sorter)
@@ -1269,7 +1322,7 @@ def group_fields(type_resolver, field_names, serializers, nullable_map=None):
     set_types = sorted(set_types, key=sorter)
     internal_types = sorted(internal_types, key=sorter)
     map_types = sorted(map_types, key=sorter)
-    other_types = sorted(other_types, key=lambda item: item[2])
+    other_types = sorted(other_types, key=lambda item: item[3])
     return (boxed_types, nullable_boxed_types, internal_types, collection_types, set_types, map_types, other_types)
 
 
@@ -1319,10 +1372,16 @@ def compute_struct_fingerprint(type_resolver, field_names, serializers, nullable
             nullable_flag = "1" if nullable_map.get(field_name, False) else "0"
         else:
             type_id = type_resolver.get_typeinfo(serializer.type_).type_id & 0xFF
+            if is_union_type(type_id):
+                # customized types can't be detected at compile time for some languages
+                type_id = TypeId.UNKNOWN
             is_nullable = nullable_map.get(field_name, False)
 
             # For polymorphic or enum types, set type_id to UNKNOWN but preserve nullable from map
-            if is_polymorphic_type(type_id) or type_id in {TypeId.ENUM, TypeId.NAMED_ENUM}:
+            if is_polymorphic_type(type_id) or type_id in {
+                TypeId.ENUM,
+                TypeId.NAMED_ENUM,
+            }:
                 type_id = TypeId.UNKNOWN
 
             # Use nullable from map - for xlang, this is already computed correctly
@@ -1332,12 +1391,12 @@ def compute_struct_fingerprint(type_resolver, field_names, serializers, nullable
         # Determine field identifier for fingerprint
         if tag_id >= 0:
             field_id_or_name = str(tag_id)
-            # Sort by tag ID (numeric) for tag ID fields
-            sort_key = (0, tag_id, "")  # 0 = tag ID fields come first
+            # Sort by tag ID string (lexicographic) for tag ID fields
+            sort_key = (0, field_id_or_name, "")  # 0 = tag ID fields come first
         else:
             field_id_or_name = field_name
             # Sort by field name (lexicographic) for name-based fields
-            sort_key = (1, 0, field_name)  # 1 = name fields come after
+            sort_key = (1, field_name, "")  # 1 = name fields come after
 
         fp_fields.append((sort_key, field_id_or_name, type_id, ref_flag, nullable_flag))
 
@@ -1363,7 +1422,7 @@ def compute_struct_meta(type_resolver, field_names, serializers, nullable_map=No
     consistent with Go, Java, Rust, and C++ implementations.
     """
     (boxed_types, nullable_boxed_types, internal_types, collection_types, set_types, map_types, other_types) = group_fields(
-        type_resolver, field_names, serializers, nullable_map
+        type_resolver, field_names, serializers, nullable_map, field_infos_list
     )
 
     # Compute fingerprint string using the new format with field infos
@@ -1426,7 +1485,7 @@ class StructTypeIdVisitor(TypeVisitor):
     def visit_other(self, field_name, type_, types_path=None):
         if is_subclass(type_, enum.Enum):
             return [self.fory.type_resolver.get_typeinfo(type_).type_id]
-        if type_ not in basic_types and not is_py_array_type(type_):
+        if type_ not in basic_types and not is_primitive_array_type(type_):
             return None, None
         typeinfo = self.fory.type_resolver.get_typeinfo(type_)
         return [typeinfo.type_id]
@@ -1464,7 +1523,7 @@ def get_field_names(clz, type_hints=None):
         # Regular object with __dict__
         # We can't know the fields without an instance, so we rely on type hints
         if type_hints is None:
-            type_hints = typing.get_type_hints(clz)
+            type_hints = get_type_hints(clz)
         return sorted(type_hints.keys())
     elif hasattr(clz, "__slots__"):
         # Object with __slots__

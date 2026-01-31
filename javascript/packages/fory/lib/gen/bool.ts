@@ -21,7 +21,7 @@ import { TypeInfo } from "../typeInfo";
 import { CodecBuilder } from "./builder";
 import { BaseSerializerGenerator } from "./serializer";
 import { CodegenRegistry } from "./router";
-import { InternalSerializerType } from "../type";
+import { TypeId } from "../type";
 import { Scope } from "./scope";
 
 class BoolSerializerGenerator extends BaseSerializerGenerator {
@@ -32,21 +32,17 @@ class BoolSerializerGenerator extends BaseSerializerGenerator {
     this.typeInfo = typeInfo;
   }
 
-  writeStmt(accessor: string): string {
+  write(accessor: string): string {
     return this.builder.writer.uint8(`${accessor} ? 1 : 0`);
   }
 
-  readStmt(accessor: (expr: string) => string): string {
+  read(accessor: (expr: string) => string): string {
     return accessor(`${this.builder.reader.uint8()} === 1`);
   }
 
   getFixedSize(): number {
     return 4;
   }
-
-  needToWriteRef(): boolean {
-    return false;
-  }
 }
 
-CodegenRegistry.register(InternalSerializerType.BOOL, BoolSerializerGenerator);
+CodegenRegistry.register(TypeId.BOOL, BoolSerializerGenerator);

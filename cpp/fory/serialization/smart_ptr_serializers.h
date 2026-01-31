@@ -83,7 +83,7 @@ template <typename T> struct Serializer<std::optional<T>> {
   static inline void write(const std::optional<T> &opt, WriteContext &ctx,
                            RefMode ref_mode, bool write_type,
                            bool has_generics = false) {
-    constexpr bool inner_requires_ref = requires_ref_metadata_v<T>;
+    constexpr bool inner_is_nullable = is_nullable_v<T>;
 
     if (ref_mode == RefMode::None) {
       if (!opt.has_value()) {
@@ -100,7 +100,7 @@ template <typename T> struct Serializer<std::optional<T>> {
       return;
     }
 
-    if constexpr (inner_requires_ref) {
+    if constexpr (inner_is_nullable) {
       Serializer<T>::write(*opt, ctx, RefMode::NullOnly, write_type,
                            has_generics);
     } else {
@@ -131,12 +131,7 @@ template <typename T> struct Serializer<std::optional<T>> {
 
   static inline std::optional<T> read(ReadContext &ctx, RefMode ref_mode,
                                       bool read_type) {
-    constexpr bool inner_requires_ref = requires_ref_metadata_v<T>;
-
-    std::cerr << "[optional::read] T=" << typeid(T).name()
-              << ", ref_mode=" << static_cast<int>(ref_mode)
-              << ", buffer_pos=" << ctx.buffer().reader_index() << std::endl;
-
+    constexpr bool inner_is_nullable = is_nullable_v<T>;
     if (ref_mode == RefMode::None) {
       T value = Serializer<T>::read(ctx, RefMode::None, read_type);
       if (ctx.has_error()) {
@@ -155,9 +150,9 @@ template <typename T> struct Serializer<std::optional<T>> {
       return std::optional<T>(std::nullopt);
     }
 
-    if constexpr (inner_requires_ref) {
+    if constexpr (inner_is_nullable) {
       // Rewind so the inner serializer can consume the reference metadata.
-      ctx.buffer().ReaderIndex(flag_pos);
+      ctx.buffer().reader_index(flag_pos);
       // Pass ref_mode directly - let inner serializer handle ref tracking
       T value = Serializer<T>::read(ctx, ref_mode, read_type);
       if (ctx.has_error()) {
@@ -183,7 +178,7 @@ template <typename T> struct Serializer<std::optional<T>> {
   static inline std::optional<T>
   read_with_type_info(ReadContext &ctx, RefMode ref_mode,
                       const TypeInfo &type_info) {
-    constexpr bool inner_requires_ref = requires_ref_metadata_v<T>;
+    constexpr bool inner_is_nullable = is_nullable_v<T>;
 
     if (ref_mode == RefMode::None) {
       T value =
@@ -204,9 +199,9 @@ template <typename T> struct Serializer<std::optional<T>> {
       return std::optional<T>(std::nullopt);
     }
 
-    if constexpr (inner_requires_ref) {
+    if constexpr (inner_is_nullable) {
       // Rewind so the inner serializer can consume the reference metadata.
-      ctx.buffer().ReaderIndex(flag_pos);
+      ctx.buffer().reader_index(flag_pos);
       // Pass ref_mode directly - let inner serializer handle ref tracking
       T value = Serializer<T>::read_with_type_info(ctx, ref_mode, type_info);
       if (ctx.has_error()) {
@@ -264,9 +259,10 @@ template <typename T> struct SharedPtrTypeIdHelper<T, true> {
 template <typename T> struct Serializer<std::shared_ptr<T>> {
   static_assert(!std::is_pointer_v<T>,
                 "shared_ptr of raw pointer types is not supported");
-  static_assert(!requires_ref_metadata_v<T>,
-                "shared_ptr of nullable types (optional/shared_ptr/unique_ptr) "
-                "is not supported. Use the wrapper type directly instead.");
+  static_assert(!is_nullable_v<T>,
+                "shared_ptr of nullable types "
+                "(optional/shared_ptr/unique_ptr/weak_ptr) is not supported. "
+                "Use the wrapper type directly instead.");
 
   static constexpr TypeId type_id =
       SharedPtrTypeIdHelper<T, std::is_polymorphic_v<T>>::value;
@@ -274,7 +270,7 @@ template <typename T> struct Serializer<std::shared_ptr<T>> {
   static inline void write_type_info(WriteContext &ctx) {
     if constexpr (std::is_polymorphic_v<T>) {
       // For polymorphic types, type info must be written dynamically
-      ctx.write_varuint32(static_cast<uint32_t>(TypeId::UNKNOWN));
+      ctx.write_var_uint32(static_cast<uint32_t>(TypeId::UNKNOWN));
     } else {
       Serializer<T>::write_type_info(ctx);
     }
@@ -345,7 +341,7 @@ template <typename T> struct Serializer<std::shared_ptr<T>> {
 
     // For polymorphic types, serialize the concrete type dynamically
     if constexpr (is_polymorphic) {
-      // Get the concrete type_index from the actual object
+      // get the concrete type_index from the actual object
       std::type_index concrete_type_id = std::type_index(typeid(*ptr));
 
       // Look up the TypeInfo for the concrete type
@@ -356,7 +352,7 @@ template <typename T> struct Serializer<std::shared_ptr<T>> {
       }
       const TypeInfo *type_info = type_info_res.value();
 
-      // Write type info if requested
+      // write type info if requested
       if (write_type) {
         auto write_res = ctx.write_any_typeinfo(
             static_cast<uint32_t>(TypeId::UNKNOWN), concrete_type_id);
@@ -481,7 +477,7 @@ template <typename T> struct Serializer<std::shared_ptr<T>> {
             "Reference flag encountered when reference tracking disabled"));
         return nullptr;
       }
-      uint32_t ref_id = ctx.read_varuint32(ctx.error());
+      uint32_t ref_id = ctx.read_var_uint32(ctx.error());
       if (FORY_PREDICT_FALSE(ctx.has_error())) {
         return nullptr;
       }
@@ -573,7 +569,7 @@ template <typename T> struct Serializer<std::shared_ptr<T>> {
       //
       // For circular references: we need to pre-allocate the shared_ptr and
       // store it BEFORE reading the struct fields. This allows forward
-      // references (like selfRef pointing back to the parent) to resolve.
+      // references (like self_ref pointing back to the parent) to resolve.
       if (is_first_occurrence) {
         // Pre-allocate with default construction and store immediately
         auto result = std::make_shared<T>();
@@ -639,7 +635,7 @@ template <typename T> struct Serializer<std::shared_ptr<T>> {
             "Reference flag encountered when reference tracking disabled"));
         return nullptr;
       }
-      uint32_t ref_id = ctx.read_varuint32(ctx.error());
+      uint32_t ref_id = ctx.read_var_uint32(ctx.error());
       if (FORY_PREDICT_FALSE(ctx.has_error())) {
         return nullptr;
       }
@@ -748,9 +744,10 @@ template <typename T> struct UniquePtrTypeIdHelper<T, true> {
 template <typename T> struct Serializer<std::unique_ptr<T>> {
   static_assert(!std::is_pointer_v<T>,
                 "unique_ptr of raw pointer types is not supported");
-  static_assert(!requires_ref_metadata_v<T>,
-                "unique_ptr of nullable types (optional/shared_ptr/unique_ptr) "
-                "is not supported. Use the wrapper type directly instead.");
+  static_assert(!is_nullable_v<T>,
+                "unique_ptr of nullable types "
+                "(optional/shared_ptr/unique_ptr/weak_ptr) is not supported. "
+                "Use the wrapper type directly instead.");
 
   static constexpr TypeId type_id =
       UniquePtrTypeIdHelper<T, std::is_polymorphic_v<T>>::value;

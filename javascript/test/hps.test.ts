@@ -17,7 +17,7 @@
  * under the License.
  */
 
-import { BinaryReader } from '@apache-fory/fory';
+import { BinaryReader } from '../packages/fory/index';
 import hps from '../packages/hps/index';
 import { describe, expect, test } from '@jest/globals';
 
@@ -32,12 +32,12 @@ skipableDescribe('hps', () => {
             serializeString("hello", bf, 0);
             var reader = new BinaryReader({});
             reader.reset(bf);
-            expect(reader.stringOfVarUInt32()).toBe("hello")
+            expect(reader.stringWithHeader()).toBe("hello")
 
             serializeString("😁", bf, 0);
             var reader = new BinaryReader({});
             reader.reset(bf);
-            expect(reader.stringOfVarUInt32()).toBe("😁")
+            expect(reader.stringWithHeader()).toBe("😁")
         }
     });
 });

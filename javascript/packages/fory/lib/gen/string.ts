@@ -19,9 +19,9 @@
 
 import { TypeInfo } from "../typeInfo";
 import { CodecBuilder } from "./builder";
-import { BaseSerializerGenerator, RefState } from "./serializer";
+import { BaseSerializerGenerator } from "./serializer";
 import { CodegenRegistry } from "./router";
-import { InternalSerializerType } from "../type";
+import { TypeId } from "../type";
 import { Scope } from "./scope";
 
 class StringSerializerGenerator extends BaseSerializerGenerator {
@@ -32,15 +32,14 @@ class StringSerializerGenerator extends BaseSerializerGenerator {
     this.typeInfo = typeInfo;
   }
 
-  writeStmt(accessor: string): string {
-    return this.builder.writer.stringOfVarUInt32(accessor);
+  write(accessor: string): string {
+    return this.builder.writer.stringWithHeader(accessor);
   }
 
-  readStmt(accessor: (expr: string) => string, refState: RefState): string {
+  read(accessor: (expr: string) => string, refState: string): string {
     const result = this.scope.uniqueName("result");
-
     return `
-        ${result} = ${this.builder.reader.stringOfVarUInt32()};
+        const ${result} = ${this.builder.reader.stringWithHeader()};
         ${this.maybeReference(result, refState)};
         ${accessor(result)}
     `;
@@ -49,10 +48,6 @@ class StringSerializerGenerator extends BaseSerializerGenerator {
   getFixedSize(): number {
     return 8;
   }
-
-  needToWriteRef(): boolean {
-    return Boolean(this.builder.fory.config.refTracking);
-  }
 }
 
-CodegenRegistry.register(InternalSerializerType.STRING, StringSerializerGenerator);
+CodegenRegistry.register(TypeId.STRING, StringSerializerGenerator);

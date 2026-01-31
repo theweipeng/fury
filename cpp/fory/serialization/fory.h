@@ -19,6 +19,7 @@
 
 #pragma once
 
+#include "fory/serialization/any_serializer.h"
 #include "fory/serialization/array_serializer.h"
 #include "fory/serialization/collection_serializer.h"
 #include "fory/serialization/config.h"
@@ -184,7 +185,7 @@ public:
   // Configuration Access
   // ==========================================================================
 
-  /// Get reference to the serialization configuration.
+  /// get reference to the serialization configuration.
   ///
   /// The configuration contains settings like xlang mode, compatible mode,
   /// reference tracking, etc.
@@ -221,8 +222,10 @@ public:
   ///
   /// Example:
   /// ```cpp
-  /// struct MyStruct { int32_t value; };
-  /// FORY_STRUCT(MyStruct, value);
+  /// struct MyStruct {
+  ///   int32_t value;
+  ///   FORY_STRUCT(MyStruct, value);
+  /// };
   ///
   /// fory.register_struct<MyStruct>(1);
   /// ```
@@ -323,6 +326,39 @@ public:
   template <typename T>
   Result<void, Error> register_enum(const std::string &type_name) {
     return type_resolver_->template register_by_name<T>("", type_name);
+  }
+
+  /// Register a union type with a numeric type ID.
+  ///
+  /// Use this method to register union types with generated custom serializers.
+  ///
+  /// @tparam T The union type to register (must provide Serializer<T>).
+  /// @param type_id Unique numeric identifier for this union type.
+  /// @return Success or error if registration fails.
+  template <typename T> Result<void, Error> register_union(uint32_t type_id) {
+    return type_resolver_->template register_union_by_id<T>(type_id);
+  }
+
+  /// Register a union type with namespace and type name.
+  ///
+  /// @tparam T The union type to register (must provide Serializer<T>).
+  /// @param ns Namespace for the type (can be empty string).
+  /// @param type_name Name of the type within the namespace.
+  /// @return Success or error if registration fails.
+  template <typename T>
+  Result<void, Error> register_union(const std::string &ns,
+                                     const std::string &type_name) {
+    return type_resolver_->template register_union_by_name<T>(ns, type_name);
+  }
+
+  /// Register a union type with type name only (no namespace).
+  ///
+  /// @tparam T The union type to register (must provide Serializer<T>).
+  /// @param type_name Name of the type.
+  /// @return Success or error if registration fails.
+  template <typename T>
+  Result<void, Error> register_union(const std::string &type_name) {
+    return type_resolver_->template register_union_by_name<T>("", type_name);
   }
 
   /// Register an extension type with a numeric type ID.
@@ -432,7 +468,13 @@ public:
     if (FORY_PREDICT_FALSE(!finalized_)) {
       ensure_finalized();
     }
-    return serialize_impl(obj, buffer);
+    // Swap in the caller's buffer so all writes go there.
+    std::swap(buffer, write_ctx_->buffer());
+    auto result = serialize_impl(obj, write_ctx_->buffer());
+    std::swap(buffer, write_ctx_->buffer());
+    // reset internal state after use without clobbering caller buffer.
+    write_ctx_->reset();
+    return result;
   }
 
   /// Serialize an object to an existing byte vector (zero-copy).
@@ -514,10 +556,6 @@ public:
     if (FORY_PREDICT_FALSE(!finalized_)) {
       ensure_finalized();
     }
-    if (buffer.reader_index() >= buffer.writer_index()) {
-      return Unexpected(Error::invalid("No data to read in buffer"));
-    }
-
     FORY_TRY(header, read_header(buffer));
     if (header.is_null) {
       return Unexpected(Error::invalid_data("Cannot deserialize null object"));
@@ -595,24 +633,19 @@ private:
   }
 
   /// Core serialization implementation.
+  /// TypeMeta is written inline using streaming protocol (no deferred writing).
   template <typename T>
   Result<size_t, Error> serialize_impl(const T &obj, Buffer &buffer) {
     size_t start_pos = buffer.writer_index();
 
-    // Write precomputed header (2 bytes), then adjust index if not xlang
-    buffer.Grow(2);
-    buffer.UnsafePut<uint16_t>(buffer.writer_index(), precomputed_header_);
-    buffer.IncreaseWriterIndex(header_length_);
-
-    // Reserve space for meta offset in compatible mode
-    size_t meta_start_offset = 0;
-    if (write_ctx_->is_compatible()) {
-      meta_start_offset = buffer.writer_index();
-      buffer.WriteInt32(-1); // Placeholder for meta offset (fixed 4 bytes)
-    }
+    // write precomputed header (2 bytes), then adjust index if not xlang
+    buffer.grow(2);
+    buffer.unsafe_put<uint16_t>(buffer.writer_index(), precomputed_header_);
+    buffer.increase_writer_index(header_length_);
 
     // Top-level serialization: use Tracking if ref tracking is enabled,
     // otherwise NullOnly for nullable handling
+    // TypeMeta is written inline during serialization (streaming protocol)
     const RefMode top_level_ref_mode =
         write_ctx_->track_ref() ? RefMode::Tracking : RefMode::NullOnly;
     Serializer<T>::write(obj, *write_ctx_, top_level_ref_mode, true);
@@ -621,32 +654,15 @@ private:
       return Unexpected(write_ctx_->take_error());
     }
 
-    // Write collected TypeMetas at the end in compatible mode
-    if (write_ctx_->is_compatible() && !write_ctx_->meta_empty()) {
-      write_ctx_->write_meta(meta_start_offset);
-    }
-
     return buffer.writer_index() - start_pos;
   }
 
   /// Core deserialization implementation.
+  /// TypeMeta is read inline using streaming protocol.
   template <typename T> Result<T, Error> deserialize_impl(Buffer &buffer) {
-    // Load TypeMetas at the beginning in compatible mode
-    size_t bytes_to_skip = 0;
-    if (read_ctx_->is_compatible()) {
-      Error error;
-      int32_t meta_offset = buffer.ReadInt32(error);
-      if (FORY_PREDICT_FALSE(!error.ok())) {
-        return Unexpected(std::move(error));
-      }
-      if (meta_offset != -1) {
-        FORY_TRY(meta_size, read_ctx_->load_type_meta(meta_offset));
-        bytes_to_skip = meta_size;
-      }
-    }
-
     // Top-level deserialization: use Tracking if ref tracking is enabled,
     // otherwise NullOnly for nullable handling
+    // TypeMeta is read inline during deserialization (streaming protocol)
     const RefMode top_level_ref_mode =
         read_ctx_->track_ref() ? RefMode::Tracking : RefMode::NullOnly;
     T result = Serializer<T>::read(*read_ctx_, top_level_ref_mode, true);
@@ -656,9 +672,6 @@ private:
     }
 
     read_ctx_->ref_reader().resolve_callbacks();
-    if (bytes_to_skip > 0) {
-      buffer.IncreaseReaderIndex(static_cast<uint32_t>(bytes_to_skip));
-    }
     return result;
   }
 

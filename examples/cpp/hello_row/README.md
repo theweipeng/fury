@@ -107,18 +107,17 @@ This example demonstrates:
 
 ## Key Concepts
 
-### Registering Field Info
+### Registering Struct Metadata
 
-Use the `FORY_FIELD_INFO` macro to enable automatic encoding:
+Use the `FORY_STRUCT` macro to enable automatic encoding:
 
 ```cpp
 struct Employee {
   std::string name;
   int32_t id;
   float salary;
+  FORY_STRUCT(Employee, name, id, salary);
 };
-
-FORY_FIELD_INFO(Employee, name, id, salary);
 ```
 
 ### Manual Row Writing
@@ -134,14 +133,14 @@ auto row_schema = schema(fields);
 
 // Create and write row
 RowWriter writer(row_schema);
-writer.Reset();
-writer.WriteString(0, "Alice");
-writer.Write(1, static_cast<int32_t>(25));
+writer.reset();
+writer.write_string(0, "Alice");
+writer.write(1, static_cast<int32_t>(25));
 
 // Read back
-auto row = writer.ToRow();
-std::cout << row->GetString(0) << std::endl;  // "Alice"
-std::cout << row->GetInt32(1) << std::endl;   // 25
+auto row = writer.to_row();
+std::cout << row->get_string(0) << std::endl;  // "Alice"
+std::cout << row->get_int32(1) << std::endl;   // 25
 ```
 
 ### Automatic Encoding with RowEncoder
@@ -151,12 +150,12 @@ using namespace fory::row;
 
 Employee emp{"Bob", 1001, 75000.0f};
 encoder::RowEncoder<Employee> enc;
-enc.Encode(emp);
+enc.encode(emp);
 
-auto row = enc.GetWriter().ToRow();
-std::cout << row->GetString(0) << std::endl;  // "Bob"
-std::cout << row->GetInt32(1) << std::endl;   // 1001
-std::cout << row->GetFloat(2) << std::endl;   // 75000.0
+auto row = enc.get_writer().to_row();
+std::cout << row->get_string(0) << std::endl;  // "Bob"
+std::cout << row->get_int32(1) << std::endl;   // 1001
+std::cout << row->get_float(2) << std::endl;   // 75000.0
 ```
 
 ### Supported Types

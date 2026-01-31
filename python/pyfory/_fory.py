@@ -154,12 +154,13 @@ class Fory:
         "serialization_context",
         "strict",
         "buffer",
-        "_buffer_callback",
+        "buffer_callback",
         "_buffers",
         "metastring_resolver",
         "_unsupported_callback",
         "_unsupported_objects",
         "_peer_language",
+        "is_peer_out_of_band_enabled",
         "max_depth",
         "depth",
         "field_nullable",
@@ -249,11 +250,12 @@ class Fory:
         self.type_resolver.initialize()
 
         self.buffer = Buffer.allocate(32)
-        self._buffer_callback = None
+        self.buffer_callback = None
         self._buffers = None
         self._unsupported_callback = None
         self._unsupported_objects = None
         self._peer_language = None
+        self.is_peer_out_of_band_enabled = False
         self.max_depth = max_depth
         self.depth = 0
 
@@ -359,6 +361,26 @@ class Fory:
             serializer=serializer,
         )
 
+    def register_union(
+        self,
+        cls: Union[type, TypeVar],
+        *,
+        type_id: int = None,
+        namespace: str = None,
+        typename: str = None,
+        serializer=None,
+    ):
+        """
+        Register a union type with a generated serializer.
+        """
+        return self.type_resolver.register_union(
+            cls,
+            type_id=type_id,
+            namespace=namespace,
+            typename=typename,
+            serializer=serializer,
+        )
+
     def register_serializer(self, cls: type, serializer):
         """
         Register a custom serializer for a type.
@@ -447,15 +469,15 @@ class Fory:
     ) -> Union[Buffer, bytes]:
         assert self.depth == 0, "Nested serialization should use write_ref/write_no_ref/xwrite_ref/xwrite_no_ref."
         self.depth += 1
-        self._buffer_callback = buffer_callback
+        self.buffer_callback = buffer_callback
         self._unsupported_callback = unsupported_callback
         if buffer is None:
-            self.buffer.writer_index = 0
+            self.buffer.set_writer_index(0)
             buffer = self.buffer
-        mask_index = buffer.writer_index
+        mask_index = buffer.get_writer_index()
         # 1byte used for bit mask
         buffer.grow(1)
-        buffer.writer_index = mask_index + 1
+        buffer.set_writer_index(mask_index + 1)
         if obj is None:
             set_bit(buffer, mask_index, 0)
         else:
@@ -469,33 +491,20 @@ class Fory:
         else:
             # set reader as native.
             clear_bit(buffer, mask_index, 1)
-        if self._buffer_callback is not None:
+        if self.buffer_callback is not None:
             set_bit(buffer, mask_index, 2)
         else:
             clear_bit(buffer, mask_index, 2)
-        # Reserve space for type definitions offset, similar to Java implementation
-        type_defs_offset_pos = None
-        if self.serialization_context.scoped_meta_share_enabled:
-            type_defs_offset_pos = buffer.writer_index
-            buffer.write_int32(-1)  # Reserve 4 bytes for type definitions offset
+        # Type definitions are now written inline (streaming) instead of deferred to end
 
         if self.language == Language.PYTHON:
             self.write_ref(buffer, obj)
         else:
             self.xwrite_ref(buffer, obj)
-
-        # Write type definitions at the end, similar to Java implementation
-        if self.serialization_context.scoped_meta_share_enabled:
-            meta_context = self.serialization_context.meta_context
-            if meta_context is not None and len(meta_context.get_writing_type_defs()) > 0:
-                # Update the offset to point to current position
-                current_pos = buffer.writer_index
-                buffer.put_int32(type_defs_offset_pos, current_pos - type_defs_offset_pos - 4)
-                self.type_resolver.write_type_defs(buffer)
         if buffer is not self.buffer:
             return buffer
         else:
-            return buffer.to_bytes(0, buffer.writer_index)
+            return buffer.to_bytes(0, buffer.get_writer_index())
 
     def write_ref(self, buffer, obj, typeinfo=None):
         cls = type(obj)
@@ -521,15 +530,15 @@ class Fory:
     def write_no_ref(self, buffer, obj):
         cls = type(obj)
         if cls is str:
-            buffer.write_varuint32(STRING_TYPE_ID)
+            buffer.write_var_uint32(STRING_TYPE_ID)
             buffer.write_string(obj)
             return
         elif cls is int:
-            buffer.write_varuint32(INT64_TYPE_ID)
+            buffer.write_var_uint32(INT64_TYPE_ID)
             buffer.write_varint64(obj)
             return
         elif cls is bool:
-            buffer.write_varuint32(BOOL_TYPE_ID)
+            buffer.write_var_uint32(BOOL_TYPE_ID)
             buffer.write_bool(obj)
             return
         else:
@@ -602,8 +611,8 @@ class Fory:
             buffer = Buffer(buffer)
         if unsupported_objects is not None:
             self._unsupported_objects = iter(unsupported_objects)
-        reader_index = buffer.reader_index
-        buffer.reader_index = reader_index + 1
+        reader_index = buffer.get_reader_index()
+        buffer.set_reader_index(reader_index + 1)
         if get_bit(buffer, reader_index, 0):
             return None
         is_target_x_lang = get_bit(buffer, reader_index, 1)
@@ -611,38 +620,19 @@ class Fory:
             self._peer_language = Language(buffer.read_int8())
         else:
             self._peer_language = Language.PYTHON
-        is_out_of_band_serialization_enabled = get_bit(buffer, reader_index, 2)
-        if is_out_of_band_serialization_enabled:
+        self.is_peer_out_of_band_enabled = get_bit(buffer, reader_index, 2)
+        if self.is_peer_out_of_band_enabled:
             assert buffers is not None, "buffers shouldn't be null when the serialized stream is produced with buffer_callback not null."
             self._buffers = iter(buffers)
         else:
             assert buffers is None, "buffers should be null when the serialized stream is produced with buffer_callback null."
 
-        # Read type definitions at the start, similar to Java implementation
-        end_reader_index = None
-        if self.serialization_context.scoped_meta_share_enabled:
-            relative_type_defs_offset = buffer.read_int32()
-            if relative_type_defs_offset != -1:
-                # Save current reader position
-                current_reader_index = buffer.reader_index
-                # Jump to type definitions
-                buffer.reader_index = current_reader_index + relative_type_defs_offset
-                # Read type definitions
-                self.type_resolver.read_type_defs(buffer)
-                # Save the end position (after type defs) - this is the true end of serialized data
-                end_reader_index = buffer.reader_index
-                # Jump back to continue with object deserialization
-                buffer.reader_index = current_reader_index
+        # Type definitions are now read inline (streaming) instead of at the end
 
         if is_target_x_lang:
             obj = self.xread_ref(buffer)
         else:
             obj = self.read_ref(buffer)
-
-        # After reading the object, position buffer at the end of serialized data
-        # (which is after the type definitions, not after the object data)
-        if end_reader_index is not None:
-            buffer.reader_index = end_reader_index
 
         return obj
 
@@ -704,29 +694,45 @@ class Fory:
         return o
 
     def write_buffer_object(self, buffer, buffer_object: BufferObject):
-        if self._buffer_callback is None or self._buffer_callback(buffer_object):
+        if self.buffer_callback is None:
+            size = buffer_object.total_bytes()
+            # writer length.
+            buffer.write_var_uint32(size)
+            writer_index = buffer.get_writer_index()
+            buffer.ensure(writer_index + size)
+            buf = buffer.slice(writer_index, size)
+            buffer_object.write_to(buf)
+            buffer.set_writer_index(writer_index + size)
+            return
+        if self.buffer_callback(buffer_object):
             buffer.write_bool(True)
             size = buffer_object.total_bytes()
             # writer length.
-            buffer.write_varuint32(size)
-            writer_index = buffer.writer_index
+            buffer.write_var_uint32(size)
+            writer_index = buffer.get_writer_index()
             buffer.ensure(writer_index + size)
-            buf = buffer.slice(buffer.writer_index, size)
+            buf = buffer.slice(writer_index, size)
             buffer_object.write_to(buf)
-            buffer.writer_index += size
+            buffer.set_writer_index(writer_index + size)
         else:
             buffer.write_bool(False)
 
     def read_buffer_object(self, buffer) -> Buffer:
-        in_band = buffer.read_bool()
-        if in_band:
-            size = buffer.read_varuint32()
-            buf = buffer.slice(buffer.reader_index, size)
-            buffer.reader_index += size
+        if not self.is_peer_out_of_band_enabled:
+            size = buffer.read_var_uint32()
+            reader_index = buffer.get_reader_index()
+            buf = buffer.slice(reader_index, size)
+            buffer.set_reader_index(reader_index + size)
             return buf
-        else:
+        in_band = buffer.read_bool()
+        if not in_band:
             assert self._buffers is not None
             return next(self._buffers)
+        size = buffer.read_var_uint32()
+        reader_index = buffer.get_reader_index()
+        buf = buffer.slice(reader_index, size)
+        buffer.set_reader_index(reader_index + size)
+        return buf
 
     def handle_unsupported_write(self, buffer, obj):
         if self._unsupported_callback is None or self._unsupported_callback(obj):
@@ -759,7 +765,7 @@ class Fory:
         self.type_resolver.reset_write()
         self.serialization_context.reset_write()
         self.metastring_resolver.reset_write()
-        self._buffer_callback = None
+        self.buffer_callback = None
         self._unsupported_callback = None
 
     def reset_read(self):
@@ -776,6 +782,7 @@ class Fory:
         self.metastring_resolver.reset_write()
         self._buffers = None
         self._unsupported_objects = None
+        self.is_peer_out_of_band_enabled = False
 
     def reset(self):
         """
@@ -861,14 +868,15 @@ class ThreadSafeFory:
         - Both Python and Cython modes are supported automatically
     """
 
-    def __init__(self, **kwargs):
+    def __init__(self, fory_factory=None, **kwargs):
         import threading
 
         self._config = kwargs
+        self._fory_factory = fory_factory
         self._callbacks = []
         self._lock = threading.Lock()
         self._pool = []
-        self._fory_class = self._get_fory_class()
+        self._fory_class = None if fory_factory is not None else self._get_fory_class()
         self._instances_created = False
 
     def _get_fory_class(self):
@@ -888,7 +896,10 @@ class ThreadSafeFory:
             if self._pool:
                 return self._pool.pop()
             self._instances_created = True
-            fory = self._fory_class(**self._config)
+            if self._fory_factory is not None:
+                fory = self._fory_factory()
+            else:
+                fory = self._fory_class(**self._config)
             for callback in self._callbacks:
                 callback(fory)
             return fory
@@ -926,6 +937,17 @@ class ThreadSafeFory:
         serializer=None,
     ):
         self._register_callback(lambda f: f.register_type(cls, type_id=type_id, namespace=namespace, typename=typename, serializer=serializer))
+
+    def register_union(
+        self,
+        cls: Union[type, TypeVar],
+        *,
+        type_id: int = None,
+        namespace: str = None,
+        typename: str = None,
+        serializer=None,
+    ):
+        self._register_callback(lambda f: f.register_union(cls, type_id=type_id, namespace=namespace, typename=typename, serializer=serializer))
 
     def register_serializer(self, cls: type, serializer):
         self._register_callback(lambda f: f.register_serializer(cls, serializer))

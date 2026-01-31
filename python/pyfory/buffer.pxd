@@ -22,9 +22,9 @@
 # cython: annotate = True
 
 from libc.stdint cimport *
-from libcpp.memory cimport shared_ptr
 from libcpp cimport bool as c_bool
-from pyfory.includes.libutil cimport CBuffer
+from libcpp.memory cimport shared_ptr
+from pyfory.includes.libutil cimport CBuffer, CError
 
 
 cdef class Buffer:
@@ -32,18 +32,17 @@ cdef class Buffer:
     us to use it for calls into Python libraries without having to
     copy the data."""
     cdef:
-        shared_ptr[CBuffer] c_buffer
-        CBuffer* c_buffer_ptr
-        uint8_t* _c_address
-        int32_t _c_size
+        CBuffer c_buffer
+        CError _error
         # hold python buffer reference count
         object data
         Py_ssize_t shape[1]
         Py_ssize_t stride[1]
-        public int32_t reader_index, writer_index
 
     @staticmethod
     cdef Buffer wrap(shared_ptr[CBuffer] c_buffer)
+
+    cdef void _raise_if_error(self)
 
     cpdef inline check_bound(self, int32_t offset, int32_t length)
 
@@ -52,6 +51,14 @@ cdef class Buffer:
     cpdef inline c_bool own_data(self)
 
     cpdef inline reserve(self, int32_t new_size)
+
+    cpdef inline int32_t get_reader_index(self)
+
+    cpdef inline void set_reader_index(self, int32_t value)
+
+    cpdef inline int32_t get_writer_index(self)
+
+    cpdef inline void set_writer_index(self, int32_t value)
 
     cpdef inline int32_t size(self)
 
@@ -153,19 +160,19 @@ cdef class Buffer:
 
     cpdef inline write_varint64(self, int64_t v)
 
-    cpdef inline write_varuint64(self, int64_t v)
+    cpdef inline write_var_uint64(self, int64_t v)
 
     cpdef inline int64_t read_varint64(self)
 
-    cpdef inline int64_t read_varuint64(self)
+    cpdef inline int64_t read_var_uint64(self)
 
-    cpdef inline write_varuint32(self, uint32_t value)
+    cpdef inline write_var_uint32(self, uint32_t value)
 
     cpdef inline write_varint32(self, int32_t value)
 
     cpdef inline int32_t read_varint32(self)
 
-    cpdef inline uint32_t read_varuint32(self)
+    cpdef inline uint32_t read_var_uint32(self)
 
     cpdef inline write_tagged_int64(self, int64_t value)
 

@@ -27,16 +27,16 @@ import org.apache.fory.codegen.Expression.Invoke;
 import org.apache.fory.config.LongEncoding;
 import org.apache.fory.memory.MemoryBuffer;
 import org.apache.fory.memory.Platform;
-import org.apache.fory.resolver.ClassResolver;
+import org.apache.fory.resolver.TypeResolver;
+import org.apache.fory.serializer.Serializers.CrossLanguageCompatibleSerializer;
 import org.apache.fory.util.Preconditions;
 
 /** Serializers for java primitive types. */
 @SuppressWarnings({"rawtypes", "unchecked"})
 public class PrimitiveSerializers {
-  public static final class BooleanSerializer
-      extends Serializers.CrossLanguageCompatibleSerializer<Boolean> {
+  public static final class BooleanSerializer extends CrossLanguageCompatibleSerializer<Boolean> {
     public BooleanSerializer(Fory fory, Class<?> cls) {
-      super(fory, (Class) cls, !(cls.isPrimitive() || fory.isBasicTypesRefIgnored()), true);
+      super(fory, (Class) cls, false, true);
     }
 
     @Override
@@ -50,10 +50,9 @@ public class PrimitiveSerializers {
     }
   }
 
-  public static final class ByteSerializer
-      extends Serializers.CrossLanguageCompatibleSerializer<Byte> {
+  public static final class ByteSerializer extends CrossLanguageCompatibleSerializer<Byte> {
     public ByteSerializer(Fory fory, Class<?> cls) {
-      super(fory, (Class) cls, !(cls.isPrimitive() || fory.isBasicTypesRefIgnored()), true);
+      super(fory, (Class) cls, false, true);
     }
 
     @Override
@@ -67,37 +66,37 @@ public class PrimitiveSerializers {
     }
   }
 
-  public static final class Uint8Serializer extends Serializer<Integer> {
+  public static final class Uint8Serializer extends CrossLanguageCompatibleSerializer<Integer> {
     public Uint8Serializer(Fory fory) {
       super(fory, Integer.class);
     }
 
     @Override
-    public void xwrite(MemoryBuffer buffer, Integer value) {
+    public void write(MemoryBuffer buffer, Integer value) {
       Preconditions.checkArgument(value >= 0 && value <= 255);
       buffer.writeByte(value.byteValue());
     }
 
     @Override
-    public Integer xread(MemoryBuffer buffer) {
+    public Integer read(MemoryBuffer buffer) {
       int b = buffer.readByte();
       return b >>> 24;
     }
   }
 
-  public static final class Uint16Serializer extends Serializer<Integer> {
+  public static final class Uint16Serializer extends CrossLanguageCompatibleSerializer<Integer> {
     public Uint16Serializer(Fory fory) {
       super(fory, Integer.class);
     }
 
     @Override
-    public void xwrite(MemoryBuffer buffer, Integer value) {
+    public void write(MemoryBuffer buffer, Integer value) {
       Preconditions.checkArgument(value >= 0 && value <= 65535);
       buffer.writeByte(value.byteValue());
     }
 
     @Override
-    public Integer xread(MemoryBuffer buffer) {
+    public Integer read(MemoryBuffer buffer) {
       int b = buffer.readByte();
       return b >>> 16;
     }
@@ -105,7 +104,7 @@ public class PrimitiveSerializers {
 
   public static final class CharSerializer extends ImmutableSerializer<Character> {
     public CharSerializer(Fory fory, Class<?> cls) {
-      super(fory, (Class) cls, !(cls.isPrimitive() || fory.isBasicTypesRefIgnored()));
+      super(fory, (Class) cls, false);
     }
 
     @Override
@@ -119,10 +118,9 @@ public class PrimitiveSerializers {
     }
   }
 
-  public static final class ShortSerializer
-      extends Serializers.CrossLanguageCompatibleSerializer<Short> {
+  public static final class ShortSerializer extends CrossLanguageCompatibleSerializer<Short> {
     public ShortSerializer(Fory fory, Class<?> cls) {
-      super(fory, (Class) cls, !(cls.isPrimitive() || fory.isBasicTypesRefIgnored()), true);
+      super(fory, (Class) cls, false, true);
     }
 
     @Override
@@ -136,12 +134,11 @@ public class PrimitiveSerializers {
     }
   }
 
-  public static final class IntSerializer
-      extends Serializers.CrossLanguageCompatibleSerializer<Integer> {
+  public static final class IntSerializer extends CrossLanguageCompatibleSerializer<Integer> {
     private final boolean compressNumber;
 
     public IntSerializer(Fory fory, Class<?> cls) {
-      super(fory, (Class) cls, !(cls.isPrimitive() || fory.isBasicTypesRefIgnored()), true);
+      super(fory, (Class) cls, false, true);
       compressNumber = fory.compressInt();
     }
 
@@ -175,12 +172,39 @@ public class PrimitiveSerializers {
     }
   }
 
-  public static final class LongSerializer
-      extends Serializers.CrossLanguageCompatibleSerializer<Long> {
+  public static final class VarUint32Serializer extends Serializer<Integer> {
+    public VarUint32Serializer(Fory fory) {
+      super(fory, Integer.class);
+    }
+
+    @Override
+    public void write(MemoryBuffer buffer, Integer value) {
+      Preconditions.checkArgument(value >= 0);
+      buffer.writeVarUint32(value);
+    }
+
+    @Override
+    public Integer read(MemoryBuffer buffer) {
+      return buffer.readVarUint32();
+    }
+
+    @Override
+    public void xwrite(MemoryBuffer buffer, Integer value) {
+      Preconditions.checkArgument(value >= 0);
+      buffer.writeVarUint32(value);
+    }
+
+    @Override
+    public Integer xread(MemoryBuffer buffer) {
+      return buffer.readVarUint32();
+    }
+  }
+
+  public static final class LongSerializer extends CrossLanguageCompatibleSerializer<Long> {
     private final LongEncoding longEncoding;
 
     public LongSerializer(Fory fory, Class<?> cls) {
-      super(fory, (Class) cls, !(cls.isPrimitive() || fory.isBasicTypesRefIgnored()), true);
+      super(fory, (Class) cls, false, true);
       longEncoding = fory.longEncoding();
     }
 
@@ -258,10 +282,37 @@ public class PrimitiveSerializers {
     }
   }
 
-  public static final class FloatSerializer
-      extends Serializers.CrossLanguageCompatibleSerializer<Float> {
+  public static final class VarUint64Serializer extends Serializer<Long> {
+    public VarUint64Serializer(Fory fory) {
+      super(fory, Long.class);
+    }
+
+    @Override
+    public void write(MemoryBuffer buffer, Long value) {
+      Preconditions.checkArgument(value >= 0);
+      buffer.writeVarUint64(value);
+    }
+
+    @Override
+    public Long read(MemoryBuffer buffer) {
+      return buffer.readVarUint64();
+    }
+
+    @Override
+    public void xwrite(MemoryBuffer buffer, Long value) {
+      Preconditions.checkArgument(value >= 0);
+      buffer.writeVarUint64(value);
+    }
+
+    @Override
+    public Long xread(MemoryBuffer buffer) {
+      return buffer.readVarUint64();
+    }
+  }
+
+  public static final class FloatSerializer extends CrossLanguageCompatibleSerializer<Float> {
     public FloatSerializer(Fory fory, Class<?> cls) {
-      super(fory, (Class) cls, !(cls.isPrimitive() || fory.isBasicTypesRefIgnored()), true);
+      super(fory, (Class) cls, false, true);
     }
 
     @Override
@@ -275,10 +326,9 @@ public class PrimitiveSerializers {
     }
   }
 
-  public static final class DoubleSerializer
-      extends Serializers.CrossLanguageCompatibleSerializer<Double> {
+  public static final class DoubleSerializer extends CrossLanguageCompatibleSerializer<Double> {
     public DoubleSerializer(Fory fory, Class<?> cls) {
-      super(fory, (Class) cls, !(cls.isPrimitive() || fory.isBasicTypesRefIgnored()), true);
+      super(fory, (Class) cls, false, true);
     }
 
     @Override
@@ -294,7 +344,7 @@ public class PrimitiveSerializers {
 
   public static void registerDefaultSerializers(Fory fory) {
     // primitive types will be boxed.
-    ClassResolver resolver = fory.getClassResolver();
+    TypeResolver resolver = fory.getTypeResolver();
     resolver.registerInternalSerializer(boolean.class, new BooleanSerializer(fory, boolean.class));
     resolver.registerInternalSerializer(byte.class, new ByteSerializer(fory, byte.class));
     resolver.registerInternalSerializer(short.class, new ShortSerializer(fory, short.class));

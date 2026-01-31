@@ -17,10 +17,7 @@
 
 package fory
 
-import (
-	"reflect"
-	"unsafe"
-)
+import "reflect"
 
 // ============================================================================
 // Primitive Serializers - implement unified Serializer interface
@@ -41,7 +38,7 @@ func (s boolSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool
 		ctx.buffer.WriteInt8(NotNullValueFlag)
 	}
 	if writeType {
-		ctx.buffer.WriteVaruint32Small7(uint32(BOOL))
+		ctx.buffer.WriteVarUint32Small7(uint32(BOOL))
 	}
 	s.WriteData(ctx, value)
 }
@@ -60,7 +57,7 @@ func (s boolSerializer) Read(ctx *ReadContext, refMode RefMode, readType bool, h
 		}
 	}
 	if readType {
-		_ = ctx.buffer.ReadVaruint32Small7(err)
+		_ = ctx.buffer.ReadVarUint32Small7(err)
 	}
 	if ctx.HasError() {
 		return
@@ -88,7 +85,7 @@ func (s int8Serializer) Write(ctx *WriteContext, refMode RefMode, writeType bool
 		ctx.buffer.WriteInt8(NotNullValueFlag)
 	}
 	if writeType {
-		ctx.buffer.WriteVaruint32Small7(uint32(INT8))
+		ctx.buffer.WriteVarUint32Small7(uint32(INT8))
 	}
 	s.WriteData(ctx, value)
 }
@@ -107,7 +104,7 @@ func (s int8Serializer) Read(ctx *ReadContext, refMode RefMode, readType bool, h
 		}
 	}
 	if readType {
-		_ = ctx.buffer.ReadVaruint32Small7(err)
+		_ = ctx.buffer.ReadVarUint32Small7(err)
 	}
 	if ctx.HasError() {
 		return
@@ -134,7 +131,7 @@ func (s byteSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool
 		ctx.buffer.WriteInt8(NotNullValueFlag)
 	}
 	if writeType {
-		ctx.buffer.WriteVaruint32Small7(uint32(UINT8))
+		ctx.buffer.WriteVarUint32Small7(uint32(UINT8))
 	}
 	s.WriteData(ctx, value)
 }
@@ -153,7 +150,7 @@ func (s byteSerializer) Read(ctx *ReadContext, refMode RefMode, readType bool, h
 		}
 	}
 	if readType {
-		_ = ctx.buffer.ReadVaruint32Small7(err)
+		_ = ctx.buffer.ReadVarUint32Small7(err)
 	}
 	if ctx.HasError() {
 		return
@@ -180,7 +177,7 @@ func (s uint16Serializer) Write(ctx *WriteContext, refMode RefMode, writeType bo
 		ctx.buffer.WriteInt8(NotNullValueFlag)
 	}
 	if writeType {
-		ctx.buffer.WriteVaruint32Small7(uint32(UINT16))
+		ctx.buffer.WriteVarUint32Small7(uint32(UINT16))
 	}
 	s.WriteData(ctx, value)
 }
@@ -199,7 +196,7 @@ func (s uint16Serializer) Read(ctx *ReadContext, refMode RefMode, readType bool,
 		}
 	}
 	if readType {
-		_ = ctx.buffer.ReadVaruint32Small7(err)
+		_ = ctx.buffer.ReadVarUint32Small7(err)
 	}
 	if ctx.HasError() {
 		return
@@ -217,7 +214,7 @@ type uint32Serializer struct{}
 var globalUint32Serializer = uint32Serializer{}
 
 func (s uint32Serializer) WriteData(ctx *WriteContext, value reflect.Value) {
-	ctx.buffer.WriteVaruint32(uint32(value.Uint()))
+	ctx.buffer.WriteVarUint32(uint32(value.Uint()))
 }
 
 func (s uint32Serializer) Write(ctx *WriteContext, refMode RefMode, writeType bool, hasGenerics bool, value reflect.Value) {
@@ -226,14 +223,14 @@ func (s uint32Serializer) Write(ctx *WriteContext, refMode RefMode, writeType bo
 		ctx.buffer.WriteInt8(NotNullValueFlag)
 	}
 	if writeType {
-		ctx.buffer.WriteVaruint32Small7(uint32(VAR_UINT32))
+		ctx.buffer.WriteVarUint32Small7(uint32(VAR_UINT32))
 	}
 	s.WriteData(ctx, value)
 }
 
 func (s uint32Serializer) ReadData(ctx *ReadContext, value reflect.Value) {
 	err := ctx.Err()
-	value.SetUint(uint64(ctx.buffer.ReadVaruint32(err)))
+	value.SetUint(uint64(ctx.buffer.ReadVarUint32(err)))
 }
 
 func (s uint32Serializer) Read(ctx *ReadContext, refMode RefMode, readType bool, hasGenerics bool, value reflect.Value) {
@@ -245,7 +242,7 @@ func (s uint32Serializer) Read(ctx *ReadContext, refMode RefMode, readType bool,
 		}
 	}
 	if readType {
-		_ = ctx.buffer.ReadVaruint32Small7(err)
+		_ = ctx.buffer.ReadVarUint32Small7(err)
 	}
 	if ctx.HasError() {
 		return
@@ -263,7 +260,7 @@ type uint64Serializer struct{}
 var globalUint64Serializer = uint64Serializer{}
 
 func (s uint64Serializer) WriteData(ctx *WriteContext, value reflect.Value) {
-	ctx.buffer.WriteVaruint64(value.Uint())
+	ctx.buffer.WriteVarUint64(value.Uint())
 }
 
 func (s uint64Serializer) Write(ctx *WriteContext, refMode RefMode, writeType bool, hasGenerics bool, value reflect.Value) {
@@ -272,14 +269,14 @@ func (s uint64Serializer) Write(ctx *WriteContext, refMode RefMode, writeType bo
 		ctx.buffer.WriteInt8(NotNullValueFlag)
 	}
 	if writeType {
-		ctx.buffer.WriteVaruint32Small7(uint32(VAR_UINT64))
+		ctx.buffer.WriteVarUint32Small7(uint32(VAR_UINT64))
 	}
 	s.WriteData(ctx, value)
 }
 
 func (s uint64Serializer) ReadData(ctx *ReadContext, value reflect.Value) {
 	err := ctx.Err()
-	value.SetUint(ctx.buffer.ReadVaruint64(err))
+	value.SetUint(ctx.buffer.ReadVarUint64(err))
 }
 
 func (s uint64Serializer) Read(ctx *ReadContext, refMode RefMode, readType bool, hasGenerics bool, value reflect.Value) {
@@ -291,7 +288,7 @@ func (s uint64Serializer) Read(ctx *ReadContext, refMode RefMode, readType bool,
 		}
 	}
 	if readType {
-		_ = ctx.buffer.ReadVaruint32Small7(err)
+		_ = ctx.buffer.ReadVarUint32Small7(err)
 	}
 	if ctx.HasError() {
 		return
@@ -300,6 +297,50 @@ func (s uint64Serializer) Read(ctx *ReadContext, refMode RefMode, readType bool,
 }
 
 func (s uint64Serializer) ReadWithTypeInfo(ctx *ReadContext, refMode RefMode, typeInfo *TypeInfo, value reflect.Value) {
+	s.Read(ctx, refMode, false, false, value)
+}
+
+// uintSerializer handles uint type with variable-length encoding (VAR_UINT64)
+type uintSerializer struct{}
+
+var globalUintSerializer = uintSerializer{}
+
+func (s uintSerializer) WriteData(ctx *WriteContext, value reflect.Value) {
+	ctx.buffer.WriteVarUint64(value.Uint())
+}
+
+func (s uintSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool, hasGenerics bool, value reflect.Value) {
+	if refMode != RefModeNone {
+		ctx.buffer.WriteInt8(NotNullValueFlag)
+	}
+	if writeType {
+		ctx.buffer.WriteVarUint32Small7(uint32(VAR_UINT64))
+	}
+	s.WriteData(ctx, value)
+}
+
+func (s uintSerializer) ReadData(ctx *ReadContext, value reflect.Value) {
+	err := ctx.Err()
+	value.SetUint(ctx.buffer.ReadVarUint64(err))
+}
+
+func (s uintSerializer) Read(ctx *ReadContext, refMode RefMode, readType bool, hasGenerics bool, value reflect.Value) {
+	err := ctx.Err()
+	if refMode != RefModeNone {
+		if ctx.buffer.ReadInt8(err) == NullFlag {
+			return
+		}
+	}
+	if readType {
+		_ = ctx.buffer.ReadVarUint32Small7(err)
+	}
+	if ctx.HasError() {
+		return
+	}
+	s.ReadData(ctx, value)
+}
+
+func (s uintSerializer) ReadWithTypeInfo(ctx *ReadContext, refMode RefMode, typeInfo *TypeInfo, value reflect.Value) {
 	s.Read(ctx, refMode, false, false, value)
 }
 
@@ -317,7 +358,7 @@ func (s int16Serializer) Write(ctx *WriteContext, refMode RefMode, writeType boo
 		ctx.buffer.WriteInt8(NotNullValueFlag)
 	}
 	if writeType {
-		ctx.buffer.WriteVaruint32Small7(uint32(INT16))
+		ctx.buffer.WriteVarUint32Small7(uint32(INT16))
 	}
 	s.WriteData(ctx, value)
 }
@@ -335,7 +376,7 @@ func (s int16Serializer) Read(ctx *ReadContext, refMode RefMode, readType bool, 
 		}
 	}
 	if readType {
-		_ = ctx.buffer.ReadVaruint32Small7(err)
+		_ = ctx.buffer.ReadVarUint32Small7(err)
 	}
 	if ctx.HasError() {
 		return
@@ -361,7 +402,7 @@ func (s int32Serializer) Write(ctx *WriteContext, refMode RefMode, writeType boo
 		ctx.buffer.WriteInt8(NotNullValueFlag)
 	}
 	if writeType {
-		ctx.buffer.WriteVaruint32Small7(uint32(INT32))
+		ctx.buffer.WriteVarUint32Small7(uint32(INT32))
 	}
 	s.WriteData(ctx, value)
 }
@@ -379,7 +420,7 @@ func (s int32Serializer) Read(ctx *ReadContext, refMode RefMode, readType bool, 
 		}
 	}
 	if readType {
-		_ = ctx.buffer.ReadVaruint32Small7(err)
+		_ = ctx.buffer.ReadVarUint32Small7(err)
 	}
 	if ctx.HasError() {
 		return
@@ -405,7 +446,7 @@ func (s int64Serializer) Write(ctx *WriteContext, refMode RefMode, writeType boo
 		ctx.buffer.WriteInt8(NotNullValueFlag)
 	}
 	if writeType {
-		ctx.buffer.WriteVaruint32Small7(uint32(INT64))
+		ctx.buffer.WriteVarUint32Small7(uint32(INT64))
 	}
 	s.WriteData(ctx, value)
 }
@@ -423,7 +464,7 @@ func (s int64Serializer) Read(ctx *ReadContext, refMode RefMode, readType bool, 
 		}
 	}
 	if readType {
-		_ = ctx.buffer.ReadVaruint32Small7(err)
+		_ = ctx.buffer.ReadVarUint32Small7(err)
 	}
 	if ctx.HasError() {
 		return
@@ -447,7 +488,7 @@ func (s intSerializer) Write(ctx *WriteContext, refMode RefMode, writeType bool,
 		ctx.buffer.WriteInt8(NotNullValueFlag)
 	}
 	if writeType {
-		ctx.buffer.WriteVaruint32Small7(uint32(INT64))
+		ctx.buffer.WriteVarUint32Small7(uint32(INT64))
 	}
 	s.WriteData(ctx, value)
 }
@@ -465,7 +506,7 @@ func (s intSerializer) Read(ctx *ReadContext, refMode RefMode, readType bool, ha
 		}
 	}
 	if readType {
-		_ = ctx.buffer.ReadVaruint32Small7(err)
+		_ = ctx.buffer.ReadVarUint32Small7(err)
 	}
 	if ctx.HasError() {
 		return
@@ -491,7 +532,7 @@ func (s float32Serializer) Write(ctx *WriteContext, refMode RefMode, writeType b
 		ctx.buffer.WriteInt8(NotNullValueFlag)
 	}
 	if writeType {
-		ctx.buffer.WriteVaruint32Small7(uint32(FLOAT32))
+		ctx.buffer.WriteVarUint32Small7(uint32(FLOAT32))
 	}
 	s.WriteData(ctx, value)
 }
@@ -509,7 +550,7 @@ func (s float32Serializer) Read(ctx *ReadContext, refMode RefMode, readType bool
 		}
 	}
 	if readType {
-		_ = ctx.buffer.ReadVaruint32Small7(err)
+		_ = ctx.buffer.ReadVarUint32Small7(err)
 	}
 	if ctx.HasError() {
 		return
@@ -535,7 +576,7 @@ func (s float64Serializer) Write(ctx *WriteContext, refMode RefMode, writeType b
 		ctx.buffer.WriteInt8(NotNullValueFlag)
 	}
 	if writeType {
-		ctx.buffer.WriteVaruint32Small7(uint32(FLOAT64))
+		ctx.buffer.WriteVarUint32Small7(uint32(FLOAT64))
 	}
 	s.WriteData(ctx, value)
 }
@@ -553,7 +594,7 @@ func (s float64Serializer) Read(ctx *ReadContext, refMode RefMode, readType bool
 		}
 	}
 	if readType {
-		_ = ctx.buffer.ReadVaruint32Small7(err)
+		_ = ctx.buffer.ReadVarUint32Small7(err)
 	}
 	if ctx.HasError() {
 		return
@@ -566,34 +607,59 @@ func (s float64Serializer) ReadWithTypeInfo(ctx *ReadContext, refMode RefMode, t
 }
 
 // ============================================================================
-// Notnull Pointer Helper Functions for Varint Types
-// These are used by struct serializer for the rare case of *T with nullable=false
+// float16Serializer - optimized float16 serialization
 // ============================================================================
 
-// writeNotnullVarintPtrUnsafe writes a notnull pointer varint type at the given offset.
-// Used by struct serializer for rare notnull pointer types.
-// Returns the number of bytes written.
-//
-//go:inline
-func writeNotnullVarintPtrUnsafe(buf *ByteBuffer, offset int, fieldPtr unsafe.Pointer, dispatchId DispatchId) int {
-	switch dispatchId {
-	case NotnullVarint32PtrDispatchId:
-		return buf.UnsafePutVarInt32(offset, **(**int32)(fieldPtr))
-	case NotnullVarint64PtrDispatchId:
-		return buf.UnsafePutVarInt64(offset, **(**int64)(fieldPtr))
-	case NotnullIntPtrDispatchId:
-		return buf.UnsafePutVarInt64(offset, int64(**(**int)(fieldPtr)))
-	case NotnullVarUint32PtrDispatchId:
-		return buf.UnsafePutVaruint32(offset, **(**uint32)(fieldPtr))
-	case NotnullVarUint64PtrDispatchId:
-		return buf.UnsafePutVaruint64(offset, **(**uint64)(fieldPtr))
-	case NotnullUintPtrDispatchId:
-		return buf.UnsafePutVaruint64(offset, uint64(**(**uint)(fieldPtr)))
-	case NotnullTaggedInt64PtrDispatchId:
-		return buf.UnsafePutTaggedInt64(offset, **(**int64)(fieldPtr))
-	case NotnullTaggedUint64PtrDispatchId:
-		return buf.UnsafePutTaggedUint64(offset, **(**uint64)(fieldPtr))
-	default:
-		return 0
+// float16Serializer handles float16 type
+type float16Serializer struct{}
+
+var globalFloat16Serializer = float16Serializer{}
+
+func (s float16Serializer) WriteData(ctx *WriteContext, value reflect.Value) {
+	// Value is effectively uint16 (alias)
+	// We can use WriteUint16, but we check if it is indeed float16 compatible
+	// The value comes from reflection, likely an interface or concrete type
+	// Since Float16 is uint16, value.Uint() works.
+	ctx.buffer.WriteUint16(uint16(value.Uint()))
+}
+
+func (s float16Serializer) Write(ctx *WriteContext, refMode RefMode, writeType bool, hasGenerics bool, value reflect.Value) {
+	if refMode != RefModeNone {
+		ctx.buffer.WriteInt8(NotNullValueFlag)
 	}
+	if writeType {
+		ctx.buffer.WriteVarUint32Small7(uint32(FLOAT16))
+	}
+	s.WriteData(ctx, value)
+}
+
+func (s float16Serializer) ReadData(ctx *ReadContext, value reflect.Value) {
+	err := ctx.Err()
+	// Read uint16 bits
+	bits := ctx.buffer.ReadUint16(err)
+	if ctx.HasError() {
+		return
+	}
+	// Set the value. Since Float16 is uint16, SetUint works.
+	value.SetUint(uint64(bits))
+}
+
+func (s float16Serializer) Read(ctx *ReadContext, refMode RefMode, readType bool, hasGenerics bool, value reflect.Value) {
+	err := ctx.Err()
+	if refMode != RefModeNone {
+		if ctx.buffer.ReadInt8(err) == NullFlag {
+			return
+		}
+	}
+	if readType {
+		_ = ctx.buffer.ReadVarUint32Small7(err)
+	}
+	if ctx.HasError() {
+		return
+	}
+	s.ReadData(ctx, value)
+}
+
+func (s float16Serializer) ReadWithTypeInfo(ctx *ReadContext, refMode RefMode, typeInfo *TypeInfo, value reflect.Value) {
+	s.Read(ctx, refMode, false, false, value)
 }

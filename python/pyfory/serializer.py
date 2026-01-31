@@ -77,7 +77,7 @@ if ENABLE_FORY_CYTHON_SERIALIZATION:
         EnumSerializer,
         SliceSerializer,
     )
-    from pyfory._serializer import UnionSerializer  # noqa: F401
+    from pyfory.union import UnionSerializer  # noqa: F401
 else:
     from pyfory._serializer import (  # noqa: F401 # pylint: disable=unused-import
         Serializer,
@@ -106,8 +106,8 @@ else:
         TimestampSerializer,
         EnumSerializer,
         SliceSerializer,
-        UnionSerializer,
     )
+    from pyfory.union import UnionSerializer  # noqa: F401
     from pyfory.collection import (
         CollectionSerializer,
         ListSerializer,
@@ -118,15 +118,25 @@ else:
     )
 
 from pyfory.types import (
+    int8_array,
+    uint8_array,
     int16_array,
     int32_array,
     int64_array,
+    uint16_array,
+    uint32_array,
+    uint64_array,
     float32_array,
     float64_array,
     BoolNDArrayType,
+    Int8NDArrayType,
+    Uint8NDArrayType,
     Int16NDArrayType,
     Int32NDArrayType,
     Int64NDArrayType,
+    Uint16NDArrayType,
+    Uint32NDArrayType,
+    Uint64NDArrayType,
     Float32NDArrayType,
     Float64NDArrayType,
     TypeId,
@@ -222,18 +232,28 @@ class PandasRangeIndexSerializer(Serializer):
 # Use numpy array or python array module.
 typecode_dict = (
     {
-        # use bytes serializer for byte array.
+        # bytes use BytesSerializer; array.array uses explicit typecodes.
+        "b": (1, int8_array, TypeId.INT8_ARRAY),
+        "B": (1, uint8_array, TypeId.UINT8_ARRAY),
         "h": (2, int16_array, TypeId.INT16_ARRAY),
         "i": (4, int32_array, TypeId.INT32_ARRAY),
         "l": (8, int64_array, TypeId.INT64_ARRAY),
+        "H": (2, uint16_array, TypeId.UINT16_ARRAY),
+        "I": (4, uint32_array, TypeId.UINT32_ARRAY),
+        "L": (8, uint64_array, TypeId.UINT64_ARRAY),
         "f": (4, float32_array, TypeId.FLOAT32_ARRAY),
         "d": (8, float64_array, TypeId.FLOAT64_ARRAY),
     }
     if not _WINDOWS
     else {
+        "b": (1, int8_array, TypeId.INT8_ARRAY),
+        "B": (1, uint8_array, TypeId.UINT8_ARRAY),
         "h": (2, int16_array, TypeId.INT16_ARRAY),
         "l": (4, int32_array, TypeId.INT32_ARRAY),
         "q": (8, int64_array, TypeId.INT64_ARRAY),
+        "H": (2, uint16_array, TypeId.UINT16_ARRAY),
+        "L": (4, uint32_array, TypeId.UINT32_ARRAY),
+        "Q": (8, uint64_array, TypeId.UINT64_ARRAY),
         "f": (4, float32_array, TypeId.FLOAT32_ARRAY),
         "d": (8, float64_array, TypeId.FLOAT64_ARRAY),
     }
@@ -241,17 +261,27 @@ typecode_dict = (
 
 typeid_code = (
     {
+        TypeId.INT8_ARRAY: "b",
+        TypeId.UINT8_ARRAY: "B",
         TypeId.INT16_ARRAY: "h",
         TypeId.INT32_ARRAY: "i",
         TypeId.INT64_ARRAY: "l",
+        TypeId.UINT16_ARRAY: "H",
+        TypeId.UINT32_ARRAY: "I",
+        TypeId.UINT64_ARRAY: "L",
         TypeId.FLOAT32_ARRAY: "f",
         TypeId.FLOAT64_ARRAY: "d",
     }
     if not _WINDOWS
     else {
+        TypeId.INT8_ARRAY: "b",
+        TypeId.UINT8_ARRAY: "B",
         TypeId.INT16_ARRAY: "h",
         TypeId.INT32_ARRAY: "l",
         TypeId.INT64_ARRAY: "q",
+        TypeId.UINT16_ARRAY: "H",
+        TypeId.UINT32_ARRAY: "L",
+        TypeId.UINT64_ARRAY: "Q",
         TypeId.FLOAT32_ARRAY: "f",
         TypeId.FLOAT64_ARRAY: "d",
     }
@@ -262,17 +292,27 @@ class PyArraySerializer(XlangCompatibleSerializer):
     typecode_dict = typecode_dict
     typecodearray_type = (
         {
+            "b": int8_array,
+            "B": uint8_array,
             "h": int16_array,
             "i": int32_array,
             "l": int64_array,
+            "H": uint16_array,
+            "I": uint32_array,
+            "L": uint64_array,
             "f": float32_array,
             "d": float64_array,
         }
         if not _WINDOWS
         else {
+            "b": int8_array,
+            "B": uint8_array,
             "h": int16_array,
             "l": int32_array,
             "q": int64_array,
+            "H": uint16_array,
+            "L": uint32_array,
+            "Q": uint64_array,
             "f": float32_array,
             "d": float64_array,
         }
@@ -290,7 +330,7 @@ class PyArraySerializer(XlangCompatibleSerializer):
         assert view.itemsize == self.itemsize
         assert view.c_contiguous  # TODO handle contiguous
         nbytes = len(value) * self.itemsize
-        buffer.write_varuint32(nbytes)
+        buffer.write_var_uint32(nbytes)
         if is_little_endian or self.itemsize == 1:
             buffer.write_buffer(value)
         else:
@@ -311,7 +351,7 @@ class PyArraySerializer(XlangCompatibleSerializer):
     def write(self, buffer, value: array.array):
         nbytes = len(value) * value.itemsize
         buffer.write_string(value.typecode)
-        buffer.write_varuint32(nbytes)
+        buffer.write_var_uint32(nbytes)
         if is_little_endian or value.itemsize == 1:
             buffer.write_buffer(value)
         else:
@@ -342,8 +382,8 @@ class DynamicPyArraySerializer(Serializer):
         itemsize, ftype, type_id = typecode_dict[value.typecode]
         view = memoryview(value)
         nbytes = len(value) * itemsize
-        buffer.write_varuint32(type_id)
-        buffer.write_varuint32(nbytes)
+        buffer.write_var_uint32(type_id)
+        buffer.write_var_uint32(nbytes)
         if not view.c_contiguous:
             data = value.tobytes()
             if not is_little_endian and itemsize > 1:
@@ -381,20 +421,29 @@ class DynamicPyArraySerializer(Serializer):
 if np:
     _np_dtypes_dict = (
         {
-            # use bytes serializer for byte array.
             np.dtype(np.bool_): (1, "?", BoolNDArrayType, TypeId.BOOL_ARRAY),
+            np.dtype(np.int8): (1, "b", Int8NDArrayType, TypeId.INT8_ARRAY),
+            np.dtype(np.uint8): (1, "B", Uint8NDArrayType, TypeId.UINT8_ARRAY),
             np.dtype(np.int16): (2, "h", Int16NDArrayType, TypeId.INT16_ARRAY),
             np.dtype(np.int32): (4, "i", Int32NDArrayType, TypeId.INT32_ARRAY),
             np.dtype(np.int64): (8, "l", Int64NDArrayType, TypeId.INT64_ARRAY),
+            np.dtype(np.uint16): (2, "H", Uint16NDArrayType, TypeId.UINT16_ARRAY),
+            np.dtype(np.uint32): (4, "I", Uint32NDArrayType, TypeId.UINT32_ARRAY),
+            np.dtype(np.uint64): (8, "L", Uint64NDArrayType, TypeId.UINT64_ARRAY),
             np.dtype(np.float32): (4, "f", Float32NDArrayType, TypeId.FLOAT32_ARRAY),
             np.dtype(np.float64): (8, "d", Float64NDArrayType, TypeId.FLOAT64_ARRAY),
         }
         if not _WINDOWS
         else {
             np.dtype(np.bool_): (1, "?", BoolNDArrayType, TypeId.BOOL_ARRAY),
+            np.dtype(np.int8): (1, "b", Int8NDArrayType, TypeId.INT8_ARRAY),
+            np.dtype(np.uint8): (1, "B", Uint8NDArrayType, TypeId.UINT8_ARRAY),
             np.dtype(np.int16): (2, "h", Int16NDArrayType, TypeId.INT16_ARRAY),
             np.dtype(np.int32): (4, "l", Int32NDArrayType, TypeId.INT32_ARRAY),
             np.dtype(np.int64): (8, "q", Int64NDArrayType, TypeId.INT64_ARRAY),
+            np.dtype(np.uint16): (2, "H", Uint16NDArrayType, TypeId.UINT16_ARRAY),
+            np.dtype(np.uint32): (4, "L", Uint32NDArrayType, TypeId.UINT32_ARRAY),
+            np.dtype(np.uint64): (8, "Q", Uint64NDArrayType, TypeId.UINT64_ARRAY),
             np.dtype(np.float32): (4, "f", Float32NDArrayType, TypeId.FLOAT32_ARRAY),
             np.dtype(np.float64): (8, "d", Float64NDArrayType, TypeId.FLOAT64_ARRAY),
         }
@@ -409,7 +458,7 @@ class Numpy1DArraySerializer(Serializer):
     def __init__(self, fory, ftype, dtype):
         super().__init__(fory, ftype)
         self.dtype = dtype
-        self.itemsize, self.format, self.typecode, self.type_id = _np_dtypes_dict[self.dtype]
+        self.itemsize, self.typecode, _, self.type_id = _np_dtypes_dict[self.dtype]
         self._serializer = ReduceSerializer(fory, np.ndarray)
 
     def xwrite(self, buffer, value):
@@ -421,7 +470,7 @@ class Numpy1DArraySerializer(Serializer):
             raise e
         assert view.itemsize == self.itemsize
         nbytes = len(value) * self.itemsize
-        buffer.write_varuint32(nbytes)
+        buffer.write_var_uint32(nbytes)
         if self.dtype == np.dtype("bool") or not view.c_contiguous:
             if not is_little_endian and self.itemsize > 1:
                 # Swap bytes on big-endian machines for multi-byte types
@@ -437,9 +486,13 @@ class Numpy1DArraySerializer(Serializer):
     def xread(self, buffer):
         data = buffer.read_bytes_and_size()
         arr = np.frombuffer(data, dtype=self.dtype.newbyteorder("<"))
-        if not is_little_endian and self.itemsize > 1:
-            # Convert from little-endian to native byte order
-            arr = arr.astype(self.dtype)
+        if self.itemsize > 1:
+            if is_little_endian:
+                # Normalize to native byte order to keep view.format stable.
+                arr = arr.view(self.dtype)
+            else:
+                # Convert from little-endian to native byte order.
+                arr = arr.astype(self.dtype)
         return arr
 
     def write(self, buffer, value):
@@ -454,8 +507,8 @@ class NDArraySerializer(Serializer):
         itemsize, typecode, ftype, type_id = _np_dtypes_dict[value.dtype]
         view = memoryview(value)
         nbytes = len(value) * itemsize
-        buffer.write_varuint32(type_id)
-        buffer.write_varuint32(nbytes)
+        buffer.write_var_uint32(type_id)
+        buffer.write_var_uint32(nbytes)
         if value.dtype == np.dtype("bool") or not view.c_contiguous:
             buffer.write_bytes(value.tobytes())
         else:
@@ -468,9 +521,9 @@ class NDArraySerializer(Serializer):
         fory = self.fory
         dtype = value.dtype
         fory.write_ref(buffer, dtype)
-        buffer.write_varuint32(len(value.shape))
+        buffer.write_var_uint32(len(value.shape))
         for dim in value.shape:
-            buffer.write_varuint32(dim)
+            buffer.write_var_uint32(dim)
         if dtype.kind == "O":
             buffer.write_varint32(len(value))
             for item in value:
@@ -481,8 +534,8 @@ class NDArraySerializer(Serializer):
     def read(self, buffer):
         fory = self.fory
         dtype = fory.read_ref(buffer)
-        ndim = buffer.read_varuint32()
-        shape = tuple(buffer.read_varuint32() for _ in range(ndim))
+        ndim = buffer.read_var_uint32()
+        shape = tuple(buffer.read_var_uint32() for _ in range(ndim))
         if dtype.kind == "O":
             length = buffer.read_varint32()
             items = [fory.read_ref(buffer) for _ in range(length)]
@@ -497,9 +550,14 @@ class NDArraySerializer(Serializer):
 
 class BytesSerializer(XlangCompatibleSerializer):
     def write(self, buffer, value):
+        if self.fory.buffer_callback is None:
+            buffer.write_bytes_and_size(value)
+            return
         self.fory.write_buffer_object(buffer, BytesBufferObject(value))
 
     def read(self, buffer):
+        if not self.fory.is_peer_out_of_band_enabled:
+            return buffer.read_bytes_and_size()
         fory_buf = self.fory.read_buffer_object(buffer)
         if isinstance(fory_buf, memoryview):
             return bytes(fory_buf)
@@ -695,13 +753,13 @@ class ReduceSerializer(XlangCompatibleSerializer):
                 raise ValueError(f"Invalid __reduce__ result length: {len(reduce_result)}")
         else:
             raise ValueError(f"Invalid __reduce__ result type: {type(reduce_result)}")
-        buffer.write_varuint32(len(reduce_data))
+        buffer.write_var_uint32(len(reduce_data))
         fory = self.fory
         for item in reduce_data:
             fory.write_ref(buffer, item)
 
     def read(self, buffer):
-        reduce_data_num_items = buffer.read_varuint32()
+        reduce_data_num_items = buffer.read_var_uint32()
         assert reduce_data_num_items <= 6, buffer
         reduce_data = [None] * 6
         fory = self.fory
@@ -818,7 +876,7 @@ class TypeSerializer(Serializer):
         # Serialize base classes
         # Let Fory's normal serialization handle bases (including other local classes)
         bases = cls.__bases__
-        buffer.write_varuint32(len(bases))
+        buffer.write_var_uint32(len(bases))
         for base in bases:
             fory.write_ref(buffer, base)
 
@@ -836,7 +894,7 @@ class TypeSerializer(Serializer):
             else:
                 class_dict[attr_name] = attr_value
         # serialize method specially to avoid circular deps in method deserialization
-        buffer.write_varuint32(len(class_methods))
+        buffer.write_var_uint32(len(class_methods))
         for i in range(len(class_methods)):
             buffer.write_string(attr_names[i])
             class_method = class_methods[i]
@@ -857,7 +915,7 @@ class TypeSerializer(Serializer):
         ref_id = fory.ref_resolver.last_preserved_ref_id()
 
         # Read base classes
-        num_bases = buffer.read_varuint32()
+        num_bases = buffer.read_var_uint32()
         bases = tuple([fory.read_ref(buffer) for _ in range(num_bases)])
         # Create the class using type() constructor
         cls = type(name, bases, {})
@@ -865,7 +923,7 @@ class TypeSerializer(Serializer):
         fory.ref_resolver.set_read_object(ref_id, cls)
 
         # classmethods
-        for i in range(buffer.read_varuint32()):
+        for i in range(buffer.read_var_uint32()):
             attr_name = buffer.read_string()
             func = fory.read_ref(buffer)
             method = types.MethodType(func, cls)
@@ -992,7 +1050,7 @@ class FunctionSerializer(XlangCompatibleSerializer):
         buffer.write_bool(defaults is not None)
         if defaults is not None:
             # Write the number of default arguments
-            buffer.write_varuint32(len(defaults))
+            buffer.write_var_uint32(len(defaults))
             # Serialize each default value individually
             for default_value in defaults:
                 self.fory.write_ref(buffer, default_value)
@@ -1001,7 +1059,7 @@ class FunctionSerializer(XlangCompatibleSerializer):
         # We need to serialize both the closure values and the fact that there is a closure
         # The code object's co_freevars tells us what variables are in the closure
         buffer.write_bool(closure is not None)
-        buffer.write_varuint32(len(code.co_freevars) if code.co_freevars else 0)
+        buffer.write_var_uint32(len(code.co_freevars) if code.co_freevars else 0)
 
         if closure:
             # Extract and serialize each closure cell's contents
@@ -1011,7 +1069,7 @@ class FunctionSerializer(XlangCompatibleSerializer):
         # Serialize free variable names as a list of strings
         # Convert tuple to list since tuple might not be registered
         freevars_list = list(code.co_freevars) if code.co_freevars else []
-        buffer.write_varuint32(len(freevars_list))
+        buffer.write_var_uint32(len(freevars_list))
         for name in freevars_list:
             buffer.write_string(name)
 
@@ -1087,7 +1145,7 @@ class FunctionSerializer(XlangCompatibleSerializer):
         defaults = None
         if has_defaults:
             # Read the number of default arguments
-            num_defaults = buffer.read_varuint32()
+            num_defaults = buffer.read_var_uint32()
             # Deserialize each default value
             default_values = []
             for _ in range(num_defaults):
@@ -1096,7 +1154,7 @@ class FunctionSerializer(XlangCompatibleSerializer):
 
         # Handle closure
         has_closure = buffer.read_bool()
-        num_freevars = buffer.read_varuint32()
+        num_freevars = buffer.read_var_uint32()
         closure = None
 
         # Read closure values if there are any
@@ -1109,7 +1167,7 @@ class FunctionSerializer(XlangCompatibleSerializer):
             closure = tuple(types.CellType(value) for value in closure_values)
 
         # Read free variable names from strings
-        num_freevars = buffer.read_varuint32()
+        num_freevars = buffer.read_var_uint32()
         freevars = []
         for _ in range(num_freevars):
             freevars.append(buffer.read_string())
@@ -1250,7 +1308,7 @@ class ObjectSerializer(Serializer):
         else:
             sorted_field_names = sorted(value.__dict__.keys())
 
-        buffer.write_varuint32(len(sorted_field_names))
+        buffer.write_var_uint32(len(sorted_field_names))
         for field_name in sorted_field_names:
             buffer.write_string(field_name)
             field_value = getattr(value, field_name)
@@ -1261,7 +1319,7 @@ class ObjectSerializer(Serializer):
         fory.policy.authorize_instantiation(self.type_)
         obj = self.type_.__new__(self.type_)
         fory.ref_resolver.reference(obj)
-        num_fields = buffer.read_varuint32()
+        num_fields = buffer.read_var_uint32()
         for _ in range(num_fields):
             field_name = buffer.read_string()
             field_value = fory.read_ref(buffer)
@@ -1300,10 +1358,10 @@ class NonExistEnumSerializer(Serializer):
         return NonExistEnum(name=name)
 
     def xwrite(self, buffer, value):
-        buffer.write_varuint32(value.value)
+        buffer.write_var_uint32(value.value)
 
     def xread(self, buffer):
-        value = buffer.read_varuint32()
+        value = buffer.read_var_uint32()
         return NonExistEnum(value=value)
 
 

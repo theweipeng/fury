@@ -31,7 +31,7 @@
 #include "fory/type/type.h"
 
 // ============================================================================
-// Test Struct Definitions (must be at global scope for FORY_STRUCT)
+// Test Struct Definitions (FORY_STRUCT is declared inside each struct)
 // ============================================================================
 
 struct SimpleStruct {
@@ -41,9 +41,8 @@ struct SimpleStruct {
   bool operator==(const SimpleStruct &other) const {
     return x == other.x && y == other.y;
   }
+  FORY_STRUCT(SimpleStruct, x, y);
 };
-
-FORY_STRUCT(SimpleStruct, x, y);
 
 struct ComplexStruct {
   std::string name;
@@ -53,9 +52,8 @@ struct ComplexStruct {
   bool operator==(const ComplexStruct &other) const {
     return name == other.name && age == other.age && hobbies == other.hobbies;
   }
+  FORY_STRUCT(ComplexStruct, name, age, hobbies);
 };
-
-FORY_STRUCT(ComplexStruct, name, age, hobbies);
 
 struct NestedStruct {
   SimpleStruct point;
@@ -64,9 +62,8 @@ struct NestedStruct {
   bool operator==(const NestedStruct &other) const {
     return point == other.point && label == other.label;
   }
+  FORY_STRUCT(NestedStruct, point, label);
 };
-
-FORY_STRUCT(NestedStruct, point, label);
 
 enum class Color { RED, GREEN, BLUE };
 enum class LegacyStatus : int32_t { NEG = -3, ZERO = 0, LARGE = 42 };
@@ -452,14 +449,14 @@ TEST(SerializationTest, ThreadSafeForyMultiThread) {
   auto fory = Fory::builder().xlang(true).track_ref(false).build_thread_safe();
   fory.register_struct<::ComplexStruct>(1);
 
-  constexpr int kNumThreads = 8;
-  constexpr int kIterationsPerThread = 100;
+  constexpr int k_num_threads = 8;
+  constexpr int k_iterations_per_thread = 100;
   std::vector<std::thread> threads;
   std::atomic<int> success_count{0};
 
-  for (int t = 0; t < kNumThreads; ++t) {
+  for (int t = 0; t < k_num_threads; ++t) {
     threads.emplace_back([&, t]() {
-      for (int i = 0; i < kIterationsPerThread; ++i) {
+      for (int i = 0; i < k_iterations_per_thread; ++i) {
         ::ComplexStruct original{"thread" + std::to_string(t) + "_iter" +
                                      std::to_string(i),
                                  t * 1000 + i,
@@ -482,7 +479,7 @@ TEST(SerializationTest, ThreadSafeForyMultiThread) {
     t.join();
   }
 
-  EXPECT_EQ(success_count.load(), kNumThreads * kIterationsPerThread);
+  EXPECT_EQ(success_count.load(), k_num_threads * k_iterations_per_thread);
 }
 
 } // namespace test

@@ -17,7 +17,7 @@
  * under the License.
  */
 
-import Fory, { TypeInfo, InternalSerializerType, Type } from '../packages/fory/index';
+import Fory, { Type } from '../packages/fory/index';
 import { describe, expect, test } from '@jest/globals';
 
 describe('bool', () => {
@@ -103,24 +103,6 @@ describe('bool', () => {
         expect(ret instanceof Map).toBe(true)
         expect([...ret.values()]).toEqual([...obj.values()])
         expect([...ret.keys()]).toEqual([...obj.keys()])
-    });
-
-    test('should write set work', () => {
-        const fory = new Fory();
-        const obj = new Set([1,2,3]);
-        const bin = fory.serialize(obj);
-        const ret = fory.deserialize(bin);
-        expect(ret instanceof Set).toBe(true)
-        expect([...ret.values()]).toEqual([...obj.values()])
-    });
-
-    test('should write Array work', () => {
-        const fory = new Fory();
-        const obj = [1,2,3]
-        const bin = fory.serialize(obj);
-        const ret = fory.deserialize(bin);
-        expect(ret instanceof Array).toBe(true)
-        expect(ret).toEqual(obj)
     });
 
     test('should root any work', () => {

@@ -32,7 +32,7 @@ namespace serialization {
 // ============================================================================
 // Primitive Type Serializers
 // All primitive serializers use context-based error accumulation:
-// - Write methods return void and set ctx.error_ on failure
+// - write methods return void and set ctx.error_ on failure
 // - Read methods return T directly and set ctx.error_ on failure
 // - No per-operation error checks for primitives (buffer auto-grows on write,
 //   errors accumulate on read)
@@ -43,11 +43,11 @@ template <> struct Serializer<bool> {
   static constexpr TypeId type_id = TypeId::BOOL;
 
   static inline void write_type_info(WriteContext &ctx) {
-    ctx.write_varuint32(static_cast<uint32_t>(type_id));
+    ctx.write_var_uint32(static_cast<uint32_t>(type_id));
   }
 
   static inline void read_type_info(ReadContext &ctx) {
-    uint32_t actual = ctx.read_varuint32(ctx.error());
+    uint32_t actual = ctx.read_var_uint32(ctx.error());
     if (FORY_PREDICT_FALSE(ctx.has_error())) {
       return;
     }
@@ -58,10 +58,10 @@ template <> struct Serializer<bool> {
   }
 
   static inline void write(bool value, WriteContext &ctx, RefMode ref_mode,
-                           bool write_type, bool has_generics = false) {
+                           bool write_type, bool = false) {
     write_not_null_ref_flag(ctx, ref_mode);
     if (write_type) {
-      ctx.write_varuint32(static_cast<uint32_t>(type_id));
+      ctx.write_var_uint32(static_cast<uint32_t>(type_id));
     }
     write_data(value, ctx);
   }
@@ -70,8 +70,7 @@ template <> struct Serializer<bool> {
     ctx.write_uint8(value ? 1 : 0);
   }
 
-  static inline void write_data_generic(bool value, WriteContext &ctx,
-                                        bool has_generics) {
+  static inline void write_data_generic(bool value, WriteContext &ctx, bool) {
     write_data(value, ctx);
   }
 
@@ -81,7 +80,7 @@ template <> struct Serializer<bool> {
       return false;
     }
     if (read_type) {
-      uint32_t type_id_read = ctx.read_varuint32(ctx.error());
+      uint32_t type_id_read = ctx.read_var_uint32(ctx.error());
       if (FORY_PREDICT_FALSE(ctx.has_error())) {
         return false;
       }
@@ -100,12 +99,12 @@ template <> struct Serializer<bool> {
     return value != 0;
   }
 
-  static inline bool read_data_generic(ReadContext &ctx, bool has_generics) {
+  static inline bool read_data_generic(ReadContext &ctx, bool) {
     return read_data(ctx);
   }
 
   static inline bool read_with_type_info(ReadContext &ctx, RefMode ref_mode,
-                                         const TypeInfo &type_info) {
+                                         const TypeInfo &) {
     return read(ctx, ref_mode, false);
   }
 };
@@ -115,11 +114,11 @@ template <> struct Serializer<int8_t> {
   static constexpr TypeId type_id = TypeId::INT8;
 
   static inline void write_type_info(WriteContext &ctx) {
-    ctx.write_varuint32(static_cast<uint32_t>(type_id));
+    ctx.write_var_uint32(static_cast<uint32_t>(type_id));
   }
 
   static inline void read_type_info(ReadContext &ctx) {
-    uint32_t actual = ctx.read_varuint32(ctx.error());
+    uint32_t actual = ctx.read_var_uint32(ctx.error());
     if (FORY_PREDICT_FALSE(ctx.has_error())) {
       return;
     }
@@ -130,10 +129,10 @@ template <> struct Serializer<int8_t> {
   }
 
   static inline void write(int8_t value, WriteContext &ctx, RefMode ref_mode,
-                           bool write_type, bool has_generics = false) {
+                           bool write_type, bool = false) {
     write_not_null_ref_flag(ctx, ref_mode);
     if (write_type) {
-      ctx.write_varuint32(static_cast<uint32_t>(type_id));
+      ctx.write_var_uint32(static_cast<uint32_t>(type_id));
     }
     write_data(value, ctx);
   }
@@ -142,8 +141,7 @@ template <> struct Serializer<int8_t> {
     ctx.write_int8(value);
   }
 
-  static inline void write_data_generic(int8_t value, WriteContext &ctx,
-                                        bool has_generics) {
+  static inline void write_data_generic(int8_t value, WriteContext &ctx, bool) {
     write_data(value, ctx);
   }
 
@@ -154,7 +152,7 @@ template <> struct Serializer<int8_t> {
       return 0;
     }
     if (read_type) {
-      uint32_t type_id_read = ctx.read_varuint32(ctx.error());
+      uint32_t type_id_read = ctx.read_var_uint32(ctx.error());
       if (FORY_PREDICT_FALSE(ctx.has_error())) {
         return 0;
       }
@@ -171,12 +169,12 @@ template <> struct Serializer<int8_t> {
     return ctx.read_int8(ctx.error());
   }
 
-  static inline int8_t read_data_generic(ReadContext &ctx, bool has_generics) {
+  static inline int8_t read_data_generic(ReadContext &ctx, bool) {
     return read_data(ctx);
   }
 
   static inline int8_t read_with_type_info(ReadContext &ctx, RefMode ref_mode,
-                                           const TypeInfo &type_info) {
+                                           const TypeInfo &) {
     return read(ctx, ref_mode, false);
   }
 };
@@ -186,11 +184,11 @@ template <> struct Serializer<int16_t> {
   static constexpr TypeId type_id = TypeId::INT16;
 
   static inline void write_type_info(WriteContext &ctx) {
-    ctx.write_varuint32(static_cast<uint32_t>(type_id));
+    ctx.write_var_uint32(static_cast<uint32_t>(type_id));
   }
 
   static inline void read_type_info(ReadContext &ctx) {
-    uint32_t actual = ctx.read_varuint32(ctx.error());
+    uint32_t actual = ctx.read_var_uint32(ctx.error());
     if (FORY_PREDICT_FALSE(ctx.has_error())) {
       return;
     }
@@ -201,10 +199,10 @@ template <> struct Serializer<int16_t> {
   }
 
   static inline void write(int16_t value, WriteContext &ctx, RefMode ref_mode,
-                           bool write_type, bool has_generics = false) {
+                           bool write_type, bool = false) {
     write_not_null_ref_flag(ctx, ref_mode);
     if (write_type) {
-      ctx.write_varuint32(static_cast<uint32_t>(type_id));
+      ctx.write_var_uint32(static_cast<uint32_t>(type_id));
     }
     write_data(value, ctx);
   }
@@ -214,7 +212,7 @@ template <> struct Serializer<int16_t> {
   }
 
   static inline void write_data_generic(int16_t value, WriteContext &ctx,
-                                        bool has_generics) {
+                                        bool) {
     write_data(value, ctx);
   }
 
@@ -225,7 +223,7 @@ template <> struct Serializer<int16_t> {
       return 0;
     }
     if (read_type) {
-      uint32_t type_id_read = ctx.read_varuint32(ctx.error());
+      uint32_t type_id_read = ctx.read_var_uint32(ctx.error());
       if (FORY_PREDICT_FALSE(ctx.has_error())) {
         return 0;
       }
@@ -242,12 +240,12 @@ template <> struct Serializer<int16_t> {
     return ctx.read_int16(ctx.error());
   }
 
-  static inline int16_t read_data_generic(ReadContext &ctx, bool has_generics) {
+  static inline int16_t read_data_generic(ReadContext &ctx, bool) {
     return read_data(ctx);
   }
 
   static inline int16_t read_with_type_info(ReadContext &ctx, RefMode ref_mode,
-                                            const TypeInfo &type_info) {
+                                            const TypeInfo &) {
     return read(ctx, ref_mode, false);
   }
 };
@@ -257,11 +255,11 @@ template <> struct Serializer<int32_t> {
   static constexpr TypeId type_id = TypeId::VARINT32;
 
   static inline void write_type_info(WriteContext &ctx) {
-    ctx.write_varuint32(static_cast<uint32_t>(type_id));
+    ctx.write_var_uint32(static_cast<uint32_t>(type_id));
   }
 
   static inline void read_type_info(ReadContext &ctx) {
-    uint32_t actual = ctx.read_varuint32(ctx.error());
+    uint32_t actual = ctx.read_var_uint32(ctx.error());
     if (FORY_PREDICT_FALSE(ctx.has_error())) {
       return;
     }
@@ -272,10 +270,10 @@ template <> struct Serializer<int32_t> {
   }
 
   static inline void write(int32_t value, WriteContext &ctx, RefMode ref_mode,
-                           bool write_type, bool has_generics = false) {
+                           bool write_type, bool = false) {
     write_not_null_ref_flag(ctx, ref_mode);
     if (write_type) {
-      ctx.write_varuint32(static_cast<uint32_t>(type_id));
+      ctx.write_var_uint32(static_cast<uint32_t>(type_id));
     }
     write_data(value, ctx);
   }
@@ -285,7 +283,7 @@ template <> struct Serializer<int32_t> {
   }
 
   static inline void write_data_generic(int32_t value, WriteContext &ctx,
-                                        bool has_generics) {
+                                        bool) {
     write_data(value, ctx);
   }
 
@@ -296,7 +294,7 @@ template <> struct Serializer<int32_t> {
       return 0;
     }
     if (read_type) {
-      uint32_t type_id_read = ctx.read_varuint32(ctx.error());
+      uint32_t type_id_read = ctx.read_var_uint32(ctx.error());
       if (FORY_PREDICT_FALSE(ctx.has_error())) {
         return 0;
       }
@@ -313,12 +311,12 @@ template <> struct Serializer<int32_t> {
     return ctx.read_varint32(ctx.error());
   }
 
-  static inline int32_t read_data_generic(ReadContext &ctx, bool has_generics) {
+  static inline int32_t read_data_generic(ReadContext &ctx, bool) {
     return read_data(ctx);
   }
 
   static inline int32_t read_with_type_info(ReadContext &ctx, RefMode ref_mode,
-                                            const TypeInfo &type_info) {
+                                            const TypeInfo &) {
     return read(ctx, ref_mode, false);
   }
 };
@@ -328,11 +326,11 @@ template <> struct Serializer<int64_t> {
   static constexpr TypeId type_id = TypeId::VARINT64;
 
   static inline void write_type_info(WriteContext &ctx) {
-    ctx.write_varuint32(static_cast<uint32_t>(type_id));
+    ctx.write_var_uint32(static_cast<uint32_t>(type_id));
   }
 
   static inline void read_type_info(ReadContext &ctx) {
-    uint32_t actual = ctx.read_varuint32(ctx.error());
+    uint32_t actual = ctx.read_var_uint32(ctx.error());
     if (FORY_PREDICT_FALSE(ctx.has_error())) {
       return;
     }
@@ -343,10 +341,10 @@ template <> struct Serializer<int64_t> {
   }
 
   static inline void write(int64_t value, WriteContext &ctx, RefMode ref_mode,
-                           bool write_type, bool has_generics = false) {
+                           bool write_type, bool = false) {
     write_not_null_ref_flag(ctx, ref_mode);
     if (write_type) {
-      ctx.write_varuint32(static_cast<uint32_t>(type_id));
+      ctx.write_var_uint32(static_cast<uint32_t>(type_id));
     }
     write_data(value, ctx);
   }
@@ -356,7 +354,7 @@ template <> struct Serializer<int64_t> {
   }
 
   static inline void write_data_generic(int64_t value, WriteContext &ctx,
-                                        bool has_generics) {
+                                        bool) {
     write_data(value, ctx);
   }
 
@@ -367,7 +365,7 @@ template <> struct Serializer<int64_t> {
       return 0;
     }
     if (read_type) {
-      uint32_t type_id_read = ctx.read_varuint32(ctx.error());
+      uint32_t type_id_read = ctx.read_var_uint32(ctx.error());
       if (FORY_PREDICT_FALSE(ctx.has_error())) {
         return 0;
       }
@@ -384,12 +382,12 @@ template <> struct Serializer<int64_t> {
     return ctx.read_varint64(ctx.error());
   }
 
-  static inline int64_t read_data_generic(ReadContext &ctx, bool has_generics) {
+  static inline int64_t read_data_generic(ReadContext &ctx, bool) {
     return read_data(ctx);
   }
 
   static inline int64_t read_with_type_info(ReadContext &ctx, RefMode ref_mode,
-                                            const TypeInfo &type_info) {
+                                            const TypeInfo &) {
     return read(ctx, ref_mode, false);
   }
 };
@@ -399,11 +397,11 @@ template <> struct Serializer<float> {
   static constexpr TypeId type_id = TypeId::FLOAT32;
 
   static inline void write_type_info(WriteContext &ctx) {
-    ctx.write_varuint32(static_cast<uint32_t>(type_id));
+    ctx.write_var_uint32(static_cast<uint32_t>(type_id));
   }
 
   static inline void read_type_info(ReadContext &ctx) {
-    uint32_t actual = ctx.read_varuint32(ctx.error());
+    uint32_t actual = ctx.read_var_uint32(ctx.error());
     if (FORY_PREDICT_FALSE(ctx.has_error())) {
       return;
     }
@@ -414,10 +412,10 @@ template <> struct Serializer<float> {
   }
 
   static inline void write(float value, WriteContext &ctx, RefMode ref_mode,
-                           bool write_type, bool has_generics = false) {
+                           bool write_type, bool = false) {
     write_not_null_ref_flag(ctx, ref_mode);
     if (write_type) {
-      ctx.write_varuint32(static_cast<uint32_t>(type_id));
+      ctx.write_var_uint32(static_cast<uint32_t>(type_id));
     }
     write_data(value, ctx);
   }
@@ -426,8 +424,7 @@ template <> struct Serializer<float> {
     ctx.write_bytes(&value, sizeof(float));
   }
 
-  static inline void write_data_generic(float value, WriteContext &ctx,
-                                        bool has_generics) {
+  static inline void write_data_generic(float value, WriteContext &ctx, bool) {
     write_data(value, ctx);
   }
 
@@ -437,7 +434,7 @@ template <> struct Serializer<float> {
       return 0.0f;
     }
     if (read_type) {
-      uint32_t type_id_read = ctx.read_varuint32(ctx.error());
+      uint32_t type_id_read = ctx.read_var_uint32(ctx.error());
       if (FORY_PREDICT_FALSE(ctx.has_error())) {
         return 0.0f;
       }
@@ -454,12 +451,12 @@ template <> struct Serializer<float> {
     return ctx.read_float(ctx.error());
   }
 
-  static inline float read_data_generic(ReadContext &ctx, bool has_generics) {
+  static inline float read_data_generic(ReadContext &ctx, bool) {
     return read_data(ctx);
   }
 
   static inline float read_with_type_info(ReadContext &ctx, RefMode ref_mode,
-                                          const TypeInfo &type_info) {
+                                          const TypeInfo &) {
     return read(ctx, ref_mode, false);
   }
 };
@@ -469,11 +466,11 @@ template <> struct Serializer<double> {
   static constexpr TypeId type_id = TypeId::FLOAT64;
 
   static inline void write_type_info(WriteContext &ctx) {
-    ctx.write_varuint32(static_cast<uint32_t>(type_id));
+    ctx.write_var_uint32(static_cast<uint32_t>(type_id));
   }
 
   static inline void read_type_info(ReadContext &ctx) {
-    uint32_t actual = ctx.read_varuint32(ctx.error());
+    uint32_t actual = ctx.read_var_uint32(ctx.error());
     if (FORY_PREDICT_FALSE(ctx.has_error())) {
       return;
     }
@@ -484,10 +481,10 @@ template <> struct Serializer<double> {
   }
 
   static inline void write(double value, WriteContext &ctx, RefMode ref_mode,
-                           bool write_type, bool has_generics = false) {
+                           bool write_type, bool = false) {
     write_not_null_ref_flag(ctx, ref_mode);
     if (write_type) {
-      ctx.write_varuint32(static_cast<uint32_t>(type_id));
+      ctx.write_var_uint32(static_cast<uint32_t>(type_id));
     }
     write_data(value, ctx);
   }
@@ -496,8 +493,7 @@ template <> struct Serializer<double> {
     ctx.write_bytes(&value, sizeof(double));
   }
 
-  static inline void write_data_generic(double value, WriteContext &ctx,
-                                        bool has_generics) {
+  static inline void write_data_generic(double value, WriteContext &ctx, bool) {
     write_data(value, ctx);
   }
 
@@ -508,7 +504,7 @@ template <> struct Serializer<double> {
       return 0.0;
     }
     if (read_type) {
-      uint32_t type_id_read = ctx.read_varuint32(ctx.error());
+      uint32_t type_id_read = ctx.read_var_uint32(ctx.error());
       if (FORY_PREDICT_FALSE(ctx.has_error())) {
         return 0.0;
       }
@@ -525,12 +521,12 @@ template <> struct Serializer<double> {
     return ctx.read_double(ctx.error());
   }
 
-  static inline double read_data_generic(ReadContext &ctx, bool has_generics) {
+  static inline double read_data_generic(ReadContext &ctx, bool) {
     return read_data(ctx);
   }
 
   static inline double read_with_type_info(ReadContext &ctx, RefMode ref_mode,
-                                           const TypeInfo &type_info) {
+                                           const TypeInfo &) {
     return read(ctx, ref_mode, false);
   }
 };
@@ -544,11 +540,11 @@ template <> struct Serializer<char> {
   static constexpr TypeId type_id = TypeId::CHAR;
 
   static inline void write_type_info(WriteContext &ctx) {
-    ctx.write_varuint32(static_cast<uint32_t>(type_id));
+    ctx.write_var_uint32(static_cast<uint32_t>(type_id));
   }
 
   static inline void read_type_info(ReadContext &ctx) {
-    uint32_t actual = ctx.read_varuint32(ctx.error());
+    uint32_t actual = ctx.read_var_uint32(ctx.error());
     if (FORY_PREDICT_FALSE(ctx.has_error())) {
       return;
     }
@@ -559,10 +555,10 @@ template <> struct Serializer<char> {
   }
 
   static inline void write(char value, WriteContext &ctx, RefMode ref_mode,
-                           bool write_type, bool has_generics = false) {
+                           bool write_type, bool = false) {
     write_not_null_ref_flag(ctx, ref_mode);
     if (write_type) {
-      ctx.write_varuint32(static_cast<uint32_t>(type_id));
+      ctx.write_var_uint32(static_cast<uint32_t>(type_id));
     }
     write_data(value, ctx);
   }
@@ -571,8 +567,7 @@ template <> struct Serializer<char> {
     ctx.write_int8(static_cast<int8_t>(value));
   }
 
-  static inline void write_data_generic(char value, WriteContext &ctx,
-                                        bool has_generics) {
+  static inline void write_data_generic(char value, WriteContext &ctx, bool) {
     write_data(value, ctx);
   }
 
@@ -582,7 +577,7 @@ template <> struct Serializer<char> {
       return '\0';
     }
     if (read_type) {
-      uint32_t type_id_read = ctx.read_varuint32(ctx.error());
+      uint32_t type_id_read = ctx.read_var_uint32(ctx.error());
       if (FORY_PREDICT_FALSE(ctx.has_error())) {
         return '\0';
       }
@@ -599,12 +594,12 @@ template <> struct Serializer<char> {
     return static_cast<char>(ctx.read_int8(ctx.error()));
   }
 
-  static inline char read_data_generic(ReadContext &ctx, bool has_generics) {
+  static inline char read_data_generic(ReadContext &ctx, bool) {
     return read_data(ctx);
   }
 
   static inline char read_with_type_info(ReadContext &ctx, RefMode ref_mode,
-                                         const TypeInfo &type_info) {
+                                         const TypeInfo &) {
     return read(ctx, ref_mode, false);
   }
 };
@@ -614,11 +609,11 @@ template <> struct Serializer<char16_t> {
   static constexpr TypeId type_id = TypeId::CHAR16;
 
   static inline void write_type_info(WriteContext &ctx) {
-    ctx.write_varuint32(static_cast<uint32_t>(type_id));
+    ctx.write_var_uint32(static_cast<uint32_t>(type_id));
   }
 
   static inline void read_type_info(ReadContext &ctx) {
-    uint32_t actual = ctx.read_varuint32(ctx.error());
+    uint32_t actual = ctx.read_var_uint32(ctx.error());
     if (FORY_PREDICT_FALSE(ctx.has_error())) {
       return;
     }
@@ -629,10 +624,10 @@ template <> struct Serializer<char16_t> {
   }
 
   static inline void write(char16_t value, WriteContext &ctx, RefMode ref_mode,
-                           bool write_type, bool has_generics = false) {
+                           bool write_type, bool = false) {
     write_not_null_ref_flag(ctx, ref_mode);
     if (write_type) {
-      ctx.write_varuint32(static_cast<uint32_t>(type_id));
+      ctx.write_var_uint32(static_cast<uint32_t>(type_id));
     }
     write_data(value, ctx);
   }
@@ -642,7 +637,7 @@ template <> struct Serializer<char16_t> {
   }
 
   static inline void write_data_generic(char16_t value, WriteContext &ctx,
-                                        bool has_generics) {
+                                        bool) {
     write_data(value, ctx);
   }
 
@@ -653,7 +648,7 @@ template <> struct Serializer<char16_t> {
       return u'\0';
     }
     if (read_type) {
-      uint32_t type_id_read = ctx.read_varuint32(ctx.error());
+      uint32_t type_id_read = ctx.read_var_uint32(ctx.error());
       if (FORY_PREDICT_FALSE(ctx.has_error())) {
         return u'\0';
       }
@@ -673,13 +668,12 @@ template <> struct Serializer<char16_t> {
     return value;
   }
 
-  static inline char16_t read_data_generic(ReadContext &ctx,
-                                           bool has_generics) {
+  static inline char16_t read_data_generic(ReadContext &ctx, bool) {
     return read_data(ctx);
   }
 
   static inline char16_t read_with_type_info(ReadContext &ctx, RefMode ref_mode,
-                                             const TypeInfo &type_info) {
+                                             const TypeInfo &) {
     return read(ctx, ref_mode, false);
   }
 };
@@ -689,11 +683,11 @@ template <> struct Serializer<char32_t> {
   static constexpr TypeId type_id = TypeId::CHAR32;
 
   static inline void write_type_info(WriteContext &ctx) {
-    ctx.write_varuint32(static_cast<uint32_t>(type_id));
+    ctx.write_var_uint32(static_cast<uint32_t>(type_id));
   }
 
   static inline void read_type_info(ReadContext &ctx) {
-    uint32_t actual = ctx.read_varuint32(ctx.error());
+    uint32_t actual = ctx.read_var_uint32(ctx.error());
     if (FORY_PREDICT_FALSE(ctx.has_error())) {
       return;
     }
@@ -704,10 +698,10 @@ template <> struct Serializer<char32_t> {
   }
 
   static inline void write(char32_t value, WriteContext &ctx, RefMode ref_mode,
-                           bool write_type, bool has_generics = false) {
+                           bool write_type, bool = false) {
     write_not_null_ref_flag(ctx, ref_mode);
     if (write_type) {
-      ctx.write_varuint32(static_cast<uint32_t>(type_id));
+      ctx.write_var_uint32(static_cast<uint32_t>(type_id));
     }
     write_data(value, ctx);
   }
@@ -717,7 +711,7 @@ template <> struct Serializer<char32_t> {
   }
 
   static inline void write_data_generic(char32_t value, WriteContext &ctx,
-                                        bool has_generics) {
+                                        bool) {
     write_data(value, ctx);
   }
 
@@ -728,7 +722,7 @@ template <> struct Serializer<char32_t> {
       return U'\0';
     }
     if (read_type) {
-      uint32_t type_id_read = ctx.read_varuint32(ctx.error());
+      uint32_t type_id_read = ctx.read_var_uint32(ctx.error());
       if (FORY_PREDICT_FALSE(ctx.has_error())) {
         return U'\0';
       }
@@ -748,13 +742,12 @@ template <> struct Serializer<char32_t> {
     return value;
   }
 
-  static inline char32_t read_data_generic(ReadContext &ctx,
-                                           bool has_generics) {
+  static inline char32_t read_data_generic(ReadContext &ctx, bool) {
     return read_data(ctx);
   }
 
   static inline char32_t read_with_type_info(ReadContext &ctx, RefMode ref_mode,
-                                             const TypeInfo &type_info) {
+                                             const TypeInfo &) {
     return read(ctx, ref_mode, false);
   }
 };

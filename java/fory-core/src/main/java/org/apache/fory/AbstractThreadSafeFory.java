@@ -72,6 +72,19 @@ public abstract class AbstractThreadSafeFory implements ThreadSafeFory {
     registerCallback(fory -> fory.register(className, namespace, typeName));
   }
 
+  public void registerUnion(
+      Class<?> cls, int id, org.apache.fory.serializer.Serializer<?> serializer) {
+    registerCallback(fory -> fory.registerUnion(cls, id, serializer));
+  }
+
+  public void registerUnion(
+      Class<?> cls,
+      String namespace,
+      String typeName,
+      org.apache.fory.serializer.Serializer<?> serializer) {
+    registerCallback(fory -> fory.registerUnion(cls, namespace, typeName, serializer));
+  }
+
   @Override
   public <T> void registerSerializer(Class<T> type, Class<? extends Serializer> serializerClass) {
     registerCallback(fory -> fory.registerSerializer(type, serializerClass));
@@ -88,6 +101,23 @@ public abstract class AbstractThreadSafeFory implements ThreadSafeFory {
   }
 
   @Override
+  public <T> void registerSerializerAndType(
+      Class<T> type, Class<? extends Serializer> serializerClass) {
+    registerCallback(fory -> fory.registerSerializerAndType(type, serializerClass));
+  }
+
+  @Override
+  public void registerSerializerAndType(Class<?> type, Serializer<?> serializer) {
+    registerCallback(fory -> fory.registerSerializerAndType(type, serializer));
+  }
+
+  @Override
+  public void registerSerializerAndType(
+      Class<?> type, Function<Fory, Serializer<?>> serializerCreator) {
+    registerCallback(fory -> fory.registerSerializerAndType(type, serializerCreator));
+  }
+
+  @Override
   public void setSerializerFactory(SerializerFactory serializerFactory) {
     registerCallback(fory -> fory.setSerializerFactory(serializerFactory));
   }
@@ -100,7 +130,7 @@ public abstract class AbstractThreadSafeFory implements ThreadSafeFory {
 
   @Override
   public void setTypeChecker(TypeChecker typeChecker) {
-    registerCallback(fory -> fory._getTypeResolver().setTypeChecker(typeChecker));
+    registerCallback(fory -> fory.getTypeResolver().setTypeChecker(typeChecker));
   }
 
   @Override

@@ -18,6 +18,7 @@
 package codegen
 
 import (
+	"fmt"
 	"go/types"
 	"sort"
 	"unicode"
@@ -33,9 +34,11 @@ type FieldInfo struct {
 	Index         int        // Original field index in struct
 	IsPrimitive   bool       // Whether it's a Fory primitive type
 	IsPointer     bool       // Whether it's a pointer type
+	IsOptional    bool       // Whether it's a fory optional.Optional[T]
 	Nullable      bool       // Whether the field can be null (pointer types)
 	TypeID        string     // Fory TypeID for sorting
 	PrimitiveSize int        // Size for primitive type sorting
+	OptionalElem  types.Type // Element type for optional.Optional[T]
 }
 
 // StructInfo contains metadata about a struct to generate code for
@@ -56,10 +59,33 @@ func toSnakeCase(s string) string {
 	return string(result)
 }
 
+func getOptionalElementType(t types.Type) (types.Type, bool) {
+	t = types.Unalias(t)
+	named, ok := t.(*types.Named)
+	if !ok {
+		return nil, false
+	}
+	obj := named.Obj()
+	if obj == nil || obj.Name() != "Optional" {
+		return nil, false
+	}
+	if obj.Pkg() == nil || obj.Pkg().Path() != "github.com/apache/fory/go/fory/optional" {
+		return nil, false
+	}
+	typeArgs := named.TypeArgs()
+	if typeArgs == nil || typeArgs.Len() != 1 {
+		return nil, false
+	}
+	return typeArgs.At(0), true
+}
+
 // isSupportedFieldType checks if a field type is supported
 func isSupportedFieldType(t types.Type) bool {
 	// Unwrap alias types (e.g., 'any' is an alias for 'interface{}')
 	t = types.Unalias(t)
+	if elem, ok := getOptionalElementType(t); ok {
+		t = elem
+	}
 
 	// Handle pointer types
 	if ptr, ok := t.(*types.Pointer); ok {
@@ -116,6 +142,9 @@ func isSupportedFieldType(t types.Type) bool {
 func isPrimitiveType(t types.Type) bool {
 	// Unwrap alias types
 	t = types.Unalias(t)
+	if elem, ok := getOptionalElementType(t); ok {
+		t = elem
+	}
 
 	// Handle pointer types
 	if ptr, ok := t.(*types.Pointer); ok {
@@ -142,6 +171,9 @@ func isPrimitiveType(t types.Type) bool {
 func getTypeID(t types.Type) string {
 	// Unwrap alias types
 	t = types.Unalias(t)
+	if elem, ok := getOptionalElementType(t); ok {
+		t = elem
+	}
 
 	// Handle pointer types
 	if ptr, ok := t.(*types.Pointer); ok {
@@ -168,6 +200,14 @@ func getTypeID(t types.Type) string {
 				return "INT32_ARRAY"
 			case types.Int, types.Int64:
 				return "INT64_ARRAY"
+			case types.Uint8:
+				return "UINT8_ARRAY"
+			case types.Uint16:
+				return "UINT16_ARRAY"
+			case types.Uint32:
+				return "UINT32_ARRAY"
+			case types.Uint, types.Uint64:
+				return "UINT64_ARRAY"
 			case types.Float32:
 				return "FLOAT32_ARRAY"
 			case types.Float64:
@@ -197,7 +237,7 @@ func getTypeID(t types.Type) string {
 		case "time.Time":
 			return "TIMESTAMP"
 		case "github.com/apache/fory/go/fory.Date":
-			return "LOCAL_DATE"
+			return "DATE"
 		}
 		// Struct types
 		if _, ok := named.Underlying().(*types.Struct); ok {
@@ -242,6 +282,9 @@ func getTypeID(t types.Type) string {
 func getPrimitiveSize(t types.Type) int {
 	// Unwrap alias types
 	t = types.Unalias(t)
+	if elem, ok := getOptionalElementType(t); ok {
+		t = elem
+	}
 
 	// Handle pointer types
 	if ptr, ok := t.(*types.Pointer); ok {
@@ -312,8 +355,8 @@ func getTypeIDValue(typeID string) int {
 		return int(fory.MAP) // 22
 	case "TIMESTAMP":
 		return int(fory.TIMESTAMP) // 25
-	case "LOCAL_DATE":
-		return int(fory.LOCAL_DATE) // 26
+	case "DATE":
+		return int(fory.DATE) // 26
 	case "NAMED_STRUCT":
 		return int(fory.NAMED_STRUCT) // 17
 	// Primitive array types
@@ -327,6 +370,14 @@ func getTypeIDValue(typeID string) int {
 		return int(fory.INT32_ARRAY) // 42
 	case "INT64_ARRAY":
 		return int(fory.INT64_ARRAY) // 43
+	case "UINT8_ARRAY":
+		return int(fory.UINT8_ARRAY) // 44
+	case "UINT16_ARRAY":
+		return int(fory.UINT16_ARRAY) // 45
+	case "UINT32_ARRAY":
+		return int(fory.UINT32_ARRAY) // 46
+	case "UINT64_ARRAY":
+		return int(fory.UINT64_ARRAY) // 47
 	case "FLOAT32_ARRAY":
 		return int(fory.FLOAT32_ARRAY) // 49
 	case "FLOAT64_ARRAY":
@@ -385,16 +436,16 @@ func sortFields(fields []*FieldInfo) {
 			// Finally by name
 			return f1.SnakeName < f2.SnakeName
 
-		case groupOtherInternalType:
-			// Internal type fields (STRING, BINARY, LIST, SET, MAP): sort by type id then name only.
+		case groupInternalBuiltin, groupListSet, groupMap:
+			// Built-in or collection types: sort by type id then name only.
 			// Java does NOT sort by nullable flag for these types.
 			if f1.TypeID != f2.TypeID {
 				return getTypeIDValue(f1.TypeID) < getTypeIDValue(f2.TypeID)
 			}
 			return f1.SnakeName < f2.SnakeName
 
-		case groupPrimitiveArray, groupOther:
-			// Primitive arrays and other fields: sort by snake case field name only
+		case groupOther:
+			// Other fields: sort by snake case field name only
 			return f1.SnakeName < f2.SnakeName
 
 		default:
@@ -406,53 +457,45 @@ func sortFields(fields []*FieldInfo) {
 
 // Field group constants for sorting
 // This matches reflection's field ordering in field_info.go:
-// primitives → boxed → otherInternalType (STRING/BINARY/LIST/SET/MAP) → primitiveArray → other
+// primitives → internal built-in → list/set → map → other
 const (
-	groupPrimitive         = 0 // primitive and nullable primitive fields
-	groupOtherInternalType = 1 // STRING, BINARY, LIST, SET, MAP (sorted by typeId, name)
-	groupPrimitiveArray    = 2 // primitive arrays (BOOL_ARRAY, INT32_ARRAY, etc.) - sorted by name
-	groupOther             = 3 // structs, enums, and unknown types - sorted by name
+	groupPrimitive       = 0 // primitive and nullable primitive fields
+	groupInternalBuiltin = 1 // built-in types (STRING/BINARY/arrays/etc.) sorted by typeId then name
+	groupListSet         = 2 // LIST/SET sorted by typeId then name
+	groupMap             = 3 // MAP sorted by typeId then name
+	groupOther           = 4 // structs, enums, and unknown types - sorted by name
 )
 
 // getFieldGroup categorizes a field into its sorting group
 func getFieldGroup(field *FieldInfo) int {
-	typeID := field.TypeID
-
 	// Primitive fields (including nullable primitives)
 	// types: bool/int8/int16/int32/varint32/int64/varint64/sliint64/float16/float32/float64
 	if field.IsPrimitive {
 		return groupPrimitive
 	}
-
-	// Primitive array fields - sorted by name only
-	primitiveArrayTypes := map[string]bool{
-		"BOOL_ARRAY":    true,
-		"INT8_ARRAY":    true,
-		"INT16_ARRAY":   true,
-		"INT32_ARRAY":   true,
-		"INT64_ARRAY":   true,
-		"FLOAT32_ARRAY": true,
-		"FLOAT64_ARRAY": true,
+	typeID := field.TypeID
+	if typeID == "LIST" || typeID == "SET" {
+		return groupListSet
 	}
-	if primitiveArrayTypes[typeID] {
-		return groupPrimitiveArray
+	if typeID == "MAP" {
+		return groupMap
 	}
-
-	// Internal types (STRING, BINARY, LIST, SET, MAP) - sorted by typeId, nullable, name
-	// These match reflection's category 1 in getFieldCategory
-	internalTypes := map[string]bool{
-		"STRING": true,
-		"BINARY": true,
-		"LIST":   true,
-		"SET":    true,
-		"MAP":    true,
+	// Unknown or user-defined types go to "other"
+	switch typeID {
+	case "UNKNOWN",
+		"NAMED_STRUCT",
+		"NAMED_COMPATIBLE_STRUCT",
+		"STRUCT",
+		"COMPATIBLE_STRUCT",
+		"EXT",
+		"NAMED_EXT",
+		"ENUM",
+		"NAMED_ENUM",
+		"INTERFACE":
+		return groupOther
 	}
-	if internalTypes[typeID] {
-		return groupOtherInternalType
-	}
-
-	// Everything else goes to "other fields"
-	return groupOther
+	// Everything else is a built-in type (STRING/BINARY/arrays/TIMESTAMP/etc.)
+	return groupInternalBuiltin
 }
 
 // getStructNames extracts struct names from StructInfo slice
@@ -473,6 +516,21 @@ func analyzeField(field *types.Var, index int) (*FieldInfo, error) {
 	// Check if field type is supported
 	if !isSupportedFieldType(fieldType) {
 		return nil, nil // Skip unsupported types
+	}
+
+	optionalElem, isOptional := getOptionalElementType(fieldType)
+	if isOptional && optionalElem != nil {
+		if ptr, ok := optionalElem.(*types.Pointer); ok {
+			switch ptr.Elem().Underlying().(type) {
+			case *types.Slice, *types.Map:
+				return nil, fmt.Errorf("field %s: optional.Optional is not allowed for slice/map", goName)
+			}
+		} else {
+			switch optionalElem.Underlying().(type) {
+			case *types.Struct, *types.Slice, *types.Map:
+				return nil, fmt.Errorf("field %s: optional.Optional is not allowed for struct/slice/map", goName)
+			}
+		}
 	}
 
 	// Analyze type information
@@ -497,8 +555,10 @@ func analyzeField(field *types.Var, index int) (*FieldInfo, error) {
 		Index:         index,
 		IsPrimitive:   isPrimitive,
 		IsPointer:     isPointer,
-		Nullable:      isPointer, // Pointer types are nullable, slices/maps are non-nullable in xlang mode
+		IsOptional:    isOptional,
+		Nullable:      isPointer || isOptional, // Pointer and optional types are nullable in xlang mode
 		TypeID:        typeID,
 		PrimitiveSize: primitiveSize,
+		OptionalElem:  optionalElem,
 	}, nil
 }

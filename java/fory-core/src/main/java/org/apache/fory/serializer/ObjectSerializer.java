@@ -19,6 +19,8 @@
 
 package org.apache.fory.serializer;
 
+import static org.apache.fory.serializer.AbstractObjectSerializer.readBuildInFieldValue;
+
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Collection;
@@ -37,9 +39,9 @@ import org.apache.fory.serializer.FieldGroups.SerializationFieldInfo;
 import org.apache.fory.serializer.struct.Fingerprint;
 import org.apache.fory.type.Descriptor;
 import org.apache.fory.type.DescriptorGrouper;
-import org.apache.fory.type.DispatchId;
 import org.apache.fory.type.Generics;
 import org.apache.fory.util.MurmurHash3;
+import org.apache.fory.util.StringUtils;
 import org.apache.fory.util.Utils;
 import org.apache.fory.util.record.RecordInfo;
 import org.apache.fory.util.record.RecordUtils;
@@ -88,7 +90,7 @@ public final class ObjectSerializer<T> extends AbstractObjectSerializer<T> {
     boolean shareMeta = fory.getConfig().isMetaShareEnabled();
     if (shareMeta) {
       ClassDef classDef = typeResolver.getTypeDef(cls, resolveParent);
-      if (Utils.debugOutputEnabled()) {
+      if (Utils.DEBUG_OUTPUT_ENABLED) {
         LOG.info("========== ObjectSerializer ClassDef for {} ==========", cls.getName());
         LOG.info("ClassDef fieldsInfo count: {}", classDef.getFieldsInfo().size());
         for (int i = 0; i < classDef.getFieldsInfo().size(); i++) {
@@ -101,12 +103,15 @@ public final class ObjectSerializer<T> extends AbstractObjectSerializer<T> {
     }
     DescriptorGrouper grouper = typeResolver.createDescriptorGrouper(descriptors, false);
     descriptors = grouper.getSortedDescriptors();
-    if (Utils.debugOutputEnabled()) {
-      LOG.info("========== ObjectSerializer sorted descriptors for {} ==========", cls.getName());
+    if (Utils.DEBUG_OUTPUT_ENABLED) {
+      LOG.info(
+          "========== ObjectSerializer {} sorted descriptors for {} ==========",
+          descriptors.size(),
+          cls.getName());
       for (Descriptor d : descriptors) {
         LOG.info(
             "  {} -> {}, ref {}, nullable {}",
-            d.getName(),
+            StringUtils.toSnakeCase(d.getName()),
             d.getTypeName(),
             d.isTrackingRef(),
             d.isNullable());
@@ -131,108 +136,65 @@ public final class ObjectSerializer<T> extends AbstractObjectSerializer<T> {
   }
 
   @Override
+  public void xwrite(MemoryBuffer buffer, T value) {
+    write(buffer, value);
+  }
+
+  @Override
   public void write(MemoryBuffer buffer, T value) {
     Fory fory = this.fory;
     RefResolver refResolver = this.refResolver;
     if (fory.checkClassVersion()) {
-      if (fory.getConfig().isForyDebugOutputEnabled()) {
-        LOG.info(
-            "[Java][fory-debug] Writing struct hash for {} at position {}: hash={}",
-            type.getSimpleName(),
-            buffer.writerIndex(),
-            classVersionHash);
-      }
       buffer.writeInt32(classVersionHash);
     }
     // write order: primitive,boxed,final,other,collection,map
-    writeBuildInFields(buffer, value, fory, refResolver, typeResolver);
-    writeContainerFields(buffer, value, fory, refResolver, typeResolver);
+    writeBuildInFields(buffer, value, fory);
+    writeContainerFields(buffer, value, fory, refResolver);
     writeOtherFields(buffer, value);
   }
 
   private void writeOtherFields(MemoryBuffer buffer, T value) {
     for (SerializationFieldInfo fieldInfo : otherFields) {
+      if (Utils.DEBUG_OUTPUT_ENABLED) {
+        LOG.info(
+            "[Java] write field {} of type {}, writer index {}",
+            fieldInfo.descriptor.getName(),
+            fieldInfo.typeRef,
+            buffer.writerIndex());
+      }
       FieldAccessor fieldAccessor = fieldInfo.fieldAccessor;
       Object fieldValue = fieldAccessor.getObject(value);
-      writeOtherFieldValue(binding, buffer, fieldInfo, fieldValue);
+      binding.writeField(fieldInfo, buffer, fieldValue);
     }
   }
 
-  @Override
-  public void xwrite(MemoryBuffer buffer, T value) {
-    write(buffer, value);
-  }
-
-  private void writeBuildInFields(
-      MemoryBuffer buffer, T value, Fory fory, RefResolver refResolver, TypeResolver typeResolver) {
-    boolean metaShareEnabled = fory.getConfig().isMetaShareEnabled();
+  private void writeBuildInFields(MemoryBuffer buffer, T value, Fory fory) {
     for (SerializationFieldInfo fieldInfo : this.buildInFields) {
-      FieldAccessor fieldAccessor = fieldInfo.fieldAccessor;
-      boolean nullable = fieldInfo.nullable;
-      int dispatchId = fieldInfo.dispatchId;
-      if (writePrimitiveFieldValue(buffer, value, fieldAccessor, dispatchId)) {
-        Object fieldValue = fieldAccessor.getObject(value);
-        boolean needWrite =
-            nullable
-                ? writeBasicNullableObjectFieldValue(fory, buffer, fieldValue, dispatchId)
-                : writeBasicObjectFieldValue(fory, buffer, fieldValue, dispatchId);
-        if (needWrite) {
-          Serializer<Object> serializer = fieldInfo.classInfo.getSerializer();
-          if (!metaShareEnabled || fieldInfo.useDeclaredTypeInfo) {
-            switch (fieldInfo.refMode) {
-              case NONE:
-                binding.write(buffer, serializer, fieldValue);
-                break;
-              case NULL_ONLY:
-                binding.writeNullable(buffer, fieldValue, serializer);
-                break;
-              case TRACKING:
-                // whether tracking ref is recorded in `fieldInfo.serializer`, so it's still
-                // consistent with jit serializer.
-                binding.writeRef(buffer, fieldValue, serializer);
-                break;
-              default:
-                throw new IllegalStateException("Unexpected refMode: " + fieldInfo.refMode);
-            }
-          } else {
-            switch (fieldInfo.refMode) {
-              case NONE:
-                typeResolver.writeClassInfo(buffer, fieldInfo.classInfo);
-                binding.write(buffer, serializer, fieldValue);
-                break;
-              case NULL_ONLY:
-                if (fieldValue == null) {
-                  buffer.writeByte(Fory.NULL_FLAG);
-                } else {
-                  buffer.writeByte(Fory.NOT_NULL_VALUE_FLAG);
-                  typeResolver.writeClassInfo(buffer, fieldInfo.classInfo);
-                  binding.write(buffer, serializer, fieldValue);
-                }
-                break;
-              case TRACKING:
-                if (!refResolver.writeRefOrNull(buffer, fieldValue)) {
-                  typeResolver.writeClassInfo(buffer, fieldInfo.classInfo);
-                  // No generics for field, no need to update `depth`.
-                  binding.write(buffer, serializer, fieldValue);
-                }
-                break;
-              default:
-                throw new IllegalStateException("Unexpected refMode: " + fieldInfo.refMode);
-            }
-          }
-        }
+      if (Utils.DEBUG_OUTPUT_ENABLED) {
+        LOG.info(
+            "[Java] write field {} of type {}, writer index {}",
+            fieldInfo.descriptor.getName(),
+            fieldInfo.typeRef,
+            buffer.writerIndex());
       }
+      AbstractObjectSerializer.writeBuildInField(binding, fieldInfo, buffer, value);
     }
   }
 
   private void writeContainerFields(
-      MemoryBuffer buffer, T value, Fory fory, RefResolver refResolver, TypeResolver typeResolver) {
+      MemoryBuffer buffer, T value, Fory fory, RefResolver refResolver) {
     Generics generics = fory.getGenerics();
     for (SerializationFieldInfo fieldInfo : containerFields) {
+      if (Utils.DEBUG_OUTPUT_ENABLED) {
+        LOG.info(
+            "[Java] write field {} of type {}, writer index {}",
+            fieldInfo.descriptor.getName(),
+            fieldInfo.typeRef,
+            buffer.writerIndex());
+      }
       FieldAccessor fieldAccessor = fieldInfo.fieldAccessor;
       Object fieldValue = fieldAccessor.getObject(value);
-      writeContainerFieldValue(
-          binding, refResolver, typeResolver, generics, fieldInfo, buffer, fieldValue);
+      writeContainerFieldValue(binding, refResolver, generics, fieldInfo, buffer, fieldValue);
     }
   }
 
@@ -257,8 +219,6 @@ public final class ObjectSerializer<T> extends AbstractObjectSerializer<T> {
 
   public Object[] readFields(MemoryBuffer buffer) {
     Fory fory = this.fory;
-    RefResolver refResolver = this.refResolver;
-    TypeResolver typeResolver = this.typeResolver;
     if (fory.checkClassVersion()) {
       int hash = buffer.readInt32();
       checkClassVersion(type, hash, classVersionHash);
@@ -268,14 +228,7 @@ public final class ObjectSerializer<T> extends AbstractObjectSerializer<T> {
     int counter = 0;
     // read order: primitive,boxed,final,other,collection,map
     for (SerializationFieldInfo fieldInfo : this.buildInFields) {
-      int dispatchId = fieldInfo.dispatchId;
-      if (DispatchId.isPrimitive(dispatchId)) {
-        fieldValues[counter++] = Serializers.readPrimitiveValue(fory, buffer, dispatchId);
-      } else {
-        Object fieldValue =
-            readFinalObjectFieldValue(binding, refResolver, typeResolver, fieldInfo, buffer);
-        fieldValues[counter++] = fieldValue;
-      }
+      fieldValues[counter++] = readBuildInFieldValue(binding, fieldInfo, buffer);
     }
     Generics generics = fory.getGenerics();
     for (SerializationFieldInfo fieldInfo : containerFields) {
@@ -283,7 +236,7 @@ public final class ObjectSerializer<T> extends AbstractObjectSerializer<T> {
       fieldValues[counter++] = fieldValue;
     }
     for (SerializationFieldInfo fieldInfo : otherFields) {
-      Object fieldValue = readOtherFieldValue(binding, fieldInfo, buffer);
+      Object fieldValue = binding.readField(fieldInfo, buffer);
       fieldValues[counter++] = fieldValue;
     }
     return fieldValues;
@@ -291,8 +244,6 @@ public final class ObjectSerializer<T> extends AbstractObjectSerializer<T> {
 
   public T readAndSetFields(MemoryBuffer buffer, T obj) {
     Fory fory = this.fory;
-    RefResolver refResolver = this.refResolver;
-    TypeResolver typeResolver = this.typeResolver;
     if (fory.checkClassVersion()) {
       int hash = buffer.readInt32();
       checkClassVersion(type, hash, classVersionHash);
@@ -300,16 +251,8 @@ public final class ObjectSerializer<T> extends AbstractObjectSerializer<T> {
     // read order: primitive,boxed,final,other,collection,map
     for (SerializationFieldInfo fieldInfo : this.buildInFields) {
       FieldAccessor fieldAccessor = fieldInfo.fieldAccessor;
-      boolean nullable = fieldInfo.nullable;
-      int dispatchId = fieldInfo.dispatchId;
-      if (readPrimitiveFieldValue(buffer, obj, fieldAccessor, dispatchId)
-          && (nullable
-              ? readBasicNullableObjectFieldValue(fory, buffer, obj, fieldAccessor, dispatchId)
-              : readBasicObjectFieldValue(fory, buffer, obj, fieldAccessor, dispatchId))) {
-        Object fieldValue =
-            readFinalObjectFieldValue(binding, refResolver, typeResolver, fieldInfo, buffer);
-        fieldAccessor.putObject(obj, fieldValue);
-      }
+      // a numeric type can have only three kinds: primitive, not_null_boxed, nullable_boxed
+      readBuildInFieldValue(binding, fieldInfo, buffer, obj);
     }
     Generics generics = fory.getGenerics();
     for (SerializationFieldInfo fieldInfo : containerFields) {
@@ -318,7 +261,7 @@ public final class ObjectSerializer<T> extends AbstractObjectSerializer<T> {
       fieldAccessor.putObject(obj, fieldValue);
     }
     for (SerializationFieldInfo fieldInfo : otherFields) {
-      Object fieldValue = readOtherFieldValue(binding, fieldInfo, buffer);
+      Object fieldValue = binding.readField(fieldInfo, buffer);
       FieldAccessor fieldAccessor = fieldInfo.fieldAccessor;
       fieldAccessor.putObject(obj, fieldValue);
     }
@@ -330,19 +273,7 @@ public final class ObjectSerializer<T> extends AbstractObjectSerializer<T> {
     String fingerprint = Fingerprint.computeStructFingerprint(fory, sorted);
     byte[] bytes = fingerprint.getBytes(StandardCharsets.UTF_8);
     long hashLong = MurmurHash3.murmurhash3_x64_128(bytes, 0, bytes.length, 47)[0];
-    int hash = (int) (hashLong & 0xffffffffL);
-    if (fory.getConfig().isForyDebugOutputEnabled()) {
-      String className =
-          sorted.isEmpty() ? "<unknown>" : String.valueOf(sorted.get(0).getDeclaringClass());
-      LOG.info(
-          "[Java][fory-debug] struct "
-              + className
-              + " version fingerprint=\""
-              + fingerprint
-              + "\" version hash="
-              + hash);
-    }
-    return hash;
+    return (int) (hashLong & 0xffffffffL);
   }
 
   public static void checkClassVersion(Class<?> cls, int readHash, int classVersionHash) {

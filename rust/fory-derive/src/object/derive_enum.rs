@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::util::{is_default_value_variant, is_skip_enum_variant};
+use super::util::{enum_variant_id, is_default_value_variant, is_skip_enum_variant};
 use crate::object::misc;
 use crate::object::read::gen_read_field;
 use crate::object::util::{get_filtered_fields_iter, get_sorted_field_names};
@@ -37,10 +37,14 @@ pub fn gen_actual_type_id(data_enum: &DataEnum) -> TokenStream {
         .any(|v| !matches!(v.fields, Fields::Unit));
 
     if is_union_compatible && has_data_variants {
-        // Union-compatible enum: use UNION TypeId ONLY in xlang mode
+        // Union-compatible enum: use typed/named union IDs in xlang mode
         quote! {
             if xlang {
-                fory_core::types::TypeId::UNION as u32
+                if register_by_name {
+                    fory_core::types::TypeId::NAMED_UNION as u32
+                } else {
+                    (type_id << 8) | (fory_core::types::TypeId::TYPED_UNION as u32)
+                }
             } else {
                 fory_core::serializer::enum_::actual_type_id(type_id, register_by_name, compatible)
             }
@@ -189,7 +193,11 @@ fn xlang_variant_branches(data_enum: &DataEnum, default_variant_value: u32) -> V
         .enumerate()
         .map(|(idx, v)| {
             let ident = &v.ident;
-            let mut tag_value = idx as u32;
+            let mut tag_value = if is_union_compatible {
+                enum_variant_id(v).unwrap_or(idx as u32)
+            } else {
+                idx as u32
+            };
             if is_skip_enum_variant(v) {
                 tag_value = default_variant_value;
             }
@@ -200,7 +208,7 @@ fn xlang_variant_branches(data_enum: &DataEnum, default_variant_value: u32) -> V
                         // Union-compatible: write tag + null flag (matches Java/C++ Union with null value)
                         quote! {
                             Self::#ident => {
-                                context.writer.write_varuint32(#tag_value);
+                                context.writer.write_var_uint32(#tag_value);
                                 // Write null flag for unit variant (no value)
                                 context.writer.write_i8(fory_core::types::RefFlag::Null as i8);
                             }
@@ -208,7 +216,7 @@ fn xlang_variant_branches(data_enum: &DataEnum, default_variant_value: u32) -> V
                     } else {
                         quote! {
                             Self::#ident => {
-                                context.writer.write_varuint32(#tag_value);
+                                context.writer.write_var_uint32(#tag_value);
                             }
                         }
                     }
@@ -218,7 +226,7 @@ fn xlang_variant_branches(data_enum: &DataEnum, default_variant_value: u32) -> V
                         // Union-compatible single field: write tag + value with type info (like xwriteRef)
                         quote! {
                             Self::#ident(ref value) => {
-                                context.writer.write_varuint32(#tag_value);
+                                context.writer.write_var_uint32(#tag_value);
                                 use fory_core::serializer::Serializer;
                                 value.fory_write(context, fory_core::types::RefMode::Tracking, true, false)?;
                             }
@@ -226,7 +234,7 @@ fn xlang_variant_branches(data_enum: &DataEnum, default_variant_value: u32) -> V
                     } else {
                         quote! {
                             Self::#ident(..) => {
-                                context.writer.write_varuint32(#tag_value);
+                                context.writer.write_var_uint32(#tag_value);
                             }
                         }
                     }
@@ -238,7 +246,7 @@ fn xlang_variant_branches(data_enum: &DataEnum, default_variant_value: u32) -> V
                             fields_named.named.first().unwrap().ident.as_ref().unwrap();
                         quote! {
                             Self::#ident { ref #field_ident } => {
-                                context.writer.write_varuint32(#tag_value);
+                                context.writer.write_var_uint32(#tag_value);
                                 use fory_core::serializer::Serializer;
                                 #field_ident.fory_write(context, fory_core::types::RefMode::Tracking, true, false)?;
                             }
@@ -246,7 +254,7 @@ fn xlang_variant_branches(data_enum: &DataEnum, default_variant_value: u32) -> V
                     } else {
                         quote! {
                             Self::#ident { .. } => {
-                                context.writer.write_varuint32(#tag_value);
+                                context.writer.write_var_uint32(#tag_value);
                             }
                         }
                     }
@@ -272,7 +280,7 @@ fn rust_variant_branches(data_enum: &DataEnum, default_variant_value: u32) -> Ve
                 Fields::Unit => {
                     quote! {
                         Self::#ident => {
-                            context.writer.write_varuint32(#tag_value);
+                            context.writer.write_var_uint32(#tag_value);
                         }
                     }
                 }
@@ -290,7 +298,7 @@ fn rust_variant_branches(data_enum: &DataEnum, default_variant_value: u32) -> Ve
 
                     quote! {
                         Self::#ident( #(#field_idents),* ) => {
-                            context.writer.write_varuint32(#tag_value);
+                            context.writer.write_var_uint32(#tag_value);
                             #(#write_fields)*
                         }
                     }
@@ -314,7 +322,7 @@ fn rust_variant_branches(data_enum: &DataEnum, default_variant_value: u32) -> Ve
 
                     quote! {
                         Self::#ident { #(#field_idents),* } => {
-                            context.writer.write_varuint32(#tag_value) ;
+                            context.writer.write_var_uint32(#tag_value) ;
                             #(#write_fields)*
                         }
                     }
@@ -346,7 +354,7 @@ fn rust_compatible_variant_write_branches(
                 Fields::Unit => {
                     quote! {
                         Self::#ident => {
-                            context.writer.write_varuint32((#tag_value << 2) | 0b0);
+                            context.writer.write_var_uint32((#tag_value << 2) | 0b0);
                         }
                     }
                 }
@@ -360,9 +368,9 @@ fn rust_compatible_variant_write_branches(
 
                     quote! {
                         Self::#ident( #(ref #field_idents),* ) => {
-                            context.writer.write_varuint32((#tag_value << 2) | 0b1);
+                            context.writer.write_var_uint32((#tag_value << 2) | 0b1);
                             // Write as collection format (same as tuple)
-                            context.writer.write_varuint32(#field_count as u32);
+                            context.writer.write_var_uint32(#field_count as u32);
                             let header = 0u8; // No IS_SAME_TYPE flag
                             context.writer.write_u8(header);
                             use fory_core::serializer::Serializer;
@@ -393,10 +401,9 @@ fn rust_compatible_variant_write_branches(
 
                     quote! {
                         Self::#ident { #(#field_idents),* } => {
-                            context.writer.write_varuint32((#tag_value << 2) | 0b10);
-                            // Push named variant meta
-                            let meta_index = context.push_meta(std::any::TypeId::of::<#meta_type_ident>())? as u32;
-                            context.writer.write_varuint32(meta_index);
+                            context.writer.write_var_uint32((#tag_value << 2) | 0b10);
+                            // Write type meta inline using streaming protocol
+                            context.write_type_meta(std::any::TypeId::of::<#meta_type_ident>())?;
                             // Write fields same as struct
                             #(#write_fields)*
                         }
@@ -451,10 +458,11 @@ pub fn gen_write_type_info(data_enum: &DataEnum) -> TokenStream {
         .any(|v| !matches!(v.fields, Fields::Unit));
 
     if is_union_compatible && has_data_variants {
-        // Union-compatible with data: use UNION TypeId in xlang mode
+        // Union-compatible with data: write typed/named union type info in xlang mode
         quote! {
             if context.is_xlang() {
-                context.writer.write_varuint32(fory_core::types::TypeId::UNION as u32);
+                let rs_type_id = std::any::TypeId::of::<Self>();
+                context.write_any_typeinfo(fory_core::types::UNKNOWN, rs_type_id)?;
                 Ok(())
             } else {
                 fory_core::serializer::enum_::write_type_info::<Self>(context)
@@ -525,7 +533,11 @@ fn xlang_variant_read_branches(
         .enumerate()
         .map(|(idx, v)| {
             let ident = &v.ident;
-            let mut tag_value = idx as u32;
+            let mut tag_value = if is_union_compatible {
+                enum_variant_id(v).unwrap_or(idx as u32)
+            } else {
+                idx as u32
+            };
             if is_skip_enum_variant(v) {
                 tag_value = default_variant_value;
             }
@@ -809,9 +821,8 @@ fn rust_compatible_variant_read_branches(
                                 return Ok(#default_value);
                             }
                             // Named variant should have variant_type == 0b10
-                            // Read named variant meta (peer wrote this because variant_type == 0b10)
-                            let meta_index = context.reader.read_varuint32()? as usize;
-                            let type_info = context.get_meta(meta_index)?.clone();
+                            // Read type meta inline using streaming protocol
+                            let type_info = context.read_type_meta()?;
                             // Use gen_read_compatible logic
                             #compatible_read_body
                         }
@@ -823,6 +834,11 @@ fn rust_compatible_variant_read_branches(
 }
 
 pub fn gen_read_data(data_enum: &DataEnum) -> TokenStream {
+    let is_union_compatible = is_union_compatible_enum(data_enum);
+    let has_data_variants = data_enum
+        .variants
+        .iter()
+        .any(|v| !matches!(v.fields, Fields::Unit));
     let default_variant_value = data_enum
         .variants
         .iter()
@@ -874,19 +890,37 @@ pub fn gen_read_data(data_enum: &DataEnum) -> TokenStream {
         }
     };
 
+    let unknown_xlang_branch = if is_union_compatible && has_data_variants {
+        quote! {
+            _ => {
+                use fory_core::serializer::skip::skip_any_value;
+                skip_any_value(context, true)?;
+                if context.is_compatible() {
+                    Ok(#default_variant_construction)
+                } else {
+                    return Err(fory_core::error::Error::unknown_enum("unknown enum value"));
+                }
+            }
+        }
+    } else {
+        quote! {
+            _ => {
+                // Unknown variant: in compatible mode, return default; otherwise error
+                if context.is_compatible() {
+                    Ok(#default_variant_construction)
+                } else {
+                    return Err(fory_core::error::Error::unknown_enum("unknown enum value"));
+                }
+            }
+        }
+    };
+
     quote! {
         if context.is_xlang() {
             let ordinal = context.reader.read_varuint32()?;
             match ordinal {
                 #(#xlang_variant_branches)*
-                _ => {
-                    // Unknown variant: in compatible mode, return default; otherwise error
-                    if context.is_compatible() {
-                        Ok(#default_variant_construction)
-                    } else {
-                        return Err(fory_core::error::Error::unknown_enum("unknown enum value"));
-                    }
-                }
+                #unknown_xlang_branch
             }
         } else {
             if context.is_compatible() {
@@ -926,11 +960,12 @@ pub fn gen_read_type_info(data_enum: &DataEnum) -> TokenStream {
         .any(|v| !matches!(v.fields, Fields::Unit));
 
     if is_union_compatible && has_data_variants {
-        // Union-compatible with data: read UNION TypeId in xlang mode
+        // Union-compatible with data: read typed/named union type info in xlang mode
         quote! {
             if context.is_xlang() {
-                let remote_type_id = context.reader.read_varuint32()?;
-                let expected_type_id = fory_core::types::TypeId::UNION as u32;
+                let expected_type_id = Self::fory_get_type_id(context.get_type_resolver())?;
+                let type_info = context.read_any_typeinfo()?;
+                let remote_type_id = type_info.get_type_id();
                 if remote_type_id != expected_type_id {
                     return Err(fory_core::error::Error::type_mismatch(expected_type_id, remote_type_id));
                 }

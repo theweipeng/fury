@@ -20,7 +20,7 @@
 import { SetTypeInfo, TypeInfo } from "../typeInfo";
 import { CodecBuilder } from "./builder";
 import { CodegenRegistry } from "./router";
-import { InternalSerializerType } from "../type";
+import { TypeId } from "../type";
 import { Scope } from "./scope";
 import { CollectionSerializerGenerator } from "./collection";
 
@@ -51,10 +51,6 @@ class SetSerializerGenerator extends CollectionSerializerGenerator {
   getFixedSize(): number {
     return 7;
   }
-
-  needToWriteRef(): boolean {
-    return Boolean(this.builder.fory.config.refTracking);
-  }
 }
 
-CodegenRegistry.register(InternalSerializerType.SET, SetSerializerGenerator);
+CodegenRegistry.register(TypeId.SET, SetSerializerGenerator);

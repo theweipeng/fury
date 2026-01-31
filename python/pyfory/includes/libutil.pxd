@@ -43,10 +43,12 @@ cdef extern from "fory/util/error.h" namespace "fory" nogil:
         BufferOutOfBound = 18
 
     cdef cppclass CError "fory::Error":
+        c_bool ok() const
         CErrorCode code() const
         const c_string& message() const
         c_string to_string() const
         c_string code_as_string() const
+        void reset()
 
 cdef extern from "fory/util/result.h" namespace "fory" nogil:
     cdef cppclass CResultVoidError "fory::Result<void, fory::Error>":
@@ -56,7 +58,8 @@ cdef extern from "fory/util/result.h" namespace "fory" nogil:
 
 cdef extern from "fory/util/buffer.h" namespace "fory" nogil:
     cdef cppclass CBuffer "fory::Buffer":
-        CBuffer(uint8_t* data, uint32_t size, c_bool own_data=True)
+        CBuffer()
+        CBuffer(uint8_t* data, uint32_t size, c_bool own_data)
 
         inline uint8_t* data()
 
@@ -64,67 +67,159 @@ cdef extern from "fory/util/buffer.h" namespace "fory" nogil:
 
         inline c_bool own_data()
 
-        inline c_bool Reserve(uint32_t new_size)
+        inline uint32_t writer_index()
 
-        inline void UnsafePutByte(uint32_t offset, c_bool)
+        inline uint32_t reader_index()
 
-        inline void UnsafePutByte(uint32_t offset, uint8_t)
+        inline void writer_index(uint32_t writer_index)
 
-        inline void UnsafePutByte(uint32_t offset, int8_t)
+        inline void increase_writer_index(uint32_t diff)
 
-        inline void UnsafePut(uint32_t offset, int16_t)
+        inline void reader_index(uint32_t reader_index)
 
-        inline void UnsafePut(uint32_t offset, int32_t)
+        inline void increase_reader_index(uint32_t diff)
 
-        inline void UnsafePut(uint32_t offset, int64_t)
+        void grow(uint32_t min_capacity)
 
-        inline void UnsafePut(uint32_t offset, float)
+        void reserve(uint32_t new_size)
 
-        inline void UnsafePut(uint32_t offset, double)
+        inline void unsafe_put_byte(uint32_t offset, c_bool)
 
-        void CopyFrom(uint32_t offset, const uint8_t *src, uint32_t src_offset,
+        inline void unsafe_put_byte(uint32_t offset, uint8_t)
+
+        inline void unsafe_put_byte(uint32_t offset, int8_t)
+
+        inline void unsafe_put(uint32_t offset, int16_t)
+
+        inline void unsafe_put(uint32_t offset, int32_t)
+
+        inline void unsafe_put(uint32_t offset, int64_t)
+
+        inline void unsafe_put(uint32_t offset, float)
+
+        inline void unsafe_put(uint32_t offset, double)
+
+        void copy_from(uint32_t offset, const uint8_t *src, uint32_t src_offset,
                       uint32_t nbytes)
 
-        inline c_bool GetBool(uint32_t offset)
+        inline c_bool get_bool(uint32_t offset)
 
-        inline int8_t GetInt8(uint32_t offset)
+        inline int8_t get_int8(uint32_t offset)
 
-        inline int16_t GetInt16(uint32_t offset)
+        inline int16_t get_int16(uint32_t offset)
 
-        inline int32_t GetInt32(uint32_t offset)
+        inline int32_t get_int24(uint32_t offset)
 
-        inline int64_t GetInt64(uint32_t offset)
+        inline int32_t get_int32(uint32_t offset)
 
-        inline float GetFloat(uint32_t offset)
+        inline int64_t get_int64(uint32_t offset)
 
-        inline double GetDouble(uint32_t offset)
+        inline float get_float(uint32_t offset)
 
-        inline CResultVoidError GetBytesAsInt64(uint32_t offset, uint32_t length, int64_t* target)
+        inline double get_double(uint32_t offset)
 
-        inline uint32_t PutVarUint32(uint32_t offset, int32_t value)
+        inline CResultVoidError get_bytes_as_int64(uint32_t offset, uint32_t length, int64_t* target)
 
-        inline int32_t GetVarUint32(uint32_t offset, uint32_t *readBytesLength)
+        inline uint32_t put_var_uint32(uint32_t offset, int32_t value)
 
-        void Copy(uint32_t start, uint32_t nbytes,
+        inline int32_t get_var_uint32(uint32_t offset, uint32_t *read_bytes_length)
+
+        inline void put_int24(uint32_t offset, int32_t value)
+
+        void write_uint8(uint8_t value)
+
+        void write_int8(int8_t value)
+
+        void write_uint16(uint16_t value)
+
+        void write_int16(int16_t value)
+
+        void write_int24(int32_t value)
+
+        void write_uint32(uint32_t value)
+
+        void write_int32(int32_t value)
+
+        void write_int64(int64_t value)
+
+        void write_float(float value)
+
+        void write_double(double value)
+
+        void write_var_uint32(uint32_t value)
+
+        void write_var_int32(int32_t value)
+
+        void write_var_uint64(uint64_t value)
+
+        void write_var_int64(int64_t value)
+
+        void write_tagged_int64(int64_t value)
+
+        void write_tagged_uint64(uint64_t value)
+
+        void write_bytes(const void* data, uint32_t length)
+
+        uint8_t read_uint8(CError& error)
+
+        int8_t read_int8(CError& error)
+
+        uint16_t read_uint16(CError& error)
+
+        int16_t read_int16(CError& error)
+
+        int32_t read_int24(CError& error)
+
+        uint32_t read_uint32(CError& error)
+
+        int32_t read_int32(CError& error)
+
+        uint64_t read_uint64(CError& error)
+
+        int64_t read_int64(CError& error)
+
+        float read_float(CError& error)
+
+        double read_double(CError& error)
+
+        uint32_t read_var_uint32(CError& error)
+
+        int32_t read_var_int32(CError& error)
+
+        uint64_t read_var_uint64(CError& error)
+
+        int64_t read_var_int64(CError& error)
+
+        int64_t read_tagged_int64(CError& error)
+
+        uint64_t read_tagged_uint64(CError& error)
+
+        uint64_t read_var_uint36_small(CError& error)
+
+        void read_bytes(void* data, uint32_t length, CError& error)
+
+        void skip(uint32_t length, CError& error)
+
+        void copy(uint32_t start, uint32_t nbytes,
                   uint8_t* out, uint32_t offset) const
 
-        c_string Hex()
+        c_string hex()
 
-    CBuffer* AllocateBuffer(uint32_t size)
-    c_bool AllocateBuffer(uint32_t size, shared_ptr[CBuffer]* out)
+    CBuffer* allocate_buffer(uint32_t size)
+    c_bool allocate_buffer(uint32_t size, shared_ptr[CBuffer]* out)
 
 
 cdef extern from "fory/util/bit_util.h" namespace "fory::util" nogil:
-    c_bool GetBit(const uint8_t *bits, uint32_t i)
+    c_bool get_bit(const uint8_t *bits, uint32_t i)
 
-    void SetBit(uint8_t *bits, int64_t i)
+    void set_bit(uint8_t *bits, int64_t i)
 
-    void ClearBit(uint8_t *bits, int64_t i)
+    void clear_bit(uint8_t *bits, int64_t i)
 
-    void SetBitTo(uint8_t *bits, int64_t i, c_bool bit_is_set)
+    void set_bit_to(uint8_t *bits, int64_t i, c_bool bit_is_set)
 
     c_string hex(uint8_t *data, int32_t length)
 
 
 cdef extern from "fory/util/string_util.h" namespace "fory" nogil:
-    c_bool utf16HasSurrogatePairs(uint16_t* data, size_t size)
+    c_bool utf16_has_surrogate_pairs(uint16_t* data, size_t size)

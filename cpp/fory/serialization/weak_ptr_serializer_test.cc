@@ -87,7 +87,7 @@ TEST(SharedWeakTest, Update) {
 TEST(SharedWeakTest, ClonesShareInternalStorage) {
   auto strong = std::make_shared<int32_t>(100);
   SharedWeak<int32_t> weak1 = SharedWeak<int32_t>::from(strong);
-  SharedWeak<int32_t> weak2 = weak1; // Copy
+  SharedWeak<int32_t> weak2 = weak1; // copy
 
   // Both should point to the same object
   EXPECT_EQ(weak1.upgrade(), weak2.upgrade());
@@ -136,43 +136,36 @@ TEST(SharedWeakTest, OwnerEquals) {
 
 struct SimpleStruct {
   int32_t value;
+  FORY_STRUCT(SimpleStruct, value);
 };
-FORY_STRUCT(SimpleStruct, value);
 
 struct StructWithWeak {
   int32_t id;
   SharedWeak<SimpleStruct> weak_ref;
+  FORY_STRUCT(StructWithWeak, id, weak_ref);
 };
-FORY_STRUCT(StructWithWeak, id, weak_ref);
 
 struct StructWithBothRefs {
   int32_t id;
   std::shared_ptr<SimpleStruct> strong_ref;
   SharedWeak<SimpleStruct> weak_ref;
+  FORY_STRUCT(StructWithBothRefs, id, strong_ref, weak_ref);
 };
-FORY_STRUCT(StructWithBothRefs, id, strong_ref, weak_ref);
 
 struct MultipleWeakRefsWithOwner {
   std::shared_ptr<SimpleStruct> owner;
   SharedWeak<SimpleStruct> weak1;
   SharedWeak<SimpleStruct> weak2;
   SharedWeak<SimpleStruct> weak3;
+  FORY_STRUCT(MultipleWeakRefsWithOwner, owner, weak1, weak2, weak3);
 };
-FORY_STRUCT(MultipleWeakRefsWithOwner, owner, weak1, weak2, weak3);
 
 struct NodeWithParent {
   int32_t value;
   SharedWeak<NodeWithParent> parent;
   std::vector<std::shared_ptr<NodeWithParent>> children;
+  FORY_STRUCT(NodeWithParent, value, parent, children);
 };
-FORY_STRUCT(NodeWithParent, value, parent, children);
-
-struct MultipleWeakRefs {
-  SharedWeak<SimpleStruct> weak1;
-  SharedWeak<SimpleStruct> weak2;
-  SharedWeak<SimpleStruct> weak3;
-};
-FORY_STRUCT(MultipleWeakRefs, weak1, weak2, weak3);
 
 // ============================================================================
 // Serialization Tests
@@ -378,24 +371,24 @@ TEST(WeakPtrSerializerTest, ForwardReferenceResolution) {
 
 TEST(WeakPtrSerializerTest, DeepNestedGraph) {
   // Create a deep chain: A -> B -> C with each child having weak to parent
-  auto nodeA = std::make_shared<NodeWithParent>();
-  nodeA->value = 1;
+  auto node_a = std::make_shared<NodeWithParent>();
+  node_a->value = 1;
 
-  auto nodeB = std::make_shared<NodeWithParent>();
-  nodeB->value = 2;
-  nodeB->parent = SharedWeak<NodeWithParent>::from(nodeA);
+  auto node_b = std::make_shared<NodeWithParent>();
+  node_b->value = 2;
+  node_b->parent = SharedWeak<NodeWithParent>::from(node_a);
 
-  auto nodeC = std::make_shared<NodeWithParent>();
-  nodeC->value = 3;
-  nodeC->parent = SharedWeak<NodeWithParent>::from(nodeB);
+  auto node_c = std::make_shared<NodeWithParent>();
+  node_c->value = 3;
+  node_c->parent = SharedWeak<NodeWithParent>::from(node_b);
 
-  nodeA->children.push_back(nodeB);
-  nodeB->children.push_back(nodeC);
+  node_a->children.push_back(node_b);
+  node_b->children.push_back(node_c);
 
   auto fory = create_serializer(true);
   fory.register_struct<NodeWithParent>(103);
 
-  auto bytes_result = fory.serialize(nodeA);
+  auto bytes_result = fory.serialize(node_a);
   ASSERT_TRUE(bytes_result.ok()) << bytes_result.error().to_string();
 
   auto deserialize_result = fory.deserialize<std::shared_ptr<NodeWithParent>>(
@@ -403,20 +396,20 @@ TEST(WeakPtrSerializerTest, DeepNestedGraph) {
   ASSERT_TRUE(deserialize_result.ok())
       << deserialize_result.error().to_string();
 
-  auto desA = std::move(deserialize_result).value();
-  ASSERT_NE(desA, nullptr);
-  EXPECT_EQ(desA->value, 1);
-  EXPECT_TRUE(desA->parent.expired());
+  auto des_a = std::move(deserialize_result).value();
+  ASSERT_NE(des_a, nullptr);
+  EXPECT_EQ(des_a->value, 1);
+  EXPECT_TRUE(des_a->parent.expired());
 
-  ASSERT_EQ(desA->children.size(), 1u);
-  auto desB = desA->children[0];
-  EXPECT_EQ(desB->value, 2);
-  EXPECT_EQ(desB->parent.upgrade(), desA);
+  ASSERT_EQ(des_a->children.size(), 1u);
+  auto des_b = des_a->children[0];
+  EXPECT_EQ(des_b->value, 2);
+  EXPECT_EQ(des_b->parent.upgrade(), des_a);
 
-  ASSERT_EQ(desB->children.size(), 1u);
-  auto desC = desB->children[0];
-  EXPECT_EQ(desC->value, 3);
-  EXPECT_EQ(desC->parent.upgrade(), desB);
+  ASSERT_EQ(des_b->children.size(), 1u);
+  auto des_c = des_b->children[0];
+  EXPECT_EQ(des_c->value, 3);
+  EXPECT_EQ(des_c->parent.upgrade(), des_b);
 }
 
 // ============================================================================
@@ -447,9 +440,9 @@ TEST(WeakPtrSerializerTest, RequiresTrackRef) {
 // ============================================================================
 
 TEST(WeakPtrSerializerTest, TypeTraits) {
-  // Test requires_ref_metadata
-  EXPECT_TRUE(requires_ref_metadata_v<SharedWeak<int32_t>>);
-  EXPECT_TRUE(requires_ref_metadata_v<SharedWeak<SimpleStruct>>);
+  // Test is_nullable
+  EXPECT_TRUE(is_nullable_v<SharedWeak<int32_t>>);
+  EXPECT_TRUE(is_nullable_v<SharedWeak<SimpleStruct>>);
 
   // Test is_nullable
   EXPECT_TRUE(is_nullable_v<SharedWeak<int32_t>>);

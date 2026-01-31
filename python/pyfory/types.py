@@ -98,49 +98,53 @@ class TypeId:
     EXT = 29
     # an `ext` type whose type mapping will be encoded as a name.
     NAMED_EXT = 30
-    # a tagged union type that can hold one of several alternative types.
+    # a union value whose schema identity is not embedded.
     UNION = 31
+    # a union value with embedded numeric union type ID.
+    TYPED_UNION = 32
+    # a union value with embedded union type name/TypeDef.
+    NAMED_UNION = 33
     # represents an empty/unit value with no data (e.g., for empty union alternatives).
-    NONE = 32
+    NONE = 34
     # an absolute length of time, independent of any calendar/timezone, as a count of nanoseconds.
-    DURATION = 33
+    DURATION = 35
     # a point in time, independent of any calendar/timezone, as a count of nanoseconds. The count is relative
     # to an epoch at UTC midnight on January 1, 1970.
-    TIMESTAMP = 34
+    TIMESTAMP = 36
     # a naive date without timezone. The count is days relative to an epoch at UTC midnight on Jan 1, 1970.
-    LOCAL_DATE = 35
+    DATE = 37
     # exact decimal value represented as an integer value in two's complement.
-    DECIMAL = 36
+    DECIMAL = 38
     # a variable-length array of bytes.
-    BINARY = 37
+    BINARY = 39
     # a multidimensional array which every sub-array can have different sizes but all have the same type.
     # only allow numeric components. Other arrays will be taken as List. The implementation should support the
     # interoperability between array and list.
-    ARRAY = 38
+    ARRAY = 40
     # one dimensional bool array.
-    BOOL_ARRAY = 39
+    BOOL_ARRAY = 41
     # one dimensional int8 array.
-    INT8_ARRAY = 40
+    INT8_ARRAY = 42
     # one dimensional int16 array.
-    INT16_ARRAY = 41
+    INT16_ARRAY = 43
     # one dimensional int32 array.
-    INT32_ARRAY = 42
+    INT32_ARRAY = 44
     # one dimensional int64 array.
-    INT64_ARRAY = 43
+    INT64_ARRAY = 45
     # one dimensional uint8 array.
-    UINT8_ARRAY = 44
+    UINT8_ARRAY = 46
     # one dimensional uint16 array.
-    UINT16_ARRAY = 45
+    UINT16_ARRAY = 47
     # one dimensional uint32 array.
-    UINT32_ARRAY = 46
+    UINT32_ARRAY = 48
     # one dimensional uint64 array.
-    UINT64_ARRAY = 47
+    UINT64_ARRAY = 49
     # one dimensional float16 array.
-    FLOAT16_ARRAY = 48
+    FLOAT16_ARRAY = 50
     # one dimensional float32 array.
-    FLOAT32_ARRAY = 49
+    FLOAT32_ARRAY = 51
     # one dimensional float64 array.
-    FLOAT64_ARRAY = 50
+    FLOAT64_ARRAY = 52
 
     # Bound value for range checks (types with id >= BOUND are not internal types).
     BOUND = 64
@@ -159,6 +163,7 @@ __NAMESPACED_TYPES__ = {
     TypeId.NAMED_ENUM,
     TypeId.NAMED_STRUCT,
     TypeId.NAMED_COMPATIBLE_STRUCT,
+    TypeId.NAMED_UNION,
 }
 
 __TYPE_SHARE_META__ = {
@@ -167,6 +172,7 @@ __TYPE_SHARE_META__ = {
     TypeId.NAMED_EXT,
     TypeId.COMPATIBLE_STRUCT,
     TypeId.NAMED_COMPATIBLE_STRUCT,
+    TypeId.NAMED_UNION,
 }
 int8 = TypeVar("int8", bound=int)
 uint8 = TypeVar("uint8", bound=int)
@@ -184,6 +190,32 @@ fixed_uint64 = TypeVar("fixed_uint64", bound=int)
 tagged_uint64 = TypeVar("tagged_uint64", bound=int)
 float32 = TypeVar("float32", bound=float)
 float64 = TypeVar("float64", bound=float)
+
+
+class RefMeta:
+    __slots__ = ("enable",)
+
+    def __init__(self, enable: bool = True):
+        self.enable = enable
+
+
+class Ref:
+    def __class_getitem__(cls, params):
+        if not isinstance(params, tuple):
+            params = (params,)
+        if len(params) == 0 or len(params) > 2:
+            raise TypeError("Ref expects Ref[T] or Ref[T, bool]")
+        target = params[0]
+        enable = True
+        if len(params) == 2:
+            enable = params[1]
+        if not isinstance(enable, bool):
+            raise TypeError("Ref enable must be a bool")
+        annotated = getattr(typing, "Annotated", None)
+        if annotated is None:
+            return target
+        return annotated[target, RefMeta(enable)]
+
 
 _primitive_types = {
     int,
@@ -259,34 +291,65 @@ def get_primitive_type_size(type_id) -> int:
     return _primitive_type_sizes.get(type_id, -1)
 
 
-# Int8ArrayType = TypeVar("Int8ArrayType", bound=array.ArrayType)
 BoolArrayType = TypeVar("BoolArrayType")
+int8_array = TypeVar("int8_array", bound=array.ArrayType)
+uint8_array = TypeVar("uint8_array", bound=array.ArrayType)
 int16_array = TypeVar("int16_array", bound=array.ArrayType)
 int32_array = TypeVar("int32_array", bound=array.ArrayType)
 int64_array = TypeVar("int64_array", bound=array.ArrayType)
+uint16_array = TypeVar("uint16_array", bound=array.ArrayType)
+uint32_array = TypeVar("uint32_array", bound=array.ArrayType)
+uint64_array = TypeVar("uint64_array", bound=array.ArrayType)
 float32_array = TypeVar("float32_array", bound=array.ArrayType)
 float64_array = TypeVar("float64_array", bound=array.ArrayType)
 BoolNDArrayType = TypeVar("BoolNDArrayType", bound=ndarray)
+Int8NDArrayType = TypeVar("Int8NDArrayType", bound=ndarray)
+Uint8NDArrayType = TypeVar("Uint8NDArrayType", bound=ndarray)
 Int16NDArrayType = TypeVar("Int16NDArrayType", bound=ndarray)
 Int32NDArrayType = TypeVar("Int32NDArrayType", bound=ndarray)
 Int64NDArrayType = TypeVar("Int64NDArrayType", bound=ndarray)
+Uint16NDArrayType = TypeVar("Uint16NDArrayType", bound=ndarray)
+Uint32NDArrayType = TypeVar("Uint32NDArrayType", bound=ndarray)
+Uint64NDArrayType = TypeVar("Uint64NDArrayType", bound=ndarray)
 Float32NDArrayType = TypeVar("Float32NDArrayType", bound=ndarray)
 Float64NDArrayType = TypeVar("Float64NDArrayType", bound=ndarray)
 
+# Aliases for numpy ndarray type hints (snake_case for ergonomics)
+bool_ndarray = BoolNDArrayType
+int8_ndarray = Int8NDArrayType
+uint8_ndarray = Uint8NDArrayType
+int16_ndarray = Int16NDArrayType
+int32_ndarray = Int32NDArrayType
+int64_ndarray = Int64NDArrayType
+uint16_ndarray = Uint16NDArrayType
+uint32_ndarray = Uint32NDArrayType
+uint64_ndarray = Uint64NDArrayType
+float32_ndarray = Float32NDArrayType
+float64_ndarray = Float64NDArrayType
+
 
 _py_array_types = {
-    # Int8ArrayType,
+    int8_array,
+    uint8_array,
     int16_array,
     int32_array,
     int64_array,
+    uint16_array,
+    uint32_array,
+    uint64_array,
     float32_array,
     float64_array,
 }
 _np_array_types = {
     BoolNDArrayType,
+    Int8NDArrayType,
+    Uint8NDArrayType,
     Int16NDArrayType,
     Int32NDArrayType,
     Int64NDArrayType,
+    Uint16NDArrayType,
+    Uint32NDArrayType,
+    Uint64NDArrayType,
     Float32NDArrayType,
     Float64NDArrayType,
 }
@@ -303,6 +366,10 @@ _primitive_array_type_ids = {
     TypeId.INT16_ARRAY,
     TypeId.INT32_ARRAY,
     TypeId.INT64_ARRAY,
+    TypeId.UINT8_ARRAY,
+    TypeId.UINT16_ARRAY,
+    TypeId.UINT32_ARRAY,
+    TypeId.UINT64_ARRAY,
     TypeId.FLOAT32_ARRAY,
     TypeId.FLOAT64_ARRAY,
 }
@@ -347,6 +414,12 @@ _struct_type_ids = {
     TypeId.NAMED_COMPATIBLE_STRUCT,
 }
 
+_union_type_ids = {
+    TypeId.UNION,
+    TypeId.TYPED_UNION,
+    TypeId.NAMED_UNION,
+}
+
 
 def is_polymorphic_type(type_id: int) -> bool:
     return type_id in _polymorphic_type_ids
@@ -354,3 +427,15 @@ def is_polymorphic_type(type_id: int) -> bool:
 
 def is_struct_type(type_id: int) -> bool:
     return type_id in _struct_type_ids
+
+
+def is_union_type(type_or_id) -> bool:
+    if type_or_id is None:
+        return False
+    if isinstance(type_or_id, int):
+        type_id = type_or_id
+    else:
+        type_id = getattr(type_or_id, "type_id", None)
+    if type_id is None or not isinstance(type_id, int):
+        return False
+    return (type_id & 0xFF) in _union_type_ids

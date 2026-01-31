@@ -30,6 +30,7 @@ import org.apache.fory.resolver.ClassInfo;
 import org.apache.fory.resolver.ClassInfoHolder;
 import org.apache.fory.resolver.ClassResolver;
 import org.apache.fory.resolver.RefResolver;
+import org.apache.fory.resolver.TypeResolver;
 import org.apache.fory.serializer.collection.CollectionFlags;
 import org.apache.fory.serializer.collection.ForyArrayAsListSerializer;
 import org.apache.fory.type.GenericType;
@@ -981,7 +982,7 @@ public class ArraySerializers {
   }
 
   public static void registerDefaultSerializers(Fory fory) {
-    ClassResolver resolver = fory.getClassResolver();
+    TypeResolver resolver = fory.getTypeResolver();
     resolver.registerInternalSerializer(
         Object[].class, new ObjectArraySerializer<>(fory, Object[].class));
     resolver.registerInternalSerializer(
@@ -1039,6 +1040,11 @@ public class ArraySerializers {
       super(fory, stubClass);
       this.className = className;
       this.dims = TypeUtils.getArrayDimensions(stubClass);
+    }
+
+    @Override
+    public void write(MemoryBuffer buffer, Object value) {
+      throw new UnsupportedOperationException();
     }
 
     @Override

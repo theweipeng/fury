@@ -1,6 +1,6 @@
 ---
 title: Cross-Language Serialization
-sidebar_position: 7
+sidebar_position: 10
 id: cross_language
 license: |
   Licensed to the Apache Software Foundation (ASF) under one or more
@@ -74,7 +74,7 @@ int main() {
   auto result = fory.serialize(msg);
   if (result.ok()) {
     auto bytes = std::move(result).value();
-    // Write to file, send over network, etc.
+    // write to file, send over network, etc.
     std::ofstream file("message.bin", std::ios::binary);
     file.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
   }
@@ -167,7 +167,7 @@ print(f"Timestamp: {msg.timestamp}")
 | ----------- | ----------- | --------------- | --------------- |
 | `Timestamp` | `Instant`   | `datetime`      | `time.Time`     |
 | `Duration`  | `Duration`  | `timedelta`     | `time.Duration` |
-| `LocalDate` | `LocalDate` | `datetime.date` | `time.Time`     |
+| `Date`      | `LocalDate` | `datetime.date` | `time.Time`     |
 
 ## Field Order Requirements
 

@@ -62,6 +62,7 @@ public class GenericType {
   // Used to cache serializer for final class to avoid hash lookup for serializer.
   Serializer<?> serializer;
   private Boolean trackingRef;
+  private Boolean trackingRefOverride;
 
   public GenericType(TypeRef<?> typeRef, boolean isMonomorphic, GenericType... typeParameters) {
     this.typeRef = typeRef;
@@ -197,7 +198,7 @@ public class GenericType {
   public Serializer getSerializer(TypeResolver classResolver) {
     Serializer<?> serializer = this.serializer;
     if (serializer == null) {
-      serializer = classResolver.getSerializer(cls);
+      serializer = classResolver.getSerializer(typeRef);
       this.serializer = serializer;
     }
     return serializer;
@@ -212,11 +213,22 @@ public class GenericType {
   }
 
   public boolean trackingRef(TypeResolver classResolver) {
+    Boolean trackingRefOverride = this.trackingRefOverride;
+    if (trackingRefOverride != null) {
+      return trackingRefOverride;
+    }
     Boolean trackingRef = this.trackingRef;
     if (trackingRef == null) {
       trackingRef = this.trackingRef = classResolver.needToWriteRef(typeRef);
     }
     return trackingRef;
+  }
+
+  public void setTrackingRefOverride(Boolean trackingRefOverride) {
+    this.trackingRefOverride = trackingRefOverride;
+    if (trackingRefOverride != null) {
+      this.trackingRef = trackingRefOverride;
+    }
   }
 
   public boolean hasGenericParameters() {

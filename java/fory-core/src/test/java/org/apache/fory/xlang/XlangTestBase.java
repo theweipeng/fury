@@ -36,6 +36,7 @@ import lombok.Data;
 import org.apache.fory.Fory;
 import org.apache.fory.ForyTestBase;
 import org.apache.fory.annotation.ForyField;
+import org.apache.fory.annotation.Ref;
 import org.apache.fory.annotation.Uint16Type;
 import org.apache.fory.annotation.Uint32Type;
 import org.apache.fory.annotation.Uint64Type;
@@ -168,19 +169,24 @@ public abstract class XlangTestBase extends ForyTestBase {
   protected abstract CommandContext buildCommandContext(String caseName, Path dataFile)
       throws IOException;
 
-  protected ImmutableMap.Builder<String, String> envBuilder(Path dataFile) {
-    ImmutableMap.Builder<String, String> builder =
-        ImmutableMap.<String, String>builder()
-            .put("DATA_FILE", dataFile.toAbsolutePath().toString());
+  protected Map<String, String> envBuilder(Path dataFile) {
+    Map<String, String> envMap = new HashMap<>();
+    envMap.put("DATA_FILE", dataFile.toAbsolutePath().toString());
     String dumpCase = System.getenv("FORY_CPP_DUMP_CASE");
     if (dumpCase != null) {
-      builder.put("FORY_CPP_DUMP_CASE", dumpCase);
+      envMap.put("FORY_CPP_DUMP_CASE", dumpCase);
     }
     String dumpDir = System.getenv("FORY_CPP_DUMP_DIR");
     if (dumpDir != null) {
-      builder.put("FORY_CPP_DUMP_DIR", dumpDir);
+      envMap.put("FORY_CPP_DUMP_DIR", dumpDir);
     }
-    return builder;
+    Map<String, String> env = System.getenv();
+    for (Map.Entry<String, String> entry : env.entrySet()) {
+      if (entry.getKey().toLowerCase().contains("fory")) {
+        envMap.put(entry.getKey(), entry.getValue());
+      }
+    }
+    return envMap;
   }
 
   protected ExecutionContext prepareExecution(String caseName, byte[] payload) throws IOException {
@@ -581,6 +587,8 @@ public abstract class XlangTestBase extends ForyTestBase {
     obj.f8 = 41;
     obj.last = 42;
 
+    serDeCheck(fory, obj);
+
     MemoryBuffer buffer = MemoryUtils.buffer(64);
     fory.serialize(buffer, obj);
 
@@ -619,6 +627,7 @@ public abstract class XlangTestBase extends ForyTestBase {
     obj.f8 = 41;
     obj.last = 42;
 
+    serDeCheck(fory, obj);
     MemoryBuffer buffer = MemoryUtils.buffer(64);
     fory.serialize(buffer, obj);
 
@@ -653,6 +662,11 @@ public abstract class XlangTestBase extends ForyTestBase {
     fory.serialize(buffer, strList2);
     fory.serialize(buffer, itemList);
     fory.serialize(buffer, itemList2);
+
+    serDeCheck(fory, strList);
+    serDeCheck(fory, strList2);
+    serDeCheck(fory, itemList);
+    serDeCheck(fory, itemList2);
 
     ExecutionContext ctx = prepareExecution(caseName, buffer.getBytes(0, buffer.writerIndex()));
     runPeer(ctx);
@@ -690,6 +704,10 @@ public abstract class XlangTestBase extends ForyTestBase {
     itemMap.put(null, item2);
     itemMap.put("k3", null);
     itemMap.put("k4", item3);
+
+    serDeCheck(fory, strMap);
+    serDeCheck(fory, itemMap);
+
     fory.serialize(buffer, strMap);
     fory.serialize(buffer, itemMap);
     ExecutionContext ctx = prepareExecution(caseName, buffer.getBytes(0, buffer.writerIndex()));
@@ -781,6 +799,10 @@ public abstract class XlangTestBase extends ForyTestBase {
     // Use empty string instead of null - xlang mode uses nullable=false by default
     // Go strings are always non-nil (empty string for "no value")
     item3.name = "";
+
+    serDeCheck(fory, item1);
+    serDeCheck(fory, item2);
+    serDeCheck(fory, item3);
 
     MemoryBuffer buffer = MemoryUtils.buffer(64);
     fory.serialize(buffer, item1);
@@ -1022,6 +1044,9 @@ public abstract class XlangTestBase extends ForyTestBase {
     MyStruct myStruct = new MyStruct(42);
     wrapper.myExt = new MyExt(43);
     wrapper.myStruct = myStruct;
+
+    serDeCheck(fory1, wrapper);
+
     byte[] serialize = fory1.serialize(wrapper);
     ExecutionContext ctx = prepareExecution(caseName, serialize);
     runPeer(ctx);
@@ -1152,6 +1177,8 @@ public abstract class XlangTestBase extends ForyTestBase {
     obj.f1 = 10;
     obj.f2 = "test";
     obj.f3 = 3.2;
+
+    serDeCheck(fory, obj);
 
     MemoryBuffer buffer = MemoryBuffer.newHeapBuffer(32);
     fory.serialize(buffer, obj);
@@ -1365,7 +1392,7 @@ public abstract class XlangTestBase extends ForyTestBase {
 
   @Data
   static class OneStringFieldStruct {
-    @ForyField(id = -1, nullable = true)
+    @ForyField(nullable = true)
     String f1;
   }
 
@@ -1414,6 +1441,8 @@ public abstract class XlangTestBase extends ForyTestBase {
     OneStringFieldStruct obj = new OneStringFieldStruct();
     obj.f1 = "hello";
 
+    serDeCheck(fory, obj);
+
     MemoryBuffer buffer = MemoryBuffer.newHeapBuffer(64);
     fory.serialize(buffer, obj);
 
@@ -1439,6 +1468,8 @@ public abstract class XlangTestBase extends ForyTestBase {
     TwoStringFieldStruct obj = new TwoStringFieldStruct();
     obj.f1 = "first";
     obj.f2 = "second";
+
+    serDeCheck(fory, obj);
 
     MemoryBuffer buffer = MemoryBuffer.newHeapBuffer(64);
     fory.serialize(buffer, obj);
@@ -1798,7 +1829,7 @@ public abstract class XlangTestBase extends ForyTestBase {
     obj.nullableMap.put("nk1", "nv1");
 
     // First verify Java serialization works
-    Assert.assertEquals(xserDe(fory, obj), obj);
+    serDeCheck(fory, obj);
 
     MemoryBuffer buffer = MemoryBuffer.newHeapBuffer(512);
     fory.serialize(buffer, obj);
@@ -1856,7 +1887,7 @@ public abstract class XlangTestBase extends ForyTestBase {
     obj.nullableMap = null;
 
     // First verify Java serialization works
-    Assert.assertEquals(xserDe(fory, obj), obj);
+    serDeCheck(fory, obj);
 
     MemoryBuffer buffer = MemoryBuffer.newHeapBuffer(512);
     fory.serialize(buffer, obj);
@@ -1990,7 +2021,7 @@ public abstract class XlangTestBase extends ForyTestBase {
     obj.nullableMap2.put("nk1", "nv1");
 
     // First verify Java serialization works
-    Assert.assertEquals(xserDe(fory, obj), obj);
+    serDeCheck(fory, obj);
 
     MemoryBuffer buffer = MemoryBuffer.newHeapBuffer(1024);
     fory.serialize(buffer, obj);
@@ -2055,7 +2086,7 @@ public abstract class XlangTestBase extends ForyTestBase {
     obj.nullableMap2 = null;
 
     // First verify Java serialization works
-    Assert.assertEquals(xserDe(fory, obj), obj);
+    serDeCheck(fory, obj);
 
     MemoryBuffer buffer = MemoryBuffer.newHeapBuffer(1024);
     fory.serialize(buffer, obj);
@@ -2330,6 +2361,77 @@ public abstract class XlangTestBase extends ForyTestBase {
   }
 
   // ============================================================================
+  // Collection Element Reference Override Tests
+  // ============================================================================
+
+  @Data
+  static class RefOverrideElement {
+    int id;
+    String name;
+  }
+
+  @Data
+  static class RefOverrideContainer {
+    List<@Ref(enable = false) RefOverrideElement> listField;
+    Map<String, @Ref(enable = false) RefOverrideElement> mapField;
+  }
+
+  @Test(dataProvider = "enableCodegen")
+  public void testCollectionElementRefOverride(boolean enableCodegen) throws java.io.IOException {
+    String caseName = "test_collection_element_ref_override";
+    Fory fory =
+        Fory.builder()
+            .withLanguage(Language.XLANG)
+            .withCompatibleMode(CompatibleMode.SCHEMA_CONSISTENT)
+            .withRefTracking(true)
+            .withCodegen(enableCodegen)
+            .build();
+    fory.register(RefOverrideElement.class, 701);
+    fory.register(RefOverrideContainer.class, 702);
+
+    RefOverrideElement element = new RefOverrideElement();
+    element.id = 7;
+    element.name = "shared_element";
+
+    RefOverrideContainer container = new RefOverrideContainer();
+    container.listField = Arrays.asList(element, element);
+    container.mapField = new HashMap<>();
+    container.mapField.put("k1", element);
+    container.mapField.put("k2", element);
+
+    // Java round-trip should not preserve element identity due to @Ref(enable=false)
+    byte[] javaBytes = fory.serialize(container);
+    RefOverrideContainer javaResult = (RefOverrideContainer) fory.deserialize(javaBytes);
+    Assert.assertNotSame(
+        javaResult.listField.get(0),
+        javaResult.listField.get(1),
+        "Java: list elements should not share ref when disabled");
+    Assert.assertNotSame(
+        javaResult.mapField.get("k1"),
+        javaResult.mapField.get("k2"),
+        "Java: map values should not share ref when disabled");
+
+    MemoryBuffer buffer = MemoryBuffer.newHeapBuffer(256);
+    fory.serialize(buffer, container);
+
+    ExecutionContext ctx = prepareExecution(caseName, buffer.getBytes(0, buffer.writerIndex()));
+    runPeer(ctx);
+
+    MemoryBuffer buffer2 = readBuffer(ctx.dataFile());
+    RefOverrideContainer result = (RefOverrideContainer) fory.deserialize(buffer2);
+
+    RefOverrideElement shared = result.listField.get(0);
+    Assert.assertSame(
+        result.listField.get(1), shared, "After xlang round-trip: list elements should share ref");
+    Assert.assertSame(
+        result.mapField.get("k1"), shared, "After xlang round-trip: map value k1 should share ref");
+    Assert.assertSame(
+        result.mapField.get("k2"), shared, "After xlang round-trip: map value k2 should share ref");
+    Assert.assertEquals(shared.id, 7);
+    Assert.assertEquals(shared.name, "shared_element");
+  }
+
+  // ============================================================================
   // Circular Reference Tests - Test self-referencing struct serialization
   // ============================================================================
 
@@ -2596,7 +2698,7 @@ public abstract class XlangTestBase extends ForyTestBase {
     obj.u64TaggedNullableField = 500000000L;
 
     // First verify Java serialization works
-    Assert.assertEquals(xserDe(fory, obj), obj);
+    serDeCheck(fory, obj);
 
     MemoryBuffer buffer = MemoryBuffer.newHeapBuffer(512);
     fory.serialize(buffer, obj);
@@ -2714,7 +2816,7 @@ public abstract class XlangTestBase extends ForyTestBase {
     obj.u64TaggedField2 = 500000000L;
 
     // First verify Java serialization works
-    Assert.assertEquals(xserDe(fory, obj), obj);
+    serDeCheck(fory, obj);
 
     MemoryBuffer buffer = MemoryBuffer.newHeapBuffer(1024);
     fory.serialize(buffer, obj);

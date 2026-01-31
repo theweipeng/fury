@@ -25,7 +25,6 @@ import (
 	"runtime"
 
 	"github.com/apache/fory/go/fory"
-	"github.com/spaolacci/murmur3"
 )
 
 // ============================================================================
@@ -183,13 +182,6 @@ func assertEqualFloat64(expected, actual float64, name string) {
 	}
 }
 
-func murmurHash3_x64_128(data []byte, seed int64) (uint64, uint64) {
-	h := murmur3.New128WithSeed(uint32(seed))
-	h.Write(data)
-	h1, h2 := h.Sum128()
-	return h1, h2
-}
-
 // ============================================================================
 // Test Data Structures
 // ============================================================================
@@ -270,6 +262,16 @@ type StructWithList struct {
 
 type StructWithMap struct {
 	Data map[string]string
+}
+
+type RefOverrideElement struct {
+	Id   int32
+	Name string
+}
+
+type RefOverrideContainer struct {
+	ListField []*RefOverrideElement
+	MapField  map[string]*RefOverrideElement
 }
 
 type MyExt struct {
@@ -459,8 +461,8 @@ func testBuffer() {
 	float64Val := buf.ReadFloat64(&bufErr)
 	assertEqualFloat64(-1.1, float64Val, "float64")
 
-	varUint32Val := buf.ReadVaruint32(&bufErr)
-	assertEqual(uint32(100), varUint32Val, "varuint32")
+	VarUint32Val := buf.ReadVarUint32(&bufErr)
+	assertEqual(uint32(100), VarUint32Val, "VarUint32")
 
 	length := buf.ReadInt32(&bufErr)
 	bytes := buf.ReadBinary(int(length), &bufErr)
@@ -476,7 +478,7 @@ func testBuffer() {
 	outBuf.WriteInt64(9223372036854775807)
 	outBuf.WriteFloat32(-1.1)
 	outBuf.WriteFloat64(-1.1)
-	outBuf.WriteVaruint32(100)
+	outBuf.WriteVarUint32(100)
 	outBuf.WriteInt32(2)
 	outBuf.WriteBinary([]byte("ab"))
 
@@ -499,24 +501,24 @@ func testBufferVar() {
 		assertEqual(expected, val, fmt.Sprintf("varint32 %d", expected))
 	}
 
-	varUint32Values := []uint32{
+	VarUint32Values := []uint32{
 		0, 1, 127, 128, 16383, 16384, 2097151, 2097152,
 		268435455, 268435456, 2147483646, 2147483647,
 	}
-	for _, expected := range varUint32Values {
-		val := buf.ReadVaruint32(&bufErr)
-		assertEqual(expected, val, fmt.Sprintf("varuint32 %d", expected))
+	for _, expected := range VarUint32Values {
+		val := buf.ReadVarUint32(&bufErr)
+		assertEqual(expected, val, fmt.Sprintf("VarUint32 %d", expected))
 	}
 
-	varUint64Values := []uint64{
+	VarUint64Values := []uint64{
 		0, 1, 127, 128, 16383, 16384, 2097151, 2097152,
 		268435455, 268435456, 34359738367, 34359738368,
 		4398046511103, 4398046511104, 562949953421311, 562949953421312,
 		72057594037927935, 72057594037927936, 9223372036854775807,
 	}
-	for _, expected := range varUint64Values {
-		val := buf.ReadVaruint64(&bufErr)
-		assertEqual(expected, val, fmt.Sprintf("varuint64 %d", expected))
+	for _, expected := range VarUint64Values {
+		val := buf.ReadVarUint64(&bufErr)
+		assertEqual(expected, val, fmt.Sprintf("VarUint64 %d", expected))
 	}
 
 	varInt64Values := []int64{
@@ -533,11 +535,11 @@ func testBufferVar() {
 	for _, val := range varInt32Values {
 		outBuf.WriteVarint32(val)
 	}
-	for _, val := range varUint32Values {
-		outBuf.WriteVaruint32(val)
+	for _, val := range VarUint32Values {
+		outBuf.WriteVarUint32(val)
 	}
-	for _, val := range varUint64Values {
-		outBuf.WriteVaruint64(val)
+	for _, val := range VarUint64Values {
+		outBuf.WriteVarUint64(val)
 	}
 	for _, val := range varInt64Values {
 		outBuf.WriteVarint64(val)
@@ -559,8 +561,8 @@ func testMurmurHash3() {
 		_ = buf.ReadInt64(&bufErr)
 		_ = buf.ReadInt64(&bufErr)
 
-		h1_1, h1_2 := murmurHash3_x64_128([]byte{1, 2, 8}, 47)
-		h2_1, h2_2 := murmurHash3_x64_128([]byte("01234567890123456789"), 47)
+		h1_1, h1_2 := fory.MurmurHash3_x64_128([]byte{1, 2, 8}, 47)
+		h2_1, h2_2 := fory.MurmurHash3_x64_128([]byte("01234567890123456789"), 47)
 
 		outBuf := fory.NewByteBuffer(make([]byte, 0, 32))
 		outBuf.WriteInt64(int64(h1_1))
@@ -575,7 +577,7 @@ func testMurmurHash3() {
 		h2 := buf.ReadInt64(&bufErr)
 
 		// Compute expected values
-		expected1, expected2 := murmurHash3_x64_128([]byte{1, 2, 8}, 47)
+		expected1, expected2 := fory.MurmurHash3_x64_128([]byte{1, 2, 8}, 47)
 
 		if h1 != int64(expected1) || h2 != int64(expected2) {
 			panic(fmt.Sprintf("MurmurHash3 mismatch: got (%d, %d), expected (%d, %d)",
@@ -671,7 +673,7 @@ func testSimpleStruct() {
 		panic(fmt.Sprintf("Failed to deserialize: %v", err))
 	}
 	fmt.Printf("Deserialized obj: %+v\n", obj)
-	serialized, err := f.Serialize(obj)
+	serialized, err := f.Serialize(&obj)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to serialize: %v", err))
 	}
@@ -693,7 +695,7 @@ func testNamedSimpleStruct() {
 		panic(fmt.Sprintf("Failed to deserialize: %v", err))
 	}
 	fmt.Printf("Deserialized obj: %+v\n", obj)
-	serialized, err := f.Serialize(obj)
+	serialized, err := f.Serialize(&obj)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to serialize: %v", err))
 	}
@@ -991,7 +993,7 @@ func testSkipIdCustom() {
 		panic(fmt.Sprintf("Failed to deserialize: %v", err))
 	}
 
-	serialized, err := f.Serialize(obj)
+	serialized, err := f.Serialize(&obj)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to serialize: %v", err))
 	}
@@ -1012,7 +1014,7 @@ func testSkipNameCustom() {
 		panic(fmt.Sprintf("Failed to deserialize: %v", err))
 	}
 
-	serialized, err := f.Serialize(obj)
+	serialized, err := f.Serialize(&obj)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to serialize: %v", err))
 	}
@@ -1071,7 +1073,7 @@ func testStructVersionCheck() {
 		panic(fmt.Sprintf("Failed to deserialize: %v", err))
 	}
 
-	serialized, err := f.Serialize(obj)
+	serialized, err := f.Serialize(&obj)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to serialize: %v", err))
 	}
@@ -1188,7 +1190,7 @@ func testOneFieldStructCompatible() {
 	result := obj.(OneFieldStruct)
 	assertEqual(int32(42), result.Value, "value")
 
-	serialized, err := f.Serialize(result)
+	serialized, err := f.Serialize(&result)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to serialize: %v", err))
 	}
@@ -1227,7 +1229,7 @@ func testOneFieldStructSchema() {
 	result := obj.(OneFieldStruct)
 	assertEqual(int32(42), result.Value, "value")
 
-	serialized, err := f.Serialize(result)
+	serialized, err := f.Serialize(&result)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to serialize: %v", err))
 	}
@@ -1261,7 +1263,7 @@ func testOneStringFieldSchemaConsistent() {
 		panic(fmt.Sprintf("f1 mismatch: expected 'hello', got '%v'", result.F1))
 	}
 
-	serialized, err := f.Serialize(result)
+	serialized, err := f.Serialize(&result)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to serialize: %v", err))
 	}
@@ -1288,7 +1290,7 @@ func testOneStringFieldCompatible() {
 		panic(fmt.Sprintf("f1 mismatch: expected 'hello', got '%v'", result.F1))
 	}
 
-	serialized, err := f.Serialize(result)
+	serialized, err := f.Serialize(&result)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to serialize: %v", err))
 	}
@@ -1314,7 +1316,7 @@ func testTwoStringFieldCompatible() {
 	assertEqual("first", result.F1, "f1")
 	assertEqual("second", result.F2, "f2")
 
-	serialized, err := f.Serialize(result)
+	serialized, err := f.Serialize(&result)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to serialize: %v", err))
 	}
@@ -1368,7 +1370,7 @@ func testSchemaEvolutionCompatibleReverse() {
 	assertEqual("", result.F2, "f2")
 
 	// SerializeWithCallback back
-	serialized, err := f.Serialize(result)
+	serialized, err := f.Serialize(&result)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to serialize: %v", err))
 	}
@@ -1397,7 +1399,7 @@ func testOneEnumFieldSchemaConsistent() {
 		panic(fmt.Sprintf("Expected VALUE_B (1), got %v", result.F1))
 	}
 
-	serialized, err := f.Serialize(result)
+	serialized, err := f.Serialize(&result)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to serialize: %v", err))
 	}
@@ -1425,7 +1427,7 @@ func testOneEnumFieldCompatible() {
 		panic(fmt.Sprintf("Expected VALUE_A (0), got %v", result.F1))
 	}
 
-	serialized, err := f.Serialize(result)
+	serialized, err := f.Serialize(&result)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to serialize: %v", err))
 	}
@@ -1456,7 +1458,7 @@ func testTwoEnumFieldCompatible() {
 		panic(fmt.Sprintf("Expected F2=VALUE_C (2), got %v", result.F2))
 	}
 
-	serialized, err := f.Serialize(result)
+	serialized, err := f.Serialize(&result)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to serialize: %v", err))
 	}
@@ -1516,7 +1518,7 @@ func testEnumSchemaEvolutionCompatibleReverse() {
 	}
 
 	// SerializeWithCallback back
-	serialized, err := f.Serialize(result)
+	serialized, err := f.Serialize(&result)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to serialize: %v", err))
 	}
@@ -1598,7 +1600,7 @@ func testNullableFieldSchemaConsistentNotNull() {
 		panic(fmt.Sprintf("NullableMap mismatch: expected {nk1:nv1}, got %v", result.NullableMap))
 	}
 
-	serialized, err := f.Serialize(result)
+	serialized, err := f.Serialize(&result)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to serialize: %v", err))
 	}
@@ -1674,7 +1676,7 @@ func testNullableFieldSchemaConsistentNull() {
 		panic(fmt.Sprintf("NullableMap mismatch: expected nil, got %v", result.NullableMap))
 	}
 
-	serialized, err := f.Serialize(result)
+	serialized, err := f.Serialize(&result)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to serialize: %v", err))
 	}
@@ -1777,7 +1779,7 @@ func testNullableFieldCompatibleNotNull() {
 		panic(fmt.Sprintf("NullableMap2 mismatch: expected {nk1:nv1}, got %v", result.NullableMap2))
 	}
 
-	serialized, err := f.Serialize(result)
+	serialized, err := f.Serialize(&result)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to serialize: %v", err))
 	}
@@ -1883,7 +1885,7 @@ func testNullableFieldCompatibleNull() {
 		panic(fmt.Sprintf("NullableMap2 mismatch: expected empty/nil, got %v", result.NullableMap2))
 	}
 
-	serialized, err := f.Serialize(result)
+	serialized, err := f.Serialize(&result)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to serialize: %v", err))
 	}
@@ -1944,6 +1946,17 @@ func getRefOuterCompatible(obj any) RefOuterCompatible {
 		return *v
 	default:
 		panic(fmt.Sprintf("expected RefOuterCompatible, got %T", obj))
+	}
+}
+
+func getRefOverrideContainer(obj any) RefOverrideContainer {
+	switch v := obj.(type) {
+	case RefOverrideContainer:
+		return v
+	case *RefOverrideContainer:
+		return *v
+	default:
+		panic(fmt.Sprintf("expected RefOverrideContainer, got %T", obj))
 	}
 }
 
@@ -2063,6 +2076,47 @@ func testRefCompatible() {
 		Inner1: result.Inner1,
 		Inner2: result.Inner1, // Use same reference
 	}
+	serialized, err := f.Serialize(outer)
+	if err != nil {
+		panic(fmt.Sprintf("Failed to serialize: %v", err))
+	}
+
+	writeFile(dataFile, serialized)
+}
+
+// ============================================================================
+// Collection Element Reference Override Test
+// ============================================================================
+
+func testCollectionElementRefOverride() {
+	dataFile := getDataFile()
+	data := readFile(dataFile)
+
+	f := fory.New(fory.WithXlang(true), fory.WithCompatible(false), fory.WithRefTracking(true))
+	f.RegisterStruct(RefOverrideElement{}, 701)
+	f.RegisterStruct(RefOverrideContainer{}, 702)
+
+	buf := fory.NewByteBuffer(data)
+	var obj any
+	err := f.DeserializeWithCallbackBuffers(buf, &obj, nil)
+	if err != nil {
+		panic(fmt.Sprintf("Failed to deserialize: %v", err))
+	}
+
+	result := getRefOverrideContainer(obj)
+	if len(result.ListField) < 1 {
+		panic("ListField is empty")
+	}
+
+	shared := result.ListField[0]
+	outer := &RefOverrideContainer{
+		ListField: []*RefOverrideElement{shared, shared},
+		MapField: map[string]*RefOverrideElement{
+			"k1": shared,
+			"k2": shared,
+		},
+	}
+
 	serialized, err := f.Serialize(outer)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to serialize: %v", err))
@@ -2234,7 +2288,7 @@ func testUnsignedSchemaConsistentSimple() {
 		panic(fmt.Sprintf("U64TaggedNullable mismatch: expected 500000000, got %v", result.U64TaggedNullable))
 	}
 
-	serialized, err := f.Serialize(result)
+	serialized, err := f.Serialize(&result)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to serialize: %v", err))
 	}
@@ -2292,7 +2346,7 @@ func testUnsignedSchemaConsistent() {
 		panic(fmt.Sprintf("U64TaggedNullableField mismatch: expected 500000000, got %v", result.U64TaggedNullableField))
 	}
 
-	serialized, err := f.Serialize(result)
+	serialized, err := f.Serialize(&result)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to serialize: %v", err))
 	}
@@ -2350,7 +2404,7 @@ func testUnsignedSchemaCompatible() {
 	assertEqual(uint64(12000000000), result.U64FixedField2, "U64FixedField2")
 	assertEqual(uint64(500000000), result.U64TaggedField2, "U64TaggedField2")
 
-	serialized, err := f.Serialize(result)
+	serialized, err := f.Serialize(&result)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to serialize: %v", err))
 	}
@@ -2460,6 +2514,8 @@ func main() {
 		testRefSchemaConsistent()
 	case "test_ref_compatible":
 		testRefCompatible()
+	case "test_collection_element_ref_override":
+		testCollectionElementRefOverride()
 	case "test_circular_ref_schema_consistent":
 		testCircularRefSchemaConsistent()
 	case "test_circular_ref_compatible":

@@ -1,6 +1,6 @@
 ---
 title: Field Configuration
-sidebar_position: 5
+sidebar_position: 7
 id: field_configuration
 license: |
   Licensed to the Apache Software Foundation (ASF) under one or more
@@ -23,16 +23,31 @@ This page explains how to configure field-level metadata for serialization.
 
 ## Overview
 
-Apache Fory™ provides two ways to specify field-level metadata at compile time:
+Apache Fory™ provides three ways to configure field-level metadata at compile time:
 
-1. **`fory::field<>` template** - Inline metadata in struct definition
-2. **`FORY_FIELD_TAGS` macro** - Non-invasive metadata added separately
+1. **`fory::field<>` template** - Inline metadata in struct definition with wrapper types
+2. **`FORY_FIELD_TAGS` macro** - Non-invasive metadata for basic field configuration
+3. **`FORY_FIELD_CONFIG` macro** - Advanced configuration with builder pattern and encoding control
 
 These enable:
 
 - **Tag IDs**: Assign compact numeric IDs for schema evolution
 - **Nullability**: Mark pointer fields as nullable
 - **Reference Tracking**: Enable reference tracking for shared pointers
+- **Encoding Control**: Specify wire format for integers (varint, fixed, tagged)
+- **Dynamic Dispatch**: Control polymorphic type info for smart pointers
+
+**Comparison:**
+
+| Feature                 | `fory::field<>`       | `FORY_FIELD_TAGS` | `FORY_FIELD_CONFIG`       |
+| ----------------------- | --------------------- | ----------------- | ------------------------- |
+| **Struct modification** | Required (wrap types) | None              | None                      |
+| **Encoding control**    | No                    | No                | Yes (varint/fixed/tagged) |
+| **Builder pattern**     | No                    | No                | Yes                       |
+| **Dynamic control**     | Yes                   | No                | Yes                       |
+| **Compile-time verify** | Yes                   | Limited           | Yes (member pointers)     |
+| **Cross-lang compat**   | Limited               | Limited           | Full                      |
+| **Recommended for**     | Simple structs        | Third-party types | Complex/xlang structs     |
 
 ## The fory::field Template
 
@@ -88,7 +103,7 @@ struct Node {
 FORY_STRUCT(Node, name, next);
 ```
 
-**Valid for:** `std::shared_ptr<T>`, `std::unique_ptr<T>`
+**Valid for:** `std::shared_ptr<T>`, `fory::serialization::SharedWeak<T>`, `std::unique_ptr<T>`
 
 **Note:** For nullable primitives or strings, use `std::optional<T>` instead:
 
@@ -108,7 +123,7 @@ Explicitly marks a pointer field as non-nullable. This is the default for smart 
 fory::field<std::shared_ptr<Data>, 0, fory::not_null> data;  // Must not be nullptr
 ```
 
-**Valid for:** `std::shared_ptr<T>`, `std::unique_ptr<T>`
+**Valid for:** `std::shared_ptr<T>`, `fory::serialization::SharedWeak<T>`, `std::unique_ptr<T>`
 
 ### fory::ref
 
@@ -123,14 +138,14 @@ struct Graph {
 FORY_STRUCT(Graph, name, left, right);
 ```
 
-**Valid for:** `std::shared_ptr<T>` only (requires shared ownership)
+**Valid for:** `std::shared_ptr<T>`, `fory::serialization::SharedWeak<T>` (requires shared ownership)
 
 ### fory::dynamic\<V\>
 
 Controls whether type info is written for polymorphic smart pointer fields:
 
 - `fory::dynamic<true>`: Force type info to be written (enable runtime subtype support)
-- `fory::dynamic<false>`: Skip type info (use declared type directly, no dynamic dispatch)
+- `fory::dynamic<false>`: skip type info (use declared type directly, no dynamic dispatch)
 
 By default, Fory auto-detects polymorphism via `std::is_polymorphic<T>`. Use this tag to override:
 
@@ -156,7 +171,7 @@ FORY_STRUCT(Zoo, animal, fixed_animal);
 
 ### Combining Tags
 
-Multiple tags can be combined for shared pointers:
+Multiple tags can be combined for shared pointers and SharedWeak:
 
 ```cpp
 // Nullable + ref tracking
@@ -165,12 +180,13 @@ fory::field<std::shared_ptr<Node>, 0, fory::nullable, fory::ref> link;
 
 ## Type Rules
 
-| Type                 | Allowed Options                 | Nullability                        |
-| -------------------- | ------------------------------- | ---------------------------------- |
-| Primitives, strings  | None                            | Use `std::optional<T>` if nullable |
-| `std::optional<T>`   | None                            | Inherently nullable                |
-| `std::shared_ptr<T>` | `nullable`, `ref`, `dynamic<V>` | Non-null by default                |
-| `std::unique_ptr<T>` | `nullable`, `dynamic<V>`        | Non-null by default                |
+| Type                                 | Allowed Options                 | Nullability                        |
+| ------------------------------------ | ------------------------------- | ---------------------------------- |
+| Primitives, strings                  | None                            | Use `std::optional<T>` if nullable |
+| `std::optional<T>`                   | None                            | Inherently nullable                |
+| `std::shared_ptr<T>`                 | `nullable`, `ref`, `dynamic<V>` | Non-null by default                |
+| `fory::serialization::SharedWeak<T>` | `nullable`, `ref`, `dynamic<V>` | Non-null by default                |
+| `std::unique_ptr<T>`                 | `nullable`, `dynamic<V>`        | Non-null by default                |
 
 ## Complete Example
 
@@ -303,16 +319,6 @@ FORY_FIELD_TAGS(Document,
 | `std::shared_ptr<T>` | `(field, id)`, `(field, id, nullable)`, `(field, id, ref)`, `(field, id, nullable, ref)` |
 | `std::unique_ptr<T>` | `(field, id)`, `(field, id, nullable)`                                                   |
 
-### API Comparison
-
-| Aspect                  | `fory::field<>` Wrapper  | `FORY_FIELD_TAGS` Macro |
-| ----------------------- | ------------------------ | ----------------------- |
-| **Struct definition**   | Modified (wrapped types) | Unchanged (pure C++)    |
-| **IDE support**         | Template noise           | Excellent (clean types) |
-| **Third-party classes** | Not supported            | Supported               |
-| **Header dependencies** | Required everywhere      | Isolated to config      |
-| **Migration effort**    | High (change all fields) | Low (add one macro)     |
-
 ## FORY_FIELD_CONFIG Macro
 
 The `FORY_FIELD_CONFIG` macro is the most powerful and flexible way to configure field-level serialization. It provides:
@@ -345,7 +351,7 @@ fory::F(0)                    // Create with field ID 0
     .varint()                 // Use variable-length encoding
     .fixed()                  // Use fixed-size encoding
     .tagged()                 // Use tagged encoding
-    .dynamic(false)           // Skip type info (no dynamic dispatch)
+    .dynamic(false)           // skip type info (no dynamic dispatch)
     .dynamic(true)            // Force type info (enable dynamic dispatch)
     .compress(false)          // Disable compression
 ```
@@ -383,40 +389,40 @@ using namespace fory::serialization;
 // Define struct with unsigned integer fields
 struct MetricsData {
   // Counters - often small values, use varint for space efficiency
-  uint32_t requestCount;
-  uint64_t bytesSent;
+  uint32_t request_count;
+  uint64_t bytes_sent;
 
   // IDs - uniformly distributed, use fixed for consistent performance
-  uint32_t userId;
-  uint64_t sessionId;
+  uint32_t user_id;
+  uint64_t session_id;
 
   // Timestamps - use tagged encoding for mixed value ranges
-  uint64_t createdAt;
+  uint64_t created_at;
 
   // Nullable fields
-  std::optional<uint32_t> errorCount;
-  std::optional<uint64_t> lastAccessTime;
+  std::optional<uint32_t> error_count;
+  std::optional<uint64_t> last_access_time;
 };
 
-FORY_STRUCT(MetricsData, requestCount, bytesSent, userId, sessionId,
-            createdAt, errorCount, lastAccessTime);
+FORY_STRUCT(MetricsData, request_count, bytes_sent, user_id, session_id,
+            created_at, error_count, last_access_time);
 
 // Configure field encoding
 FORY_FIELD_CONFIG(MetricsData,
     // Small counters - varint saves space
-    (requestCount, fory::F(0).varint()),
-    (bytesSent, fory::F(1).varint()),
+    (request_count, fory::F(0).varint()),
+    (bytes_sent, fory::F(1).varint()),
 
     // IDs - fixed for consistent performance
-    (userId, fory::F(2).fixed()),
-    (sessionId, fory::F(3).fixed()),
+    (user_id, fory::F(2).fixed()),
+    (session_id, fory::F(3).fixed()),
 
     // Timestamp - tagged encoding
-    (createdAt, fory::F(4).tagged()),
+    (created_at, fory::F(4).tagged()),
 
     // Nullable fields
-    (errorCount, fory::F(5).nullable().varint()),
-    (lastAccessTime, fory::F(6).nullable().tagged())
+    (error_count, fory::F(5).nullable().varint()),
+    (last_access_time, fory::F(6).nullable().tagged())
 );
 
 int main() {
@@ -424,13 +430,13 @@ int main() {
   fory.register_struct<MetricsData>(100);
 
   MetricsData data{
-      .requestCount = 42,
-      .bytesSent = 1024,
-      .userId = 12345678,
-      .sessionId = 9876543210,
-      .createdAt = 1704067200000000000ULL, // 2024-01-01 in nanoseconds
-      .errorCount = 3,
-      .lastAccessTime = std::nullopt
+      .request_count = 42,
+      .bytes_sent = 1024,
+      .user_id = 12345678,
+      .session_id = 9876543210,
+      .created_at = 1704067200000000000ULL, // 2024-01-01 in nanoseconds
+      .error_count = 3,
+      .last_access_time = std::nullopt
   };
 
   auto bytes = fory.serialize(data).value();
@@ -452,24 +458,24 @@ When serializing data to be read by other languages, use `FORY_FIELD_CONFIG` to 
 // - Long (u64): VAR_UINT64 (varint), UINT64 (fixed), or TAGGED_UINT64
 
 struct JavaCompatible {
-  uint8_t byteField;      // Maps to Java Byte
-  uint16_t shortField;    // Maps to Java Short
-  uint32_t intVarField;   // Maps to Java Integer with varint
-  uint32_t intFixedField; // Maps to Java Integer with fixed
-  uint64_t longVarField;  // Maps to Java Long with varint
-  uint64_t longTagged;    // Maps to Java Long with tagged
+  uint8_t byte_field;      // Maps to Java Byte
+  uint16_t short_field;    // Maps to Java Short
+  uint32_t int_var_field;   // Maps to Java Integer with varint
+  uint32_t int_fixed_field; // Maps to Java Integer with fixed
+  uint64_t long_var_field;  // Maps to Java Long with varint
+  uint64_t long_tagged;    // Maps to Java Long with tagged
 };
 
-FORY_STRUCT(JavaCompatible, byteField, shortField, intVarField,
-            intFixedField, longVarField, longTagged);
+FORY_STRUCT(JavaCompatible, byte_field, short_field, int_var_field,
+            int_fixed_field, long_var_field, long_tagged);
 
 FORY_FIELD_CONFIG(JavaCompatible,
-    (byteField, fory::F(0)),                    // UINT8 (auto)
-    (shortField, fory::F(1)),                   // UINT16 (auto)
-    (intVarField, fory::F(2).varint()),         // VAR_UINT32
-    (intFixedField, fory::F(3).fixed()),        // UINT32
-    (longVarField, fory::F(4).varint()),        // VAR_UINT64
-    (longTagged, fory::F(5).tagged())           // TAGGED_UINT64
+    (byte_field, fory::F(0)),                    // UINT8 (auto)
+    (short_field, fory::F(1)),                   // UINT16 (auto)
+    (int_var_field, fory::F(2).varint()),         // VAR_UINT32
+    (int_fixed_field, fory::F(3).fixed()),        // UINT32
+    (long_var_field, fory::F(4).varint()),        // VAR_UINT64
+    (long_tagged, fory::F(5).tagged())           // TAGGED_UINT64
 );
 ```
 
@@ -505,32 +511,21 @@ FORY_FIELD_CONFIG(DataV2,
 
 ### FORY_FIELD_CONFIG Options Reference
 
-| Method            | Description                                      | Valid For                  |
-| ----------------- | ------------------------------------------------ | -------------------------- |
-| `.nullable()`     | Mark field as nullable                           | Smart pointers, primitives |
-| `.ref()`          | Enable reference tracking                        | `std::shared_ptr` only     |
-| `.dynamic(true)`  | Force type info to be written (dynamic dispatch) | Smart pointers             |
-| `.dynamic(false)` | Skip type info (use declared type directly)      | Smart pointers             |
-| `.varint()`       | Use variable-length encoding                     | `uint32_t`, `uint64_t`     |
-| `.fixed()`        | Use fixed-size encoding                          | `uint32_t`, `uint64_t`     |
-| `.tagged()`       | Use tagged hybrid encoding                       | `uint64_t` only            |
-| `.compress(v)`    | Enable/disable field compression                 | All types                  |
-
-### Comparing Field Configuration Macros
-
-| Feature                 | `fory::field<>`       | `FORY_FIELD_TAGS` | `FORY_FIELD_CONFIG`       |
-| ----------------------- | --------------------- | ----------------- | ------------------------- |
-| **Struct modification** | Required (wrap types) | None              | None                      |
-| **Encoding control**    | No                    | No                | Yes (varint/fixed/tagged) |
-| **Builder pattern**     | No                    | No                | Yes                       |
-| **Compile-time verify** | Yes                   | Limited           | Yes (member pointers)     |
-| **Cross-lang compat**   | Limited               | Limited           | Full                      |
-| **Recommended for**     | Simple structs        | Third-party types | Complex/xlang structs     |
+| Method            | Description                                      | Valid For                                            |
+| ----------------- | ------------------------------------------------ | ---------------------------------------------------- |
+| `.nullable()`     | Mark field as nullable                           | Smart pointers, primitives                           |
+| `.ref()`          | Enable reference tracking                        | `std::shared_ptr`, `fory::serialization::SharedWeak` |
+| `.dynamic(true)`  | Force type info to be written (dynamic dispatch) | Smart pointers                                       |
+| `.dynamic(false)` | skip type info (use declared type directly)      | Smart pointers                                       |
+| `.varint()`       | Use variable-length encoding                     | `uint32_t`, `uint64_t`                               |
+| `.fixed()`        | Use fixed-size encoding                          | `uint32_t`, `uint64_t`                               |
+| `.tagged()`       | Use tagged hybrid encoding                       | `uint64_t` only                                      |
+| `.compress(v)`    | Enable/disable field compression                 | All types                                            |
 
 ## Default Values
 
 - **Nullable**: Only `std::optional<T>` is nullable by default; all other types (including `std::shared_ptr`) are non-nullable
-- **Ref tracking**: Disabled by default for all types (including `std::shared_ptr`)
+- **Ref tracking**: Enabled by default for `std::shared_ptr<T>` and `fory::serialization::SharedWeak<T>`, disabled for other types unless configured
 
 You **need to configure fields** when:
 
@@ -558,12 +553,13 @@ FORY_FIELD_CONFIG(User,
 
 ### Default Values Summary
 
-| Type                 | Default Nullable | Default Ref Tracking |
-| -------------------- | ---------------- | -------------------- |
-| Primitives, `string` | `false`          | `false`              |
-| `std::optional<T>`   | `true`           | `false`              |
-| `std::shared_ptr<T>` | `false`          | `true`               |
-| `std::unique_ptr<T>` | `false`          | `false`              |
+| Type                                 | Default Nullable | Default Ref Tracking |
+| ------------------------------------ | ---------------- | -------------------- |
+| Primitives, `string`                 | `false`          | `false`              |
+| `std::optional<T>`                   | `true`           | `false`              |
+| `std::shared_ptr<T>`                 | `false`          | `true`               |
+| `fory::serialization::SharedWeak<T>` | `false`          | `true`               |
+| `std::unique_ptr<T>`                 | `false`          | `false`              |
 
 ## Related Topics
 

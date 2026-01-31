@@ -22,7 +22,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"github.com/apache/fory/go/fory/meta"
-	"github.com/spaolacci/murmur3"
 )
 
 // Constants for string handling
@@ -89,7 +88,7 @@ func (r *MetaStringResolver) WriteMetaStringBytes(buf *ByteBuffer, m *MetaString
 
 		// WriteData header with length and encoding info
 		header := uint32(m.Length) << 1
-		buf.WriteVaruint32Small7(header)
+		buf.WriteVarUint32Small7(header)
 
 		// Small strings store encoding in header
 		if m.Length <= SmallStringThreshold {
@@ -106,14 +105,14 @@ func (r *MetaStringResolver) WriteMetaStringBytes(buf *ByteBuffer, m *MetaString
 	} else {
 		// Subsequent occurrence: write reference ID only
 		header := uint32((m.DynamicWriteStringID+1)<<1) | 1
-		buf.WriteVaruint32Small7(header)
+		buf.WriteVarUint32Small7(header)
 	}
 }
 
 // ReadMetaStringBytes reads a string from buffer, handling dynamic references
 func (r *MetaStringResolver) ReadMetaStringBytes(buf *ByteBuffer, ctxErr *Error) (*MetaStringBytes, error) {
-	// ReadData header containing length/reference info (uses Varuint32Small7 to match Java)
-	header := buf.ReadVaruint32Small7(ctxErr)
+	// ReadData header containing length/reference info (uses VarUint32Small7 to match Java)
+	header := buf.ReadVarUint32Small7(ctxErr)
 	if ctxErr.HasError() {
 		return nil, *ctxErr
 	}
@@ -221,7 +220,7 @@ func (r *MetaStringResolver) GetMetaStrBytes(metastr *meta.MetaString) *MetaStri
 		hashcode = ((v1*31 + v2) >> 8 << 8) | int64(metastr.GetEncoding())
 	} else {
 		// Large string: use MurmurHash3
-		h64 := murmur3.Sum64WithSeed(data, 47)
+		h64 := Murmur3Sum64WithSeed(data, 47)
 		hashcode = int64((h64 >> 8) << 8)
 		hashcode |= int64(metastr.GetEncoding())
 	}
@@ -249,7 +248,7 @@ func ComputeMetaStringHash(data []byte, encoding meta.Encoding) int64 {
 		hashcode = ((v1*31 + v2) >> 8 << 8) | int64(encoding)
 	} else {
 		// Large string: use MurmurHash3
-		h64 := murmur3.Sum64WithSeed(data, 47)
+		h64 := Murmur3Sum64WithSeed(data, 47)
 		hashcode = int64((h64 >> 8) << 8)
 		hashcode |= int64(encoding)
 	}
@@ -269,7 +268,7 @@ func (r *MetaStringResolver) ResetWrite() {
 }
 
 // Helper functions
-func writeVaruint32(buf *ByteBuffer, v uint32) error {
+func WriteVarUint32(buf *ByteBuffer, v uint32) error {
 	for v >= 0x80 {
 		buf.WriteByte(byte(v) | 0x80)
 		v >>= 7
@@ -278,7 +277,7 @@ func writeVaruint32(buf *ByteBuffer, v uint32) error {
 	return nil
 }
 
-func readVaruint32E(buf *ByteBuffer, ctxErr *Error) uint32 {
+func readVarUint32E(buf *ByteBuffer, ctxErr *Error) uint32 {
 	var x uint32
 	var s uint
 	for {

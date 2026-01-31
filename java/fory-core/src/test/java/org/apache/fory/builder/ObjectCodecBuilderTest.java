@@ -98,8 +98,8 @@ public class ObjectCodecBuilderTest extends ForyTestBase {
   @DataProvider(name = "codecConfig")
   public static Object[][] codecConfig() {
     return Sets.cartesianProduct(
+            ImmutableSet.of(true, false), // xlang
             ImmutableSet.of(true, false), // referenceTracking
-            ImmutableSet.of(true, false), // basicTypesReferenceIgnored
             ImmutableSet.of(true, false), // compressNumber
             ImmutableSet.of(1, 4, 7) // structFieldsRepeat
             )
@@ -110,22 +110,22 @@ public class ObjectCodecBuilderTest extends ForyTestBase {
 
   @Test(dataProvider = "codecConfig")
   public void testSeqCodec(
-      boolean referenceTracking,
-      boolean basicTypesRefIgnored,
-      boolean compressNumber,
-      int fieldsRepeat) {
+      boolean xlang, boolean referenceTracking, boolean compressNumber, int fieldsRepeat) {
     Class<?> structClass = Struct.createStructClass("Struct" + fieldsRepeat, fieldsRepeat);
     Fory fory =
         Fory.builder()
-            .withLanguage(Language.JAVA)
+            .withXlang(xlang)
             .withRefTracking(referenceTracking)
             .withClassLoader(structClass.getClassLoader())
-            .ignoreBasicTypesRef(basicTypesRefIgnored)
             .withNumberCompressed(compressNumber)
             .requireClassRegistration(false)
             .build();
     Object struct = Struct.createPOJO(structClass);
-    Assert.assertEquals(fory.deserialize(fory.serialize(struct)), struct);
+    fory.register(structClass);
+    if (!xlang) {
+      // all fields must not be null for xlang mode, but struct has null fields.
+      Assert.assertEquals(fory.deserialize(fory.serialize(struct)), struct);
+    }
     checkMethodSize(structClass, fory);
   }
 

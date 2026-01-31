@@ -143,7 +143,9 @@ except ImportError:
 
 def infer_schema(clz, types_path=None) -> Schema:
     types_path = list(types_path or [])
-    type_hints = typing.get_type_hints(clz)
+    from pyfory.type_util import get_type_hints
+
+    type_hints = get_type_hints(clz)
     keys = sorted(type_hints.keys())
     fields = [
         infer_field(
@@ -350,7 +352,7 @@ def to_arrow_schema(fory_schema: Schema):
             return pa.string()
         elif type_id == TypeId.BINARY:
             return pa.binary()
-        elif type_id == TypeId.LOCAL_DATE:
+        elif type_id == TypeId.DATE:
             return pa.date32()
         elif type_id == TypeId.TIMESTAMP:
             return pa.timestamp("us")

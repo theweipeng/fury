@@ -19,12 +19,6 @@
 
 package org.apache.fory.builder;
 
-import static org.apache.fory.builder.CodecBuilder.readFloat32Func;
-import static org.apache.fory.builder.CodecBuilder.readFloat64Func;
-import static org.apache.fory.builder.CodecBuilder.readInt16Func;
-import static org.apache.fory.builder.CodecBuilder.readIntFunc;
-import static org.apache.fory.builder.CodecBuilder.readLongFunc;
-import static org.apache.fory.builder.CodecBuilder.readVarInt32Func;
 import static org.apache.fory.codegen.CodeGenerator.getPackage;
 import static org.apache.fory.codegen.Expression.Invoke.inlineInvoke;
 import static org.apache.fory.codegen.Expression.Literal.ofInt;
@@ -35,7 +29,6 @@ import static org.apache.fory.codegen.ExpressionUtils.add;
 import static org.apache.fory.codegen.ExpressionUtils.bitand;
 import static org.apache.fory.codegen.ExpressionUtils.bitor;
 import static org.apache.fory.codegen.ExpressionUtils.cast;
-import static org.apache.fory.codegen.ExpressionUtils.defaultValue;
 import static org.apache.fory.codegen.ExpressionUtils.eq;
 import static org.apache.fory.codegen.ExpressionUtils.eqNull;
 import static org.apache.fory.codegen.ExpressionUtils.gt;
@@ -47,6 +40,7 @@ import static org.apache.fory.codegen.ExpressionUtils.neq;
 import static org.apache.fory.codegen.ExpressionUtils.neqNull;
 import static org.apache.fory.codegen.ExpressionUtils.not;
 import static org.apache.fory.codegen.ExpressionUtils.nullValue;
+import static org.apache.fory.codegen.ExpressionUtils.ofEnum;
 import static org.apache.fory.codegen.ExpressionUtils.or;
 import static org.apache.fory.codegen.ExpressionUtils.shift;
 import static org.apache.fory.codegen.ExpressionUtils.subtract;
@@ -79,6 +73,7 @@ import static org.apache.fory.type.TypeUtils.PRIMITIVE_LONG_TYPE;
 import static org.apache.fory.type.TypeUtils.PRIMITIVE_VOID_TYPE;
 import static org.apache.fory.type.TypeUtils.SET_TYPE;
 import static org.apache.fory.type.TypeUtils.SHORT_TYPE;
+import static org.apache.fory.type.TypeUtils.STRING_TYPE;
 import static org.apache.fory.type.TypeUtils.getRawType;
 import static org.apache.fory.type.TypeUtils.isBoxed;
 import static org.apache.fory.type.TypeUtils.isPrimitive;
@@ -125,8 +120,10 @@ import org.apache.fory.reflect.TypeRef;
 import org.apache.fory.resolver.ClassInfo;
 import org.apache.fory.resolver.ClassInfoHolder;
 import org.apache.fory.resolver.ClassResolver;
+import org.apache.fory.resolver.RefMode;
 import org.apache.fory.resolver.RefResolver;
 import org.apache.fory.resolver.TypeResolver;
+import org.apache.fory.serializer.DeferedLazySerializer.DeferredLazyObjectSerializer;
 import org.apache.fory.serializer.EnumSerializer;
 import org.apache.fory.serializer.FinalFieldReplaceResolveSerializer;
 import org.apache.fory.serializer.MetaSharedSerializer;
@@ -184,7 +181,7 @@ public abstract class BaseObjectCodecBuilder extends CodecBuilder {
   public BaseObjectCodecBuilder(TypeRef<?> beanType, Fory fory, Class<?> parentSerializerClass) {
     super(new CodegenContext(), beanType);
     this.fory = fory;
-    typeResolver = fory._getTypeResolver();
+    typeResolver = fory.getTypeResolver();
     this.parentSerializerClass = parentSerializerClass;
     if (fory.isCrossLanguage()) {
       writeMethodName = "xwrite";
@@ -210,7 +207,7 @@ public abstract class BaseObjectCodecBuilder extends CodecBuilder {
     typeResolverRef = fieldRef(TYPE_RESOLVER_NAME, typeResolverType);
     Expression typeResolverExpr =
         cast(
-            inlineInvoke(foryRef, "_getTypeResolver", TypeRef.of(TypeResolver.class)),
+            inlineInvoke(foryRef, "getTypeResolver", TypeRef.of(TypeResolver.class)),
             typeResolverType);
     ctx.addField(ctx.type(typeResolverType), TYPE_RESOLVER_NAME, typeResolverExpr);
     ctx.reserveName(STRING_SERIALIZER_NAME);
@@ -275,7 +272,7 @@ public abstract class BaseObjectCodecBuilder extends CodecBuilder {
   }
 
   protected static <T> T typeResolver(Fory fory, Function<TypeResolver, T> function) {
-    return fory.getJITContext().asyncVisitFory(f -> function.apply(f._getTypeResolver()));
+    return fory.getJITContext().asyncVisitFory(f -> function.apply(f.getTypeResolver()));
   }
 
   private boolean needWriteRef(TypeRef<?> type) {
@@ -298,7 +295,7 @@ public abstract class BaseObjectCodecBuilder extends CodecBuilder {
             ""
                 + "super(${fory}, ${cls});\n"
                 + "this.${fory} = ${fory};\n"
-                + "${fory}._getTypeResolver().setSerializerIfAbsent(${cls}, this);\n",
+                + "${fory}.getTypeResolver().setSerializerIfAbsent(${cls}, this);\n",
             "fory",
             FORY_NAME,
             "cls",
@@ -480,54 +477,36 @@ public abstract class BaseObjectCodecBuilder extends CodecBuilder {
       Expression inputObject, Expression buffer, Descriptor descriptor) {
     int dispatchId = getNumericDescriptorDispatchId(descriptor);
     switch (dispatchId) {
-      case DispatchId.PRIMITIVE_BOOL:
       case DispatchId.BOOL:
         return new Invoke(buffer, "writeBoolean", inputObject);
-      case DispatchId.PRIMITIVE_INT8:
-      case DispatchId.PRIMITIVE_UINT8:
       case DispatchId.INT8:
       case DispatchId.UINT8:
         return new Invoke(buffer, "writeByte", inputObject);
-      case DispatchId.PRIMITIVE_CHAR:
       case DispatchId.CHAR:
         return new Invoke(buffer, "writeChar", inputObject);
-      case DispatchId.PRIMITIVE_INT16:
-      case DispatchId.PRIMITIVE_UINT16:
       case DispatchId.INT16:
       case DispatchId.UINT16:
         return new Invoke(buffer, "writeInt16", inputObject);
-      case DispatchId.PRIMITIVE_INT32:
-      case DispatchId.PRIMITIVE_UINT32:
       case DispatchId.INT32:
       case DispatchId.UINT32:
         return new Invoke(buffer, "writeInt32", inputObject);
-      case DispatchId.PRIMITIVE_VARINT32:
       case DispatchId.VARINT32:
         return new Invoke(buffer, "writeVarInt32", inputObject);
-      case DispatchId.PRIMITIVE_VAR_UINT32:
       case DispatchId.VAR_UINT32:
         return new Invoke(buffer, "writeVarUint32", inputObject);
-      case DispatchId.PRIMITIVE_INT64:
-      case DispatchId.PRIMITIVE_UINT64:
       case DispatchId.INT64:
       case DispatchId.UINT64:
         return new Invoke(buffer, "writeInt64", inputObject);
-      case DispatchId.PRIMITIVE_VARINT64:
       case DispatchId.VARINT64:
         return new Invoke(buffer, "writeVarInt64", inputObject);
-      case DispatchId.PRIMITIVE_TAGGED_INT64:
       case DispatchId.TAGGED_INT64:
         return new Invoke(buffer, "writeTaggedInt64", inputObject);
-      case DispatchId.PRIMITIVE_VAR_UINT64:
       case DispatchId.VAR_UINT64:
         return new Invoke(buffer, "writeVarUint64", inputObject);
-      case DispatchId.PRIMITIVE_TAGGED_UINT64:
       case DispatchId.TAGGED_UINT64:
         return new Invoke(buffer, "writeTaggedUint64", inputObject);
-      case DispatchId.PRIMITIVE_FLOAT32:
       case DispatchId.FLOAT32:
         return new Invoke(buffer, "writeFloat32", inputObject);
-      case DispatchId.PRIMITIVE_FLOAT64:
       case DispatchId.FLOAT64:
         return new Invoke(buffer, "writeFloat64", inputObject);
       default:
@@ -818,7 +797,8 @@ public abstract class BaseObjectCodecBuilder extends CodecBuilder {
         }
         if (serializerClass == LazyInitBeanSerializer.class
             || serializerClass == ObjectSerializer.class
-            || serializerClass == MetaSharedSerializer.class) {
+            || serializerClass == MetaSharedSerializer.class
+            || serializerClass == DeferredLazyObjectSerializer.class) {
           // field init may get jit serializer, which will cause cast exception if not use base
           // type.
           serializerClass = Serializer.class;
@@ -1136,20 +1116,40 @@ public abstract class BaseObjectCodecBuilder extends CodecBuilder {
       elemSerializer = uninline(elemSerializer);
       Expression action;
       if (trackingRef) {
+        // declared elem type may be Object, but all actual elem are same type,
+        // and they don't track ref, so we still need actual ref flags.
+        Literal trackingRefFlag = ofInt(CollectionFlags.TRACKING_REF);
+        Expression trackRef = eq(new BitAnd(flags, trackingRefFlag), trackingRefFlag, "trackRef");
+        Literal hasNullFlag = ofInt(CollectionFlags.HAS_NULL);
+        Expression hasNull = eq(new BitAnd(flags, hasNullFlag), hasNullFlag, "hasNull");
+        builder.add(trackRef);
+        builder.add(hasNull);
         ListExpression writeBuilder = new ListExpression(elemSerializer);
         writeBuilder.add(
-            writeContainerElements(
-                elementType, true, elemSerializer, null, buffer, collection, size));
-        Set<Expression> cutPoint = ofHashSet(buffer, collection, size);
+            new If(
+                trackRef,
+                writeContainerElements(
+                    elementType, true, elemSerializer, null, buffer, collection, size),
+                writeContainerElements(
+                    elementType, false, elemSerializer, hasNull, buffer, collection, size),
+                false));
+        Set<Expression> cutPoint = ofHashSet(buffer, collection, size, trackRef, hasNull);
         if (maybeDecl) {
           cutPoint.add(flags);
         }
+        Expression differentTypeWrite =
+            new If(
+                trackRef,
+                writeContainerElements(elementType, true, null, null, buffer, collection, size),
+                writeContainerElements(elementType, false, null, hasNull, buffer, collection, size),
+                false);
         action =
             new If(
                 sameElementClass,
                 invokeGenerated(ctx, cutPoint, writeBuilder, "sameElementClassWrite", false),
-                writeContainerElements(elementType, true, null, null, buffer, collection, size));
+                differentTypeWrite);
       } else {
+        // if declared elem type don't track ref, all elements must not write ref.
         Literal hasNullFlag = ofInt(CollectionFlags.HAS_NULL);
         Expression hasNull = eq(new BitAnd(flags, hasNullFlag), hasNullFlag, "hasNull");
         builder.add(hasNull);
@@ -1194,8 +1194,8 @@ public abstract class BaseObjectCodecBuilder extends CodecBuilder {
       if (trackingRef) {
         bitmap =
             new ListExpression(
-                new Invoke(buffer, "writeByte", ofInt(CollectionFlags.TRACKING_REF)),
-                ofInt(CollectionFlags.TRACKING_REF));
+                new Invoke(buffer, "writeByte", ofInt(CollectionFlags.DECL_SAME_TYPE_TRACKING_REF)),
+                ofInt(CollectionFlags.DECL_SAME_TYPE_TRACKING_REF));
       } else {
         bitmap =
             new Invoke(
@@ -1299,8 +1299,8 @@ public abstract class BaseObjectCodecBuilder extends CodecBuilder {
     boolean finalType = isMonomorphic(rawType);
     elem = tryCastIfPublic(elem, elementType);
     Expression write;
-    if (finalType) {
-      if (trackingRef) {
+    if (trackingRef) {
+      if (finalType) {
         write =
             new If(
                 not(writeRefOrNull(buffer, elem)),
@@ -1308,22 +1308,35 @@ public abstract class BaseObjectCodecBuilder extends CodecBuilder {
       } else {
         write =
             new If(
-                hasNull,
-                serializeFor(elem, buffer, elementType, generateNewMethod),
-                serializeForNotNull(elem, buffer, elementType));
-      }
-    } else {
-      if (trackingRef) {
-        write =
-            new If(
                 not(writeRefOrNull(buffer, elem)),
                 serializeForNotNull(elem, buffer, elementType, elemSerializer, generateNewMethod));
-      } else {
+      }
+    } else {
+      if (hasNull != null) {
+        Expression writeNotNullInNullBranch =
+            finalType
+                ? serializeForNotNull(elem, buffer, elementType, generateNewMethod)
+                : serializeForNotNull(elem, buffer, elementType, elemSerializer, generateNewMethod);
+        Expression writeNotNull =
+            finalType
+                ? serializeForNotNull(elem, buffer, elementType, generateNewMethod)
+                : serializeForNotNull(elem, buffer, elementType, elemSerializer, generateNewMethod);
         write =
             new If(
                 hasNull,
-                serializeFor(elem, buffer, elementType, elemSerializer, generateNewMethod),
-                serializeForNotNull(elem, buffer, elementType, elemSerializer, generateNewMethod));
+                new If(
+                    eqNull(elem),
+                    new Invoke(buffer, "writeByte", Literal.ofByte(Fory.NULL_FLAG)),
+                    new ListExpression(
+                        new Invoke(buffer, "writeByte", Literal.ofByte(Fory.NOT_NULL_VALUE_FLAG)),
+                        writeNotNullInNullBranch)),
+                writeNotNull,
+                false);
+      } else {
+        write =
+            finalType
+                ? serializeForNotNull(elem, buffer, elementType, generateNewMethod)
+                : serializeForNotNull(elem, buffer, elementType, elemSerializer, generateNewMethod);
       }
     }
     return new ListExpression(elem, write);
@@ -1411,8 +1424,8 @@ public abstract class BaseObjectCodecBuilder extends CodecBuilder {
     boolean inline = keyMonomorphic && valueMonomorphic;
     Class<?> keyTypeRawType = keyType.getRawType();
     Class<?> valueTypeRawType = valueType.getRawType();
-    boolean trackingKeyRef = typeResolver(resolver -> resolver.needToWriteRef(keyType));
-    boolean trackingValueRef = typeResolver(resolver -> resolver.needToWriteRef(valueType));
+    boolean trackingKeyRef = needWriteRef(keyType);
+    boolean trackingValueRef = needWriteRef(valueType);
     Tuple2<Expression, Expression> mapKVSerializer =
         getMapKVSerializer(keyTypeRawType, valueTypeRawType);
     Expression keySerializer = mapKVSerializer.f0;
@@ -1532,8 +1545,8 @@ public abstract class BaseObjectCodecBuilder extends CodecBuilder {
 
     Expression chunkHeader;
     Expression keySerializer, valueSerializer;
-    boolean trackingKeyRef = typeResolver(resolver -> resolver.needToWriteRef(keyType));
-    boolean trackingValueRef = typeResolver(resolver -> resolver.needToWriteRef(valueType));
+    boolean trackingKeyRef = needWriteRef(keyType);
+    boolean trackingValueRef = needWriteRef(valueType);
     Expression keyWriteRef = Literal.ofBoolean(trackingKeyRef);
     Expression valueWriteRef = Literal.ofBoolean(trackingValueRef);
     boolean inline = keyMonomorphic && valueMonomorphic;
@@ -1717,10 +1730,6 @@ public abstract class BaseObjectCodecBuilder extends CodecBuilder {
     return expressions;
   }
 
-  protected Expression readRefOrNull(Expression buffer) {
-    return new Invoke(refResolverRef, "readRefOrNull", "tag", PRIMITIVE_BYTE_TYPE, false, buffer);
-  }
-
   protected Expression tryPreserveRefId(Expression buffer) {
     return new Invoke(
         refResolverRef, "tryPreserveRefId", "refId", PRIMITIVE_INT_TYPE, false, buffer);
@@ -1745,26 +1754,35 @@ public abstract class BaseObjectCodecBuilder extends CodecBuilder {
         // Should put value expr ahead to avoid generated code in wrong scope.
         return new ListExpression(value, callback.apply(value));
       }
-      return readNullable(
+      return readNullableField(
           buffer, typeRef, callback, () -> deserializeForNotNull(buffer, typeRef, invokeHint));
     }
   }
 
-  protected Expression deserializeForNullable(
+  protected Expression deserializeForNullableField(
       Expression buffer,
-      TypeRef<?> typeRef,
+      Descriptor descriptor,
       Function<Expression, Expression> callback,
       boolean nullable) {
+    TypeRef<?> typeRef = descriptor.getTypeRef();
     if (typeResolver(r -> r.needToWriteRef(typeRef))) {
-      return readRef(buffer, callback, () -> deserializeForNotNull(buffer, typeRef, null));
+      return readRef(
+          buffer, callback, () -> deserializeForNotNullForField(buffer, descriptor, null));
     } else {
-      if (typeRef.isPrimitive()) {
+      if (typeRef.isPrimitive() && !nullable) {
+        // Only skip null check if BOTH: local type is primitive AND sender didn't write null flag
         Expression value = deserializeForNotNull(buffer, typeRef, null);
         // Should put value expr ahead to avoid generated code in wrong scope.
         return new ListExpression(value, callback.apply(value));
       }
-      return readNullable(
-          buffer, typeRef, callback, () -> deserializeForNotNull(buffer, typeRef, null), nullable);
+      // Pass local field type so readNullable can use default value for primitives when null
+      Class<?> localFieldType = typeRef.isPrimitive() ? typeRef.getRawType() : null;
+      return readNullableField(
+          buffer,
+          descriptor,
+          callback,
+          () -> deserializeForNotNull(buffer, typeRef, null),
+          nullable);
     }
   }
 
@@ -1789,7 +1807,7 @@ public abstract class BaseObjectCodecBuilder extends CodecBuilder {
         false);
   }
 
-  private Expression readNullable(
+  private Expression readNullableField(
       Expression buffer,
       TypeRef<?> typeRef,
       Function<Expression, Expression> callback,
@@ -1803,22 +1821,12 @@ public abstract class BaseObjectCodecBuilder extends CodecBuilder {
     return new If(notNull, callback.apply(value), callback.apply(nullValue(typeRef)), false);
   }
 
-  private Expression readNullable(
+  private Expression readNullableField(
       Expression buffer,
-      TypeRef<?> typeRef,
+      Descriptor descriptor,
       Function<Expression, Expression> callback,
       Supplier<Expression> deserializeForNotNull,
       boolean nullable) {
-    return readNullable(buffer, typeRef, callback, deserializeForNotNull, nullable, null);
-  }
-
-  private Expression readNullable(
-      Expression buffer,
-      TypeRef<?> typeRef,
-      Function<Expression, Expression> callback,
-      Supplier<Expression> deserializeForNotNull,
-      boolean nullable,
-      Class<?> localFieldType) {
     if (nullable) {
       Expression notNull =
           neq(
@@ -1827,17 +1835,52 @@ public abstract class BaseObjectCodecBuilder extends CodecBuilder {
       Expression value = deserializeForNotNull.get();
       // When local field is primitive but remote was nullable (boxed), use default value
       // instead of null. This handles compatibility between boxed/primitive field types.
-      Expression nullExpr;
-      if (localFieldType != null && isPrimitive(localFieldType)) {
-        nullExpr = defaultValue(localFieldType);
-      } else {
-        nullExpr = nullValue(typeRef);
-      }
+      Expression nullExpr =
+          nullValue(
+              descriptor.getField() != null
+                  ? descriptor.getField().getType()
+                  : descriptor.getRawType());
       // use false to ignore null.
       return new If(notNull, callback.apply(value), callback.apply(nullExpr), false);
     } else {
       Expression value = deserializeForNotNull.get();
       return callback.apply(value);
+    }
+  }
+
+  private Expression deserializeRef(
+      Expression buffer, TypeRef<?> typeRef, Expression serializer, InvokeHint invokeHint) {
+    Class<?> cls = getRawType(typeRef);
+    if (isPrimitive(cls) || isBoxed(cls)) {
+      throw new IllegalStateException("Primitive type don't track ref: " + typeRef);
+    } else {
+      if (cls == String.class) {
+        return read(stringSerializerRef, buffer, RefMode.TRACKING, STRING_TYPE);
+      }
+      if (useCollectionSerialization(typeRef)) {
+        return readRef(
+            buffer,
+            Function.identity(),
+            () -> deserializeForCollection(buffer, typeRef, serializer, invokeHint));
+      } else if (useMapSerialization(typeRef)) {
+        return readRef(
+            buffer,
+            Function.identity(),
+            () -> deserializeForMap(buffer, typeRef, serializer, invokeHint));
+      } else {
+        if (serializer != null) {
+          return read(serializer, buffer, RefMode.TRACKING, OBJECT_TYPE);
+        }
+        if (isMonomorphic(cls)) {
+          Expression newSerializer = getOrCreateSerializer(cls);
+          Class<?> returnType =
+              ReflectionUtils.getReturnType(getRawType(newSerializer.type()), readMethodName);
+          return read(newSerializer, buffer, RefMode.TRACKING, TypeRef.of(returnType));
+        } else {
+          return readRef(
+              buffer, Function.identity(), () -> readForNotNullNonFinal(buffer, typeRef, null));
+        }
+      }
     }
   }
 
@@ -1883,6 +1926,17 @@ public abstract class BaseObjectCodecBuilder extends CodecBuilder {
     }
   }
 
+  private Expression deserializeForNotNullNoRef(
+      Expression buffer, TypeRef<?> typeRef, Expression serializer, InvokeHint invokeHint) {
+    Expression value = deserializeForNotNull(buffer, typeRef, serializer, invokeHint);
+    if (needWriteRef(TypeRef.of(typeRef.getRawType()))) {
+      Expression preserveStubRefId =
+          new Invoke(refResolverRef, "preserveRefId", new Literal(-1, PRIMITIVE_INT_TYPE));
+      return new ListExpression(preserveStubRefId, value);
+    }
+    return value;
+  }
+
   protected Expression deserializeField(
       Expression buffer, Descriptor descriptor, Function<Expression, Expression> callback) {
     TypeRef<?> typeRef = descriptor.getTypeRef();
@@ -1919,13 +1973,12 @@ public abstract class BaseObjectCodecBuilder extends CodecBuilder {
       java.lang.reflect.Field field = descriptor.getField();
       Class<?> localFieldType = field != null ? field.getType() : null;
       Expression readNullableExpr =
-          readNullable(
+          readNullableField(
               buffer,
-              typeRef,
+              descriptor,
               callback,
               () -> deserializeForNotNullForField(buffer, descriptor, null),
-              true,
-              localFieldType);
+              true);
 
       if (serializerCallsReference) {
         Expression preserveStubRefId =
@@ -1971,71 +2024,48 @@ public abstract class BaseObjectCodecBuilder extends CodecBuilder {
 
   private Expression deserializePrimitiveField(Expression buffer, Descriptor descriptor) {
     int dispatchId = getNumericDescriptorDispatchId(descriptor);
+    boolean isPrimitive = descriptor.getRawType().isPrimitive();
     switch (dispatchId) {
-      case DispatchId.PRIMITIVE_BOOL:
-        return new Invoke(buffer, "readBoolean", PRIMITIVE_BOOLEAN_TYPE);
       case DispatchId.BOOL:
-        return new Invoke(buffer, "readBoolean", BOOLEAN_TYPE);
-      case DispatchId.PRIMITIVE_INT8:
-      case DispatchId.PRIMITIVE_UINT8:
-        return new Invoke(buffer, "readByte", PRIMITIVE_BYTE_TYPE);
+        return new Invoke(
+            buffer, "readBoolean", isPrimitive ? PRIMITIVE_BOOLEAN_TYPE : BOOLEAN_TYPE);
       case DispatchId.INT8:
       case DispatchId.UINT8:
-        return new Invoke(buffer, "readByte", BYTE_TYPE);
-      case DispatchId.PRIMITIVE_CHAR:
-        return readChar(buffer);
+        return new Invoke(buffer, "readByte", isPrimitive ? PRIMITIVE_BYTE_TYPE : BYTE_TYPE);
       case DispatchId.CHAR:
-        return new Invoke(buffer, "readChar", CHAR_TYPE);
-      case DispatchId.PRIMITIVE_INT16:
-      case DispatchId.PRIMITIVE_UINT16:
-        return readInt16(buffer);
+        return isPrimitive ? readChar(buffer) : new Invoke(buffer, "readChar", CHAR_TYPE);
       case DispatchId.INT16:
       case DispatchId.UINT16:
-        return new Invoke(buffer, readInt16Func(), SHORT_TYPE);
-      case DispatchId.PRIMITIVE_INT32:
-      case DispatchId.PRIMITIVE_UINT32:
-        return readInt32(buffer);
+        return isPrimitive ? readInt16(buffer) : new Invoke(buffer, readInt16Func(), SHORT_TYPE);
       case DispatchId.INT32:
       case DispatchId.UINT32:
-        return new Invoke(buffer, readIntFunc(), INT_TYPE);
-      case DispatchId.PRIMITIVE_VARINT32:
-        return readVarInt32(buffer);
+        return isPrimitive ? readInt32(buffer) : new Invoke(buffer, readIntFunc(), INT_TYPE);
       case DispatchId.VARINT32:
-        return new Invoke(buffer, readVarInt32Func(), INT_TYPE);
-      case DispatchId.PRIMITIVE_VAR_UINT32:
-        return new Invoke(buffer, "readVarUint32", PRIMITIVE_INT_TYPE);
+        return isPrimitive
+            ? readVarInt32(buffer)
+            : new Invoke(buffer, readVarInt32Func(), INT_TYPE);
       case DispatchId.VAR_UINT32:
-        return new Invoke(buffer, "readVarUint32", INT_TYPE);
-      case DispatchId.PRIMITIVE_INT64:
-      case DispatchId.PRIMITIVE_UINT64:
-        return readInt64(buffer);
+        return new Invoke(buffer, "readVarUint32", isPrimitive ? PRIMITIVE_INT_TYPE : INT_TYPE);
       case DispatchId.INT64:
       case DispatchId.UINT64:
-        return new Invoke(buffer, readLongFunc(), LONG_TYPE);
-      case DispatchId.PRIMITIVE_VARINT64:
-        return new Invoke(buffer, "readVarInt64", PRIMITIVE_LONG_TYPE);
+        return isPrimitive ? readInt64(buffer) : new Invoke(buffer, readLongFunc(), LONG_TYPE);
       case DispatchId.VARINT64:
-        return new Invoke(buffer, "readVarInt64", LONG_TYPE);
-      case DispatchId.PRIMITIVE_TAGGED_INT64:
-        return new Invoke(buffer, "readTaggedInt64", PRIMITIVE_LONG_TYPE);
+        return new Invoke(buffer, "readVarInt64", isPrimitive ? PRIMITIVE_LONG_TYPE : LONG_TYPE);
       case DispatchId.TAGGED_INT64:
-        return new Invoke(buffer, "readTaggedInt64", LONG_TYPE);
-      case DispatchId.PRIMITIVE_VAR_UINT64:
-        return new Invoke(buffer, "readVarUint64", PRIMITIVE_LONG_TYPE);
+        return new Invoke(buffer, "readTaggedInt64", isPrimitive ? PRIMITIVE_LONG_TYPE : LONG_TYPE);
       case DispatchId.VAR_UINT64:
-        return new Invoke(buffer, "readVarUint64", LONG_TYPE);
-      case DispatchId.PRIMITIVE_TAGGED_UINT64:
-        return new Invoke(buffer, "readTaggedUint64", PRIMITIVE_LONG_TYPE);
+        return new Invoke(buffer, "readVarUint64", isPrimitive ? PRIMITIVE_LONG_TYPE : LONG_TYPE);
       case DispatchId.TAGGED_UINT64:
-        return new Invoke(buffer, "readTaggedUint64", LONG_TYPE);
-      case DispatchId.PRIMITIVE_FLOAT32:
-        return readFloat32(buffer);
+        return new Invoke(
+            buffer, "readTaggedUint64", isPrimitive ? PRIMITIVE_LONG_TYPE : LONG_TYPE);
       case DispatchId.FLOAT32:
-        return new Invoke(buffer, readFloat32Func(), FLOAT_TYPE);
-      case DispatchId.PRIMITIVE_FLOAT64:
-        return readFloat64(buffer);
+        return isPrimitive
+            ? readFloat32(buffer)
+            : new Invoke(buffer, readFloat32Func(), FLOAT_TYPE);
       case DispatchId.FLOAT64:
-        return new Invoke(buffer, readFloat64Func(), DOUBLE_TYPE);
+        return isPrimitive
+            ? readFloat64(buffer)
+            : new Invoke(buffer, readFloat64Func(), DOUBLE_TYPE);
       default:
         throw new IllegalStateException("Unsupported dispatchId: " + dispatchId);
     }
@@ -2065,8 +2095,20 @@ public abstract class BaseObjectCodecBuilder extends CodecBuilder {
   }
 
   protected Expression read(Expression serializer, Expression buffer, TypeRef<?> returnType) {
+    return read(serializer, buffer, RefMode.NONE, returnType);
+  }
+
+  protected Expression read(
+      Expression serializer, Expression buffer, RefMode refMode, TypeRef<?> returnType) {
     Class<?> type = returnType.getRawType();
-    Expression read = new Invoke(serializer, readMethodName, returnType, buffer);
+    Expression read;
+    if (refMode == RefMode.NONE) {
+      read = new Invoke(serializer, readMethodName, returnType, buffer);
+    } else {
+      // janino take inherited generic method return type as return type of erased `T`.
+      read = new Invoke(serializer, readMethodName, OBJECT_TYPE, buffer, ofEnum(refMode));
+      read = cast(inline(read), returnType);
+    }
     if (ReflectionUtils.isMonomorphic(type) && !TypeUtils.hasExpandableLeafs(type)) {
       return read;
     }
@@ -2139,13 +2181,21 @@ public abstract class BaseObjectCodecBuilder extends CodecBuilder {
     Class<?> elemClass = TypeUtils.getRawType(elementType);
     walkPath.add(elementType.toString());
     boolean finalType = isMonomorphic(elemClass);
-    boolean trackingRef = typeResolver(resolver -> resolver.needToWriteRef(elementType));
+    boolean trackingRef = fory.trackingRef() && !(isPrimitive(elemClass) || isBoxed(elemClass));
+    Literal trackingRefFlag = ofInt(CollectionFlags.TRACKING_REF);
+    Expression trackRef = eq(new BitAnd(flags, trackingRefFlag), trackingRefFlag, "trackRef");
     if (finalType) {
+      Literal hasNullFlag = ofInt(CollectionFlags.HAS_NULL);
+      Expression hasNull = eq(new BitAnd(flags, hasNullFlag), hasNullFlag, "hasNull");
       if (trackingRef) {
-        builder.add(readContainerElements(elementType, true, null, null, buffer, collection, size));
+        builder.add(
+            trackRef,
+            new If(
+                trackRef,
+                readContainerElements(elementType, true, null, null, buffer, collection, size),
+                readContainerElements(elementType, false, null, hasNull, buffer, collection, size),
+                false));
       } else {
-        Literal hasNullFlag = ofInt(CollectionFlags.HAS_NULL);
-        Expression hasNull = eq(new BitAnd(flags.inline(), hasNullFlag), hasNullFlag, "hasNull");
         builder.add(
             hasNull,
             readContainerElements(elementType, false, null, hasNull, buffer, collection, size));
@@ -2177,12 +2227,9 @@ public abstract class BaseObjectCodecBuilder extends CodecBuilder {
       builder.add(sameElementClass);
       Expression action;
       if (trackingRef) {
-        // Same element class read start
-        ListExpression readBuilder = new ListExpression(elemSerializer);
-        readBuilder.add(
-            readContainerElements(
-                elementType, true, elemSerializer, null, buffer, collection, size));
-        // Same element class read end
+        Literal hasNullFlag = ofInt(CollectionFlags.HAS_NULL);
+        Expression hasNull = eq(new BitAnd(flags, hasNullFlag), hasNullFlag, "hasNull");
+        builder.add(hasNull);
         Set<Expression> cutPoint = ofHashSet(buffer, collection, size);
         Expression differentElemTypeRead =
             invokeGenerated(
@@ -2191,7 +2238,27 @@ public abstract class BaseObjectCodecBuilder extends CodecBuilder {
                 readContainerElements(elementType, true, null, null, buffer, collection, size),
                 "differentTypeElemsRead",
                 false);
-        action = new If(sameElementClass, readBuilder, differentElemTypeRead);
+        Set<Expression> noRefCutPoint = ofHashSet(buffer, collection, size, hasNull);
+        Expression noRefDifferentTypeElemsRead =
+            invokeGenerated(
+                ctx,
+                noRefCutPoint,
+                readContainerElements(elementType, false, null, hasNull, buffer, collection, size),
+                "differentTypeElemsNoRefRead",
+                false);
+        ListExpression sameTypeRead = new ListExpression(elemSerializer);
+        sameTypeRead.add(
+            new If(
+                trackRef,
+                readContainerElements(
+                    elementType, true, elemSerializer, null, buffer, collection, size),
+                readContainerElements(
+                    elementType, false, elemSerializer, hasNull, buffer, collection, size),
+                false));
+        Expression diffTypeRead =
+            new If(trackRef, differentElemTypeRead, noRefDifferentTypeElemsRead, false);
+        builder.add(trackRef);
+        action = new If(sameElementClass, sameTypeRead, diffTypeRead);
       } else {
         Literal hasNullFlag = ofInt(CollectionFlags.HAS_NULL);
         Expression hasNull = eq(new BitAnd(flags, hasNullFlag), hasNullFlag, "hasNull");
@@ -2268,38 +2335,36 @@ public abstract class BaseObjectCodecBuilder extends CodecBuilder {
     Expression read;
     if (finalType) {
       if (trackingRef) {
-        read = deserializeFor(buffer, elementType, callback, invokeHint);
+        read = callback.apply(deserializeRef(buffer, elementType, null, invokeHint));
       } else {
         invokeHint.add(hasNull);
         read =
             new If(
                 hasNull,
                 deserializeFor(buffer, elementType, callback, invokeHint.copy()),
-                callback.apply(deserializeForNotNull(buffer, elementType, invokeHint.copy())));
+                callback.apply(
+                    deserializeForNotNullNoRef(buffer, elementType, null, invokeHint.copy())));
       }
     } else {
       invokeHint.add(elemSerializer);
       if (trackingRef) {
         // eager callback, no need to use ExprHolder.
-        read =
-            readRef(
-                buffer,
-                callback,
-                () -> deserializeForNotNull(buffer, elementType, elemSerializer, invokeHint));
+        read = callback.apply(deserializeRef(buffer, elementType, elemSerializer, invokeHint));
       } else {
         invokeHint.add(hasNull);
         read =
             new If(
                 hasNull,
-                readNullable(
+                readNullableField(
                     buffer,
                     elementType,
                     callback,
                     () ->
-                        deserializeForNotNull(
+                        deserializeForNotNullNoRef(
                             buffer, elementType, elemSerializer, invokeHint.copy())),
                 callback.apply(
-                    deserializeForNotNull(buffer, elementType, elemSerializer, invokeHint.copy())));
+                    deserializeForNotNullNoRef(
+                        buffer, elementType, elemSerializer, invokeHint.copy())));
       }
     }
     return read;
@@ -2390,7 +2455,11 @@ public abstract class BaseObjectCodecBuilder extends CodecBuilder {
               }
               return exprs;
             });
-    expressions.add(chunksLoop, newMap);
+    Set<Expression> chunkLoopCutPoints =
+        ofHashSet(buffer, newMap, chunkHeader, size, mapSerializer, keySerializer, valueSerializer);
+    Expression chunkLoopExpr =
+        invokeGenerated(ctx, chunkLoopCutPoints, chunksLoop, "readMapChunks", false);
+    expressions.add(chunkLoopExpr, newMap);
     // first newMap to create map, last newMap as expr value
     Expression map = inlineInvoke(serializer, "onMapRead", OBJECT_TYPE, expressions);
     Expression action = new If(supportHook, map, read(serializer, buffer, OBJECT_TYPE), false);
@@ -2407,6 +2476,26 @@ public abstract class BaseObjectCodecBuilder extends CodecBuilder {
     return action;
   }
 
+  private boolean mayTrackRefForCollectionRead(Class<?> type) {
+    if (!fory.trackingRef()) {
+      return false;
+    }
+    if (type.isPrimitive() || isBoxed(type)) {
+      return false;
+    }
+    // 1. for xlang, other language may send serialized string with ref tracking, we skip string ref
+    // because string is used commonly, we don't want introduce extra check ref header in data,
+    // because the
+    // writer is also java, and it won't write string ref if `StringRefIgnored`.
+    // 2. we can't use `needWriteRef`, the collection/map read must follow ref track header
+    // in serialized data. other language may write ref for elements even `needWriteRef` return
+    // false
+    if (type == String.class && !fory.isCrossLanguage()) {
+      return !fory.getConfig().isStringRefIgnored();
+    }
+    return true;
+  }
+
   private Expression readChunk(
       Expression buffer,
       Expression map,
@@ -2418,16 +2507,25 @@ public abstract class BaseObjectCodecBuilder extends CodecBuilder {
     boolean valueMonomorphic = isMonomorphic(valueType);
     Class<?> keyTypeRawType = keyType.getRawType();
     Class<?> valueTypeRawType = valueType.getRawType();
-    boolean trackingKeyRef = needWriteRef(keyType);
-    boolean trackingValueRef = needWriteRef(valueType);
-    boolean inline = keyMonomorphic && valueMonomorphic && (!trackingKeyRef || !trackingValueRef);
+    boolean trackingKeyRef = mayTrackRefForCollectionRead(keyTypeRawType);
+    boolean trackingValueRef = mayTrackRefForCollectionRead(valueTypeRawType);
+    boolean inline =
+        keyMonomorphic && valueMonomorphic && (!needWriteRef(keyType) || !needWriteRef(valueType));
     ListExpression expressions = new ListExpression(buffer);
-    Expression trackKeyRef = neq(bitand(chunkHeader, ofInt(TRACKING_KEY_REF)), ofInt(0));
-    Expression trackValueRef = neq(bitand(chunkHeader, ofInt(TRACKING_VALUE_REF)), ofInt(0));
+    Expression trackKeyRefRaw = neq(bitand(chunkHeader, ofInt(TRACKING_KEY_REF)), ofInt(0));
+    Expression trackValueRefRaw = neq(bitand(chunkHeader, ofInt(TRACKING_VALUE_REF)), ofInt(0));
+    Expression trackKeyRef = trackingKeyRef ? uninline(trackKeyRefRaw) : trackKeyRefRaw;
+    Expression trackValueRef = trackingValueRef ? uninline(trackValueRefRaw) : trackValueRefRaw;
     Expression keyIsDeclaredType = neq(bitand(chunkHeader, ofInt(KEY_DECL_TYPE)), ofInt(0));
     Expression valueIsDeclaredType = neq(bitand(chunkHeader, ofInt(VALUE_DECL_TYPE)), ofInt(0));
     Expression chunkSize = new Invoke(buffer, "readUnsignedByte", "chunkSize", PRIMITIVE_INT_TYPE);
     expressions.add(chunkSize);
+    if (trackingKeyRef) {
+      expressions.add(trackKeyRef);
+    }
+    if (trackingValueRef) {
+      expressions.add(trackValueRef);
+    }
 
     Expression keySerializer, valueSerializer;
     if (!keyMonomorphic && !valueMonomorphic) {
@@ -2466,18 +2564,14 @@ public abstract class BaseObjectCodecBuilder extends CodecBuilder {
                 keyHint.add(keySerializerExpr);
               }
               if (genValueMethod) {
-                valueHint.add(valueSerializer);
+                valueHint.add(valueSerializerExpr);
               }
               if (trackingKeyRef) {
                 keyAction =
                     new If(
                         trackKeyRef,
-                        readRef(
-                            buffer,
-                            expr -> expr,
-                            () ->
-                                deserializeForNotNull(buffer, keyType, keySerializerExpr, keyHint)),
-                        deserializeForNotNull(buffer, keyType, keySerializerExpr, keyHint),
+                        deserializeRef(buffer, keyType, keySerializerExpr, keyHint),
+                        deserializeForNotNullNoRef(buffer, keyType, keySerializerExpr, keyHint),
                         false);
               } else {
                 keyAction = deserializeForNotNull(buffer, keyType, keySerializerExpr, keyHint);
@@ -2488,13 +2582,9 @@ public abstract class BaseObjectCodecBuilder extends CodecBuilder {
                 valueAction =
                     new If(
                         trackValueRef,
-                        readRef(
-                            buffer,
-                            expr -> expr,
-                            () ->
-                                deserializeForNotNull(
-                                    buffer, valueType, valueSerializerExpr, valueHint)),
-                        deserializeForNotNull(buffer, valueType, valueSerializerExpr, valueHint),
+                        deserializeRef(buffer, valueType, valueSerializerExpr, valueHint),
+                        deserializeForNotNullNoRef(
+                            buffer, valueType, valueSerializerExpr, valueHint),
                         false);
               } else {
                 valueAction =

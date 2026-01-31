@@ -37,9 +37,9 @@ constexpr size_t SMALL_NUM_FIELDS_THRESHOLD = 0b11111;
 constexpr uint8_t REGISTER_BY_NAME_FLAG = 0b100000;
 constexpr size_t FIELD_NAME_SIZE_THRESHOLD = 0b1111;
 constexpr size_t BIG_NAME_THRESHOLD = 0b111111;
-constexpr int64_t META_SIZE_MASK = 0xfff;
-// constexpr int64_t COMPRESS_META_FLAG = 0b1 << 13;
-constexpr int64_t HAS_FIELDS_META_FLAG = 0b1 << 12;
+constexpr int64_t META_SIZE_MASK = 0xff;
+// constexpr int64_t COMPRESS_META_FLAG = 0b1 << 9;
+constexpr int64_t HAS_FIELDS_META_FLAG = 0b1 << 8;
 constexpr int8_t NUM_HASH_BITS = 50;
 
 // ============================================================================
@@ -55,9 +55,9 @@ Result<void, Error> FieldType::write_to(Buffer &buffer, bool write_flag,
       header |= 2;
     }
   }
-  buffer.WriteVarUint32(header);
+  buffer.write_var_uint32(header);
 
-  // Write generics for list/set/map
+  // write generics for list/set/map
   if (type_id == static_cast<uint32_t>(TypeId::LIST) ||
       type_id == static_cast<uint32_t>(TypeId::SET)) {
     if (generics.empty()) {
@@ -82,7 +82,7 @@ Result<FieldType, Error> FieldType::read_from(Buffer &buffer, bool read_flag,
                                               bool nullable_val,
                                               bool ref_tracking_val) {
   Error error;
-  uint32_t header = buffer.ReadVarUint32(error);
+  uint32_t header = buffer.read_var_uint32(error);
   if (FORY_PREDICT_FALSE(!error.ok())) {
     return Unexpected(std::move(error));
   }
@@ -125,11 +125,13 @@ Result<FieldType, Error> FieldType::read_from(Buffer &buffer, bool read_flag,
 Result<std::vector<uint8_t>, Error> FieldInfo::to_bytes() const {
   Buffer buffer;
 
-  // Write field header (simplified encoding for now - always use UTF8)
+  // write field header:
   // header: | field_name_encoding:2bits | size:4bits | nullability:1bit |
   // ref_tracking:1bit |
-  uint8_t encoding_idx = 0; // UTF8
-  size_t name_size = field_name.size();
+  const bool use_tag_id = field_id >= 0;
+  uint8_t encoding_idx = use_tag_id ? 3 : 0; // TAG_ID or UTF8
+  size_t name_size =
+      use_tag_id ? static_cast<size_t>(field_id) + 1 : field_name.size();
   uint8_t header =
       (std::min(FIELD_NAME_SIZE_THRESHOLD, name_size - 1) << 2) & 0x3C;
 
@@ -141,18 +143,20 @@ Result<std::vector<uint8_t>, Error> FieldInfo::to_bytes() const {
   }
   header |= (encoding_idx << 6);
 
-  buffer.WriteUint8(header);
+  buffer.write_uint8(header);
 
   if (name_size - 1 >= FIELD_NAME_SIZE_THRESHOLD) {
-    buffer.WriteVarUint32(name_size - 1 - FIELD_NAME_SIZE_THRESHOLD);
+    buffer.write_var_uint32(name_size - 1 - FIELD_NAME_SIZE_THRESHOLD);
   }
 
-  // Write field type
+  // write field type
   FORY_RETURN_NOT_OK(field_type.write_to(buffer, false, field_type.nullable));
 
-  // Write field name
-  buffer.WriteBytes(reinterpret_cast<const uint8_t *>(field_name.data()),
-                    field_name.size());
+  // write field name only when tag ID is not used.
+  if (!use_tag_id) {
+    buffer.write_bytes(reinterpret_cast<const uint8_t *>(field_name.data()),
+                       field_name.size());
+  }
 
   // CRITICAL FIX: Use writer_index() not size() to get actual bytes written!
   return std::vector<uint8_t>(buffer.data(),
@@ -162,7 +166,7 @@ Result<std::vector<uint8_t>, Error> FieldInfo::to_bytes() const {
 Result<FieldInfo, Error> FieldInfo::from_bytes(Buffer &buffer) {
   // Read field header
   Error error;
-  uint8_t header = buffer.ReadUint8(error);
+  uint8_t header = buffer.read_uint8(error);
   if (FORY_PREDICT_FALSE(!error.ok())) {
     return Unexpected(std::move(error));
   }
@@ -173,11 +177,12 @@ Result<FieldInfo, Error> FieldInfo::from_bytes(Buffer &buffer) {
   // bits 2-5: size (0-14, 15 means extended)
   // bits 6-7: field name encoding index
   uint8_t encoding_idx = static_cast<uint8_t>(header >> 6);
+  bool use_tag_id = encoding_idx == 3;
   bool ref_tracking = (header & 0b01u) != 0;
   bool nullable = (header & 0b10u) != 0;
   size_t name_size = ((header >> 2) & FIELD_NAME_SIZE_THRESHOLD);
   if (name_size == FIELD_NAME_SIZE_THRESHOLD) {
-    uint32_t extra = buffer.ReadVarUint32(error);
+    uint32_t extra = buffer.read_var_uint32(error);
     if (FORY_PREDICT_FALSE(!error.ok())) {
       return Unexpected(std::move(error));
     }
@@ -189,6 +194,12 @@ Result<FieldInfo, Error> FieldInfo::from_bytes(Buffer &buffer) {
   FORY_TRY(field_type,
            FieldType::read_from(buffer, false, nullable, ref_tracking));
 
+  if (use_tag_id) {
+    FieldInfo info("", std::move(field_type));
+    info.field_id = static_cast<int16_t>(name_size - 1);
+    return info;
+  }
+
   // Read and decode field name. Java encodes field names using
   // MetaString with encodings:
   //   UTF8 / ALL_TO_LOWER_SPECIAL / LOWER_UPPER_DIGIT_SPECIAL
@@ -197,16 +208,16 @@ Result<FieldInfo, Error> FieldInfo::from_bytes(Buffer &buffer) {
   // special characters (same as Encoders.FIELD_NAME_DECODER).
 
   std::vector<uint8_t> name_bytes(name_size);
-  buffer.ReadBytes(name_bytes.data(), static_cast<uint32_t>(name_size), error);
+  buffer.read_bytes(name_bytes.data(), static_cast<uint32_t>(name_size), error);
   if (FORY_PREDICT_FALSE(!error.ok())) {
     return Unexpected(std::move(error));
   }
 
-  static const MetaStringDecoder kFieldNameDecoder('$', '_');
+  static const MetaStringDecoder k_field_name_decoder('$', '_');
 
-  FORY_TRY(encoding, ToMetaEncoding(encoding_idx));
-  FORY_TRY(decoded_name, kFieldNameDecoder.decode(name_bytes.data(),
-                                                  name_bytes.size(), encoding));
+  FORY_TRY(encoding, to_meta_encoding(encoding_idx));
+  FORY_TRY(decoded_name, k_field_name_decoder.decode(
+                             name_bytes.data(), name_bytes.size(), encoding));
 
   return FieldInfo(decoded_name, std::move(field_type));
 }
@@ -219,11 +230,11 @@ namespace {
 
 // Meta string encodings for namespace and type name, aligned with
 // rust/fory-core/src/meta/type_meta.rs and Java Encoders.
-static const MetaEncoding kNamespaceEncodings[] = {
+static const MetaEncoding k_namespace_encodings[] = {
     MetaEncoding::UTF8, MetaEncoding::ALL_TO_LOWER_SPECIAL,
     MetaEncoding::LOWER_UPPER_DIGIT_SPECIAL};
 
-static const MetaEncoding kTypeNameEncodings[] = {
+static const MetaEncoding k_type_name_encodings[] = {
     MetaEncoding::UTF8, MetaEncoding::ALL_TO_LOWER_SPECIAL,
     MetaEncoding::LOWER_UPPER_DIGIT_SPECIAL,
     MetaEncoding::FIRST_TO_LOWER_SPECIAL};
@@ -236,16 +247,16 @@ inline Result<void, Error> write_meta_name(Buffer &buffer,
   if (len >= BIG_NAME_THRESHOLD) {
     uint8_t header =
         static_cast<uint8_t>((BIG_NAME_THRESHOLD << 2) | encoding_idx);
-    buffer.WriteUint8(header);
-    buffer.WriteVarUint32(static_cast<uint32_t>(len - BIG_NAME_THRESHOLD));
+    buffer.write_uint8(header);
+    buffer.write_var_uint32(static_cast<uint32_t>(len - BIG_NAME_THRESHOLD));
   } else {
     uint8_t header = static_cast<uint8_t>((len << 2) | encoding_idx);
-    buffer.WriteUint8(header);
+    buffer.write_uint8(header);
   }
 
   if (!name.empty()) {
-    buffer.WriteBytes(reinterpret_cast<const uint8_t *>(name.data()),
-                      static_cast<uint32_t>(name.size()));
+    buffer.write_bytes(reinterpret_cast<const uint8_t *>(name.data()),
+                       static_cast<uint32_t>(name.size()));
   }
   return Result<void, Error>();
 }
@@ -254,7 +265,7 @@ inline Result<std::string, Error>
 read_meta_name(Buffer &buffer, const MetaStringDecoder &decoder,
                const MetaEncoding *encodings, size_t enc_count) {
   Error error;
-  uint8_t header = buffer.ReadUint8(error);
+  uint8_t header = buffer.read_uint8(error);
   if (FORY_PREDICT_FALSE(!error.ok())) {
     return Unexpected(std::move(error));
   }
@@ -269,7 +280,7 @@ read_meta_name(Buffer &buffer, const MetaStringDecoder &decoder,
 
   size_t length = length_prefix;
   if (length >= BIG_NAME_THRESHOLD) {
-    uint32_t extra = buffer.ReadVarUint32(error);
+    uint32_t extra = buffer.read_var_uint32(error);
     if (FORY_PREDICT_FALSE(!error.ok())) {
       return Unexpected(std::move(error));
     }
@@ -278,7 +289,7 @@ read_meta_name(Buffer &buffer, const MetaStringDecoder &decoder,
 
   std::vector<uint8_t> bytes(length);
   if (length > 0) {
-    buffer.ReadBytes(bytes.data(), static_cast<uint32_t>(length), error);
+    buffer.read_bytes(bytes.data(), static_cast<uint32_t>(length), error);
     if (FORY_PREDICT_FALSE(!error.ok())) {
       return Unexpected(std::move(error));
     }
@@ -311,32 +322,32 @@ TypeMeta TypeMeta::from_fields(uint32_t tid, const std::string &ns,
 Result<std::vector<uint8_t>, Error> TypeMeta::to_bytes() const {
   Buffer layer_buffer;
 
-  // Write meta header
+  // write meta header
   size_t num_fields = field_infos.size();
   uint8_t meta_header =
       static_cast<uint8_t>(std::min(num_fields, SMALL_NUM_FIELDS_THRESHOLD));
   if (register_by_name) {
     meta_header |= REGISTER_BY_NAME_FLAG;
   }
-  layer_buffer.WriteUint8(meta_header);
+  layer_buffer.write_uint8(meta_header);
 
   if (num_fields >= SMALL_NUM_FIELDS_THRESHOLD) {
-    layer_buffer.WriteVarUint32(num_fields - SMALL_NUM_FIELDS_THRESHOLD);
+    layer_buffer.write_var_uint32(num_fields - SMALL_NUM_FIELDS_THRESHOLD);
   }
 
-  // Write namespace and type name (if registered by name) using the
+  // write namespace and type name (if registered by name) using the
   // same compact meta string format as Rust/Java.
   if (register_by_name) {
     FORY_RETURN_NOT_OK(write_meta_name(layer_buffer, namespace_str));
     FORY_RETURN_NOT_OK(write_meta_name(layer_buffer, type_name));
   } else {
-    layer_buffer.WriteVarUint32(type_id);
+    layer_buffer.write_var_uint32(type_id);
   }
 
-  // Write field infos
+  // write field infos
   for (const auto &field : field_infos) {
     FORY_TRY(field_bytes, field.to_bytes());
-    layer_buffer.WriteBytes(field_bytes.data(), field_bytes.size());
+    layer_buffer.write_bytes(field_bytes.data(), field_bytes.size());
   }
 
   // Now write global binary header
@@ -356,12 +367,12 @@ Result<std::vector<uint8_t>, Error> TypeMeta::to_bytes() const {
   int64_t meta_hash = compute_hash(layer_data);
   header |= (meta_hash << (64 - NUM_HASH_BITS));
 
-  result_buffer.WriteBytes(reinterpret_cast<const uint8_t *>(&header),
-                           sizeof(header));
+  result_buffer.write_bytes(reinterpret_cast<const uint8_t *>(&header),
+                            sizeof(header));
   if (meta_size >= META_SIZE_MASK) {
-    result_buffer.WriteVarUint32(meta_size - META_SIZE_MASK);
+    result_buffer.write_var_uint32(meta_size - META_SIZE_MASK);
   }
-  result_buffer.WriteBytes(layer_data.data(), layer_data.size());
+  result_buffer.write_bytes(layer_data.data(), layer_data.size());
   // Use actual bytes written to construct return vector
   return std::vector<uint8_t>(result_buffer.data(),
                               result_buffer.data() +
@@ -375,7 +386,7 @@ TypeMeta::from_bytes(Buffer &buffer, const TypeMeta *local_type_info) {
   // Read global binary header
   Error error;
   int64_t header;
-  buffer.ReadBytes(&header, sizeof(header), error);
+  buffer.read_bytes(&header, sizeof(header), error);
   if (FORY_PREDICT_FALSE(!error.ok())) {
     return Unexpected(std::move(error));
   }
@@ -384,7 +395,7 @@ TypeMeta::from_bytes(Buffer &buffer, const TypeMeta *local_type_info) {
   int64_t meta_size = header & META_SIZE_MASK;
   if (meta_size == META_SIZE_MASK) {
     uint32_t before = buffer.reader_index();
-    uint32_t extra = buffer.ReadVarUint32(error);
+    uint32_t extra = buffer.read_var_uint32(error);
     if (FORY_PREDICT_FALSE(!error.ok())) {
       return Unexpected(std::move(error));
     }
@@ -394,7 +405,7 @@ TypeMeta::from_bytes(Buffer &buffer, const TypeMeta *local_type_info) {
   }
   int64_t meta_hash = header >> (64 - NUM_HASH_BITS);
   // Read meta header
-  uint8_t meta_header = buffer.ReadUint8(error);
+  uint8_t meta_header = buffer.read_uint8(error);
   if (FORY_PREDICT_FALSE(!error.ok())) {
     return Unexpected(std::move(error));
   }
@@ -402,7 +413,7 @@ TypeMeta::from_bytes(Buffer &buffer, const TypeMeta *local_type_info) {
   bool register_by_name = (meta_header & REGISTER_BY_NAME_FLAG) != 0;
   size_t num_fields = meta_header & SMALL_NUM_FIELDS_THRESHOLD;
   if (num_fields == SMALL_NUM_FIELDS_THRESHOLD) {
-    uint32_t extra = buffer.ReadVarUint32(error);
+    uint32_t extra = buffer.read_var_uint32(error);
     if (FORY_PREDICT_FALSE(!error.ok())) {
       return Unexpected(std::move(error));
     }
@@ -415,20 +426,22 @@ TypeMeta::from_bytes(Buffer &buffer, const TypeMeta *local_type_info) {
   std::string type_name;
 
   if (register_by_name) {
-    static const MetaStringDecoder kNamespaceDecoder('.', '_');
-    static const MetaStringDecoder kTypeNameDecoder('$', '_');
+    static const MetaStringDecoder k_namespace_decoder('.', '_');
+    static const MetaStringDecoder k_type_name_decoder('$', '_');
 
-    FORY_TRY(ns, read_meta_name(buffer, kNamespaceDecoder, kNamespaceEncodings,
-                                sizeof(kNamespaceEncodings) /
-                                    sizeof(kNamespaceEncodings[0])));
+    FORY_TRY(ns,
+             read_meta_name(buffer, k_namespace_decoder, k_namespace_encodings,
+                            sizeof(k_namespace_encodings) /
+                                sizeof(k_namespace_encodings[0])));
     namespace_str = std::move(ns);
 
-    FORY_TRY(tn, read_meta_name(buffer, kTypeNameDecoder, kTypeNameEncodings,
-                                sizeof(kTypeNameEncodings) /
-                                    sizeof(kTypeNameEncodings[0])));
+    FORY_TRY(tn,
+             read_meta_name(buffer, k_type_name_decoder, k_type_name_encodings,
+                            sizeof(k_type_name_encodings) /
+                                sizeof(k_type_name_encodings[0])));
     type_name = std::move(tn);
   } else {
-    uint32_t tid = buffer.ReadVarUint32(error);
+    uint32_t tid = buffer.read_var_uint32(error);
     if (FORY_PREDICT_FALSE(!error.ok())) {
       return Unexpected(std::move(error));
     }
@@ -457,7 +470,7 @@ TypeMeta::from_bytes(Buffer &buffer, const TypeMeta *local_type_info) {
   size_t expected_end_pos = start_pos + header_size + meta_size;
   if (current_pos < expected_end_pos) {
     size_t remaining = expected_end_pos - current_pos;
-    buffer.IncreaseReaderIndex(remaining);
+    buffer.increase_reader_index(remaining);
   }
 
   auto meta = std::make_unique<TypeMeta>();
@@ -478,7 +491,7 @@ TypeMeta::from_bytes_with_header(Buffer &buffer, int64_t header) {
   size_t header_size = 0;
   if (meta_size == META_SIZE_MASK) {
     uint32_t before = buffer.reader_index();
-    uint32_t extra = buffer.ReadVarUint32(error);
+    uint32_t extra = buffer.read_var_uint32(error);
     if (FORY_PREDICT_FALSE(!error.ok())) {
       return Unexpected(std::move(error));
     }
@@ -491,7 +504,7 @@ TypeMeta::from_bytes_with_header(Buffer &buffer, int64_t header) {
   size_t start_pos = buffer.reader_index();
 
   // Read meta header
-  uint8_t meta_header = buffer.ReadUint8(error);
+  uint8_t meta_header = buffer.read_uint8(error);
   if (FORY_PREDICT_FALSE(!error.ok())) {
     return Unexpected(std::move(error));
   }
@@ -499,7 +512,7 @@ TypeMeta::from_bytes_with_header(Buffer &buffer, int64_t header) {
   bool register_by_name = (meta_header & REGISTER_BY_NAME_FLAG) != 0;
   size_t num_fields = meta_header & SMALL_NUM_FIELDS_THRESHOLD;
   if (num_fields == SMALL_NUM_FIELDS_THRESHOLD) {
-    uint32_t extra = buffer.ReadVarUint32(error);
+    uint32_t extra = buffer.read_var_uint32(error);
     if (FORY_PREDICT_FALSE(!error.ok())) {
       return Unexpected(std::move(error));
     }
@@ -512,20 +525,22 @@ TypeMeta::from_bytes_with_header(Buffer &buffer, int64_t header) {
   std::string type_name;
 
   if (register_by_name) {
-    static const MetaStringDecoder kNamespaceDecoder('.', '_');
-    static const MetaStringDecoder kTypeNameDecoder('$', '_');
+    static const MetaStringDecoder k_namespace_decoder('.', '_');
+    static const MetaStringDecoder k_type_name_decoder('$', '_');
 
-    FORY_TRY(ns, read_meta_name(buffer, kNamespaceDecoder, kNamespaceEncodings,
-                                sizeof(kNamespaceEncodings) /
-                                    sizeof(kNamespaceEncodings[0])));
+    FORY_TRY(ns,
+             read_meta_name(buffer, k_namespace_decoder, k_namespace_encodings,
+                            sizeof(k_namespace_encodings) /
+                                sizeof(k_namespace_encodings[0])));
     namespace_str = std::move(ns);
 
-    FORY_TRY(tn, read_meta_name(buffer, kTypeNameDecoder, kTypeNameEncodings,
-                                sizeof(kTypeNameEncodings) /
-                                    sizeof(kTypeNameEncodings[0])));
+    FORY_TRY(tn,
+             read_meta_name(buffer, k_type_name_decoder, k_type_name_encodings,
+                            sizeof(k_type_name_encodings) /
+                                sizeof(k_type_name_encodings[0])));
     type_name = std::move(tn);
   } else {
-    uint32_t tid = buffer.ReadVarUint32(error);
+    uint32_t tid = buffer.read_var_uint32(error);
     if (FORY_PREDICT_FALSE(!error.ok())) {
       return Unexpected(std::move(error));
     }
@@ -548,7 +563,7 @@ TypeMeta::from_bytes_with_header(Buffer &buffer, int64_t header) {
   size_t expected_end_pos = start_pos + meta_size - header_size;
   if (current_pos < expected_end_pos) {
     size_t remaining = expected_end_pos - current_pos;
-    buffer.IncreaseReaderIndex(remaining);
+    buffer.increase_reader_index(remaining);
   }
 
   auto meta = std::make_unique<TypeMeta>();
@@ -566,13 +581,13 @@ Result<void, Error> TypeMeta::skip_bytes(Buffer &buffer, int64_t header) {
   Error error;
   int64_t meta_size = header & META_SIZE_MASK;
   if (meta_size == META_SIZE_MASK) {
-    uint32_t extra = buffer.ReadVarUint32(error);
+    uint32_t extra = buffer.read_var_uint32(error);
     if (FORY_PREDICT_FALSE(!error.ok())) {
       return Unexpected(std::move(error));
     }
     meta_size += extra;
   }
-  buffer.Skip(static_cast<uint32_t>(meta_size), error);
+  buffer.skip(static_cast<uint32_t>(meta_size), error);
   if (FORY_PREDICT_FALSE(!error.ok())) {
     return Unexpected(std::move(error));
   }
@@ -633,7 +648,7 @@ int32_t get_primitive_type_size(uint32_t type_id) {
 }
 
 /// Check if a type ID represents a compressed (varint/tagged) type.
-/// This must match Java's Types.isCompressedType() exactly for consistent
+/// This must match Java's Types.is_compressed_type() exactly for consistent
 /// field ordering. Java only considers VARINT32, VAR_UINT32, VARINT64,
 /// VAR_UINT64, TAGGED_INT64, and TAGGED_UINT64 as compressed.
 /// Note: INT32, INT64, UINT32, UINT64 are NOT compressed - they are fixed-size.
@@ -644,6 +659,13 @@ bool is_compress(uint32_t type_id) {
          type_id == static_cast<uint32_t>(TypeId::VAR_UINT32) ||
          type_id == static_cast<uint32_t>(TypeId::VAR_UINT64) ||
          type_id == static_cast<uint32_t>(TypeId::TAGGED_UINT64);
+}
+
+std::string field_sort_key(const FieldInfo &field) {
+  if (field.field_id >= 0) {
+    return std::to_string(field.field_id);
+  }
+  return field.field_name;
 }
 
 // Numeric field sorter (for primitive fields)
@@ -667,6 +689,11 @@ bool numeric_sorter(const FieldInfo &a, const FieldInfo &b) {
     return size_a > size_b; // larger size first
   if (a_id != b_id)
     return a_id > b_id; // type_id descending to match Java
+  std::string a_key = field_sort_key(a);
+  std::string b_key = field_sort_key(b);
+  if (a_key != b_key) {
+    return a_key < b_key;
+  }
   return a.field_name < b.field_name;
 }
 
@@ -676,17 +703,28 @@ bool type_then_name_sorter(const FieldInfo &a, const FieldInfo &b) {
   if (a.field_type.type_id != b.field_type.type_id) {
     return a.field_type.type_id < b.field_type.type_id;
   }
+  std::string a_key = field_sort_key(a);
+  std::string b_key = field_sort_key(b);
+  if (a_key != b_key) {
+    return a_key < b_key;
+  }
   return a.field_name < b.field_name;
 }
 
 // Name sorter (for list/set/map/other fields)
 // Sorts by: field_name only
 bool name_sorter(const FieldInfo &a, const FieldInfo &b) {
+  std::string a_key = field_sort_key(a);
+  std::string b_key = field_sort_key(b);
+  if (a_key != b_key) {
+    return a_key < b_key;
+  }
   return a.field_name < b.field_name;
 }
 
 // Check if a type ID is a "final" type for field group 2 in field ordering.
-// Final types are STRING, DURATION, TIMESTAMP, LOCAL_DATE, DECIMAL, BINARY.
+// Final types are STRING, DURATION, TIMESTAMP, DATE, DECIMAL, BINARY,
+// ARRAY, and primitive arrays.
 // These are types with fixed serializers that don't need type info written.
 // Excludes: ENUM (13-14), STRUCT (15-18), EXT (19-20), LIST (21), SET (22), MAP
 // (23) Note: LIST/SET/MAP are checked separately before this function is
@@ -694,7 +732,10 @@ bool name_sorter(const FieldInfo &a, const FieldInfo &b) {
 bool is_final_type_for_grouping(uint32_t type_id) {
   return type_id == static_cast<uint32_t>(TypeId::STRING) ||
          (type_id >= static_cast<uint32_t>(TypeId::DURATION) &&
-          type_id <= static_cast<uint32_t>(TypeId::BINARY));
+          type_id <= static_cast<uint32_t>(TypeId::BINARY)) ||
+         type_id == static_cast<uint32_t>(TypeId::ARRAY) ||
+         (type_id >= static_cast<uint32_t>(TypeId::BOOL_ARRAY) &&
+          type_id <= static_cast<uint32_t>(TypeId::FLOAT64_ARRAY));
 }
 
 } // anonymous namespace
@@ -764,11 +805,6 @@ TypeMeta::sort_field_infos(std::vector<FieldInfo> fields) {
   sorted.insert(sorted.end(), std::make_move_iterator(other_fields.begin()),
                 std::make_move_iterator(other_fields.end()));
 
-  // Assign sequential field IDs (0, 1, 2, ...)
-  for (size_t i = 0; i < sorted.size(); ++i) {
-    sorted[i].field_id = static_cast<int16_t>(i);
-  }
-
   return sorted;
 }
 
@@ -785,6 +821,14 @@ void TypeMeta::assign_field_ids(const TypeMeta *local_type,
   local_field_index_map.reserve(local_fields.size());
   for (size_t i = 0; i < local_fields.size(); ++i) {
     local_field_index_map.emplace(local_fields[i].field_name, i);
+  }
+  // Tag ID mapping when field IDs are explicitly configured.
+  std::unordered_map<int16_t, size_t> local_field_id_map;
+  local_field_id_map.reserve(local_fields.size());
+  for (size_t i = 0; i < local_fields.size(); ++i) {
+    if (local_fields[i].field_id >= 0) {
+      local_field_id_map.emplace(local_fields[i].field_id, i);
+    }
   }
 
   // Track which local fields have already been matched so that each
@@ -813,6 +857,10 @@ void TypeMeta::assign_field_ids(const TypeMeta *local_type,
     case TypeId::EXT:
     case TypeId::NAMED_EXT:
       return static_cast<uint32_t>(TypeId::EXT);
+    case TypeId::BINARY:
+    case TypeId::INT8_ARRAY:
+    case TypeId::UINT8_ARRAY:
+      return static_cast<uint32_t>(TypeId::BINARY);
     default:
       return tid;
     }
@@ -841,14 +889,24 @@ void TypeMeta::assign_field_ids(const TypeMeta *local_type,
   for (auto &remote_field : remote_fields) {
     size_t local_index = static_cast<size_t>(-1);
 
+    // 0) If remote field carries a tag ID, map directly by ID.
+    if (remote_field.field_id >= 0) {
+      auto id_it = local_field_id_map.find(remote_field.field_id);
+      if (id_it != local_field_id_map.end()) {
+        local_index = id_it->second;
+      }
+    }
+
     // 1) Try exact name + type match first (fast path for same-language
     //    schemas and most C++-only cases).
-    auto it = local_field_index_map.find(remote_field.field_name);
-    if (it != local_field_index_map.end()) {
-      size_t idx = it->second;
-      const FieldInfo &local_field = local_fields[idx];
-      if (types_match(remote_field.field_type, local_field.field_type)) {
-        local_index = idx;
+    if (local_index == static_cast<size_t>(-1)) {
+      auto it = local_field_index_map.find(remote_field.field_name);
+      if (it != local_field_index_map.end()) {
+        size_t idx = it->second;
+        const FieldInfo &local_field = local_fields[idx];
+        if (types_match(remote_field.field_type, local_field.field_type)) {
+          local_index = idx;
+        }
       }
     }
 
@@ -893,7 +951,7 @@ int64_t TypeMeta::compute_hash(const std::vector<uint8_t> &meta_bytes) {
 
 namespace {
 
-std::string ToSnakeCase(const std::string &name) {
+std::string to_snake_case(const std::string &name) {
   bool all_lower = true;
   for (char c : name) {
     unsigned char uc = static_cast<unsigned char>(c);
@@ -954,6 +1012,14 @@ std::string ToSnakeCase(const std::string &name) {
   return result;
 }
 
+std::string normalize_field_name(const std::string &name) {
+  std::string normalized = to_snake_case(name);
+  while (!normalized.empty() && normalized.back() == '_') {
+    normalized.pop_back();
+  }
+  return normalized;
+}
+
 } // anonymous namespace
 
 std::string TypeMeta::compute_struct_fingerprint(
@@ -962,36 +1028,47 @@ std::string TypeMeta::compute_struct_fingerprint(
   // versioning.
   //
   // Fingerprint Format:
-  //   Each field contributes: <field_name>,<type_id>,<ref>,<nullable>;
-  //   Fields are sorted lexicographically by field name (not by type category).
+  //   Each field contributes: <field_id_or_name>,<type_id>,<ref>,<nullable>;
+  //   Fields are sorted lexicographically by field identifier (tag ID string
+  //   if present, otherwise snake_case field name).
   //
   // Field Components:
-  //   - field_name: snake_case field name (C++ doesn't support field tag IDs
-  //   yet)
+  //   - field_id_or_name: tag ID as string if configured, otherwise snake_case
+  //   field name
   //   - type_id: Fory TypeId as decimal string (e.g., "4" for INT32)
   //   - ref: "1" if reference tracking enabled, "0" otherwise (always "0" in
   //   C++)
   //   - nullable: "1" if null flag is written, "0" otherwise
   //
-  // Example fingerprint: "age,4,0,0;name,12,0,1;"
+  // Example fingerprints:
+  //   - With tag IDs: "0,4,0,0;1,12,0,1;"
+  //   - With field names: "age,4,0,0;name,12,0,1;"
 
-  // Copy fields and sort lexicographically by snake_case name for fingerprint
+  // copy fields and sort lexicographically by field identifier for fingerprint
   std::vector<FieldInfo> sorted_fields = field_infos;
   std::sort(sorted_fields.begin(), sorted_fields.end(),
             [](const FieldInfo &a, const FieldInfo &b) {
-              return ToSnakeCase(a.field_name) < ToSnakeCase(b.field_name);
+              std::string a_id = a.field_id >= 0
+                                     ? std::to_string(a.field_id)
+                                     : normalize_field_name(a.field_name);
+              std::string b_id = b.field_id >= 0
+                                     ? std::to_string(b.field_id)
+                                     : normalize_field_name(b.field_name);
+              return a_id < b_id;
             });
 
   std::string fingerprint;
-  // Reserve a rough estimate to avoid reallocations
+  // reserve a rough estimate to avoid reallocations
   fingerprint.reserve(sorted_fields.size() * 24);
 
   for (const auto &fi : sorted_fields) {
-    std::string snake = ToSnakeCase(fi.field_name);
-    fingerprint.append(snake);
+    std::string field_id_or_name = fi.field_id >= 0
+                                       ? std::to_string(fi.field_id)
+                                       : normalize_field_name(fi.field_name);
+    fingerprint.append(field_id_or_name);
     fingerprint.push_back(',');
 
-    // Java's ObjectSerializer.getTypeId returns Types.UNKNOWN (0) for:
+    // Java's ObjectSerializer.get_type_id returns Types.UNKNOWN (0) for:
     // - abstract classes, interfaces, and enum types
     // - user-defined struct types (in xlang mode)
     // This aligns the hash computation with Java's behavior.
@@ -999,7 +1076,8 @@ std::string TypeMeta::compute_struct_fingerprint(
     if (effective_type_id == static_cast<uint32_t>(TypeId::ENUM) ||
         effective_type_id == static_cast<uint32_t>(TypeId::NAMED_ENUM) ||
         effective_type_id == static_cast<uint32_t>(TypeId::STRUCT) ||
-        effective_type_id == static_cast<uint32_t>(TypeId::NAMED_STRUCT)) {
+        effective_type_id == static_cast<uint32_t>(TypeId::NAMED_STRUCT) ||
+        effective_type_id == static_cast<uint32_t>(TypeId::UNION)) {
       effective_type_id = static_cast<uint32_t>(TypeId::UNKNOWN);
     }
     fingerprint.append(std::to_string(effective_type_id));
@@ -1023,7 +1101,7 @@ int32_t TypeMeta::compute_struct_version(const TypeMeta &meta) {
   // Use the low 64 bits and then keep low 32 bits as i32.
   uint64_t low = static_cast<uint64_t>(hash_out[0]);
   uint32_t version = static_cast<uint32_t>(low & 0xFFFF'FFFFu);
-#ifdef FORY_DEBUG
+#if defined(FORY_DEBUG) || defined(ENABLE_FORY_DEBUG_OUTPUT)
   // DEBUG: Print fingerprint for debugging version mismatch
   std::cerr << "[xlang][debug] struct_version type_name=" << meta.type_name
             << ", fingerprint=\"" << fingerprint
@@ -1088,24 +1166,24 @@ encode_meta_string(const std::string &value, bool is_namespace) {
   }
 
   // Use MetaStringEncoder to encode the string
-  static const MetaStringEncoder kNamespaceEncoder('.', '_');
-  static const MetaStringEncoder kTypeNameEncoder('$', '_');
+  static const MetaStringEncoder k_namespace_encoder('.', '_');
+  static const MetaStringEncoder k_type_name_encoder('$', '_');
 
-  static const std::vector<MetaEncoding> kNamespaceEncodings = {
+  static const std::vector<MetaEncoding> k_namespace_encodings = {
       MetaEncoding::UTF8, MetaEncoding::ALL_TO_LOWER_SPECIAL,
       MetaEncoding::LOWER_UPPER_DIGIT_SPECIAL};
 
-  static const std::vector<MetaEncoding> kTypeNameEncodings = {
+  static const std::vector<MetaEncoding> k_type_name_encodings = {
       MetaEncoding::UTF8, MetaEncoding::ALL_TO_LOWER_SPECIAL,
       MetaEncoding::LOWER_UPPER_DIGIT_SPECIAL,
       MetaEncoding::FIRST_TO_LOWER_SPECIAL};
 
   if (is_namespace) {
-    FORY_TRY(result, kNamespaceEncoder.encode(value, kNamespaceEncodings));
+    FORY_TRY(result, k_namespace_encoder.encode(value, k_namespace_encodings));
     cached->encoding = static_cast<uint8_t>(result.encoding);
     cached->bytes = std::move(result.bytes);
   } else {
-    FORY_TRY(result, kTypeNameEncoder.encode(value, kTypeNameEncodings));
+    FORY_TRY(result, k_type_name_encoder.encode(value, k_type_name_encodings));
     cached->encoding = static_cast<uint8_t>(result.encoding);
     cached->bytes = std::move(result.bytes);
   }
@@ -1130,7 +1208,7 @@ Result<std::unique_ptr<TypeResolver>, Error>
 TypeResolver::build_final_type_resolver() {
   auto final_resolver = std::make_unique<TypeResolver>();
 
-  // Copy configuration
+  // copy configuration
   final_resolver->compatible_ = compatible_;
   final_resolver->xlang_ = xlang_;
   final_resolver->check_struct_version_ = check_struct_version_;
@@ -1161,6 +1239,7 @@ TypeResolver::build_final_type_resolver() {
   for (const auto &[key, old_ptr] : type_info_by_runtime_type_) {
     final_resolver->type_info_by_runtime_type_[key] = ptr_map[old_ptr];
   }
+
   for (const auto &[key, old_ptr] : partial_type_infos_) {
     final_resolver->partial_type_infos_.put(key, ptr_map[old_ptr]);
   }
@@ -1194,7 +1273,7 @@ TypeResolver::build_final_type_resolver() {
     // Parse the serialized TypeMeta back to create unique_ptr<TypeMeta>
     Buffer buffer(partial_ptr->type_def.data(),
                   static_cast<uint32_t>(partial_ptr->type_def.size()), false);
-    buffer.WriterIndex(static_cast<uint32_t>(partial_ptr->type_def.size()));
+    buffer.writer_index(static_cast<uint32_t>(partial_ptr->type_def.size()));
     auto parsed_meta_result = TypeMeta::from_bytes(buffer, nullptr);
     if (!parsed_meta_result.ok()) {
       return Unexpected(parsed_meta_result.error());
@@ -1211,7 +1290,7 @@ TypeResolver::build_final_type_resolver() {
 std::unique_ptr<TypeResolver> TypeResolver::clone() const {
   auto cloned = std::make_unique<TypeResolver>();
 
-  // Copy configuration
+  // copy configuration
   cloned->compatible_ = compatible_;
   cloned->xlang_ = xlang_;
   cloned->check_struct_version_ = check_struct_version_;
@@ -1312,7 +1391,7 @@ void TypeResolver::register_builtin_types() {
   register_type_id_only(TypeId::NONE);
   register_type_id_only(TypeId::DURATION);
   register_type_id_only(TypeId::TIMESTAMP);
-  register_type_id_only(TypeId::LOCAL_DATE);
+  register_type_id_only(TypeId::DATE);
   register_type_id_only(TypeId::DECIMAL);
   register_type_id_only(TypeId::ARRAY);
 }

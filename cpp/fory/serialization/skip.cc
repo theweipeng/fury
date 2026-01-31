@@ -28,32 +28,32 @@ namespace {
 
 // Compute RefMode from field type at runtime.
 //
-// Per xlang protocol and Java's ObjectSerializer.writeOtherFieldValue:
-// - In xlang mode with refTracking=false (default), fields only write
+// Per xlang protocol and Java's ObjectSerializer.write_other_field_value:
+// - In xlang mode with ref_tracking=false (default), fields only write
 //   ref/null flag if they are nullable
 // - Primitives never have ref flags (handled separately)
 } // namespace
 
 void skip_varint(ReadContext &ctx) {
-  // Skip varint by reading it
-  ctx.read_varuint64(ctx.error());
+  // skip varint by reading it
+  ctx.read_var_uint64(ctx.error());
 }
 
 void skip_string(ReadContext &ctx) {
   // Read string length + encoding
-  uint64_t size_encoding = ctx.read_varuint64(ctx.error());
+  uint64_t size_encoding = ctx.read_var_uint64(ctx.error());
   if (FORY_PREDICT_FALSE(ctx.has_error())) {
     return;
   }
   uint64_t size = size_encoding >> 2;
 
-  // Skip string data
-  ctx.buffer().IncreaseReaderIndex(size);
+  // skip string data
+  ctx.buffer().increase_reader_index(size);
 }
 
 void skip_list(ReadContext &ctx, const FieldType &field_type) {
   // Read list length
-  uint64_t length = ctx.read_varuint64(ctx.error());
+  uint64_t length = ctx.read_var_uint64(ctx.error());
   if (FORY_PREDICT_FALSE(ctx.has_error())) {
     return;
   }
@@ -76,7 +76,7 @@ void skip_list(ReadContext &ctx, const FieldType &field_type) {
     }
   }
 
-  // Get element type
+  // get element type
   FieldType elem_type;
   if (!field_type.generics.empty()) {
     elem_type = field_type.generics[0];
@@ -86,7 +86,7 @@ void skip_list(ReadContext &ctx, const FieldType &field_type) {
     elem_type.nullable = false;
   }
 
-  // Skip each element
+  // skip each element
   for (uint64_t i = 0; i < length; ++i) {
     if (track_ref) {
       // Read and check ref flag
@@ -108,7 +108,7 @@ void skip_list(ReadContext &ctx, const FieldType &field_type) {
       }
     }
 
-    // Skip element value
+    // skip element value
     skip_field_value(ctx, elem_type, RefMode::None); // No ref flag for elements
     if (FORY_PREDICT_FALSE(ctx.has_error())) {
       return;
@@ -123,12 +123,12 @@ void skip_set(ReadContext &ctx, const FieldType &field_type) {
 
 void skip_map(ReadContext &ctx, const FieldType &field_type) {
   // Read map length
-  uint64_t total_length = ctx.read_varuint64(ctx.error());
+  uint64_t total_length = ctx.read_var_uint64(ctx.error());
   if (FORY_PREDICT_FALSE(ctx.has_error())) {
     return;
   }
 
-  // Get key and value types
+  // get key and value types
   FieldType key_type, value_type;
   if (field_type.generics.size() >= 2) {
     key_type = field_type.generics[0];
@@ -159,9 +159,9 @@ void skip_map(ReadContext &ctx, const FieldType &field_type) {
     bool value_track_ref = (chunk_header & 0b1000) != 0;
     bool value_has_null = (chunk_header & 0b10000) != 0;
 
-    // Skip key-value pairs in this chunk
+    // skip key-value pairs in this chunk
     for (uint8_t i = 0; i < chunk_size; ++i) {
-      // Skip key with ref flag if needed
+      // skip key with ref flag if needed
       if (key_track_ref || key_has_null) {
         int8_t key_ref = ctx.read_int8(ctx.error());
         if (FORY_PREDICT_FALSE(ctx.has_error())) {
@@ -176,7 +176,7 @@ void skip_map(ReadContext &ctx, const FieldType &field_type) {
         return;
       }
 
-      // Skip value with ref flag if needed
+      // skip value with ref flag if needed
       if (value_track_ref || value_has_null) {
         int8_t val_ref = ctx.read_int8(ctx.error());
         if (FORY_PREDICT_FALSE(ctx.has_error())) {
@@ -196,7 +196,7 @@ void skip_map(ReadContext &ctx, const FieldType &field_type) {
   }
 }
 
-void skip_struct(ReadContext &ctx, const FieldType &field_type) {
+void skip_struct(ReadContext &ctx, const FieldType &) {
   // Struct fields in compatible mode are serialized with type_id and
   // optionally meta_index, followed by field values. We use the loaded
   // TypeMeta to skip all fields for the remote struct.
@@ -213,7 +213,7 @@ void skip_struct(ReadContext &ctx, const FieldType &field_type) {
   }
 
   // Read remote type_id
-  uint32_t remote_type_id = ctx.read_varuint32(ctx.error());
+  uint32_t remote_type_id = ctx.read_var_uint32(ctx.error());
   if (FORY_PREDICT_FALSE(ctx.has_error())) {
     return;
   }
@@ -226,13 +226,8 @@ void skip_struct(ReadContext &ctx, const FieldType &field_type) {
   if (remote_tid == TypeId::COMPATIBLE_STRUCT ||
       remote_tid == TypeId::NAMED_COMPATIBLE_STRUCT ||
       remote_tid == TypeId::NAMED_STRUCT) {
-    // These types write meta_index after type_id
-    uint32_t meta_index = ctx.read_varuint32(ctx.error());
-    if (FORY_PREDICT_FALSE(ctx.has_error())) {
-      return;
-    }
-
-    auto type_info_res = ctx.get_type_info_by_index(meta_index);
+    // These types write TypeMeta inline using streaming protocol
+    auto type_info_res = ctx.read_type_meta();
     if (FORY_PREDICT_FALSE(!type_info_res.ok())) {
       ctx.set_error(std::move(type_info_res).error());
       return;
@@ -274,7 +269,7 @@ void skip_struct(ReadContext &ctx, const FieldType &field_type) {
   }
 }
 
-void skip_ext(ReadContext &ctx, const FieldType &field_type) {
+void skip_ext(ReadContext &ctx, const FieldType &) {
   // EXT fields in compatible mode are serialized with type_id followed by
   // ext data. For named ext, meta_index is also written after type_id.
   // We read the type_id, look up the registered ext harness, and call its
@@ -287,7 +282,7 @@ void skip_ext(ReadContext &ctx, const FieldType &field_type) {
   }
 
   // Read remote type_id from buffer - Java always writes type_id for ext
-  uint32_t remote_type_id = ctx.read_varuint32(ctx.error());
+  uint32_t remote_type_id = ctx.read_var_uint32(ctx.error());
   if (FORY_PREDICT_FALSE(ctx.has_error())) {
     return;
   }
@@ -298,13 +293,9 @@ void skip_ext(ReadContext &ctx, const FieldType &field_type) {
   const TypeInfo *type_info = nullptr;
 
   if (remote_tid == TypeId::NAMED_EXT) {
-    // Named ext: also read meta_index
-    uint32_t meta_index = ctx.read_varuint32(ctx.error());
-    if (FORY_PREDICT_FALSE(ctx.has_error())) {
-      return;
-    }
-
-    auto type_info_res = ctx.get_type_info_by_index(meta_index);
+    // Named ext in compatible mode: read TypeMeta inline using streaming
+    // protocol
+    auto type_info_res = ctx.read_type_meta();
     if (FORY_PREDICT_FALSE(!type_info_res.ok())) {
       ctx.set_error(std::move(type_info_res).error());
       return;
@@ -410,10 +401,29 @@ void skip_unknown(ReadContext &ctx) {
 
 void skip_union(ReadContext &ctx) {
   // Read the variant index
-  (void)ctx.read_varuint32(ctx.error());
+  (void)ctx.read_var_uint32(ctx.error());
   if (FORY_PREDICT_FALSE(ctx.has_error())) {
     return;
   }
+  // Read ref flag for the union value (Any-style)
+  int8_t ref_flag = ctx.read_int8(ctx.error());
+  if (FORY_PREDICT_FALSE(ctx.has_error())) {
+    return;
+  }
+  if (ref_flag == NULL_FLAG) {
+    return;
+  }
+  if (ref_flag == REF_FLAG) {
+    (void)ctx.read_var_uint32(ctx.error());
+    return;
+  }
+  if (ref_flag != NOT_NULL_VALUE_FLAG && ref_flag != REF_VALUE_FLAG) {
+    ctx.set_error(
+        Error::invalid_data("Unknown reference flag: " +
+                            std::to_string(static_cast<int>(ref_flag))));
+    return;
+  }
+
   // Read and skip the alternative's type info
   const TypeInfo *type_info = ctx.read_any_typeinfo(ctx.error());
   if (FORY_PREDICT_FALSE(ctx.has_error())) {
@@ -425,7 +435,7 @@ void skip_union(ReadContext &ctx) {
     return;
   }
 
-  // Skip the alternative's value
+  // skip the alternative's value
   FieldType alt_field_type;
   alt_field_type.type_id = type_info->type_id;
   alt_field_type.nullable = false;
@@ -445,7 +455,7 @@ void skip_field_value(ReadContext &ctx, const FieldType &field_type,
     }
   }
 
-  // Skip based on low 8 bits of the type ID.
+  // skip based on low 8 bits of the type ID.
   //
   // xlang user types encode the user type id in the high bits and the
   // logical TypeId in the low 8 bits (see Java XtypeResolver and Rust
@@ -457,12 +467,12 @@ void skip_field_value(ReadContext &ctx, const FieldType &field_type,
   switch (tid) {
   case TypeId::BOOL:
   case TypeId::INT8:
-    ctx.buffer().IncreaseReaderIndex(1);
+    ctx.buffer().increase_reader_index(1);
     return;
 
   case TypeId::INT16:
   case TypeId::FLOAT16:
-    ctx.buffer().IncreaseReaderIndex(2);
+    ctx.buffer().increase_reader_index(2);
     return;
 
   case TypeId::INT32: {
@@ -474,7 +484,7 @@ void skip_field_value(ReadContext &ctx, const FieldType &field_type,
   }
 
   case TypeId::FLOAT32:
-    ctx.buffer().IncreaseReaderIndex(4);
+    ctx.buffer().increase_reader_index(4);
     return;
 
   case TypeId::INT64: {
@@ -486,7 +496,7 @@ void skip_field_value(ReadContext &ctx, const FieldType &field_type,
   }
 
   case TypeId::FLOAT64:
-    ctx.buffer().IncreaseReaderIndex(8);
+    ctx.buffer().increase_reader_index(8);
     return;
 
   case TypeId::VARINT32:
@@ -510,29 +520,39 @@ void skip_field_value(ReadContext &ctx, const FieldType &field_type,
     skip_map(ctx, field_type);
     return;
 
-  case TypeId::DURATION:
-  case TypeId::TIMESTAMP: {
-    // Duration/Timestamp are stored as fixed 8-byte
-    // nanosecond counts.
-    constexpr uint32_t kBytes = static_cast<uint32_t>(sizeof(int64_t));
-    if (ctx.buffer().reader_index() + kBytes > ctx.buffer().size()) {
+  case TypeId::DURATION: {
+    // Duration is stored as fixed 8-byte nanosecond count.
+    constexpr uint32_t k_bytes = static_cast<uint32_t>(sizeof(int64_t));
+    if (ctx.buffer().reader_index() + k_bytes > ctx.buffer().size()) {
       ctx.set_error(Error::buffer_out_of_bound(ctx.buffer().reader_index(),
-                                               kBytes, ctx.buffer().size()));
+                                               k_bytes, ctx.buffer().size()));
       return;
     }
-    ctx.buffer().IncreaseReaderIndex(kBytes);
+    ctx.buffer().increase_reader_index(k_bytes);
+    return;
+  }
+  case TypeId::TIMESTAMP: {
+    // Timestamp is stored as int64 seconds + uint32 nanoseconds.
+    constexpr uint32_t k_bytes =
+        static_cast<uint32_t>(sizeof(int64_t) + sizeof(uint32_t));
+    if (ctx.buffer().reader_index() + k_bytes > ctx.buffer().size()) {
+      ctx.set_error(Error::buffer_out_of_bound(ctx.buffer().reader_index(),
+                                               k_bytes, ctx.buffer().size()));
+      return;
+    }
+    ctx.buffer().increase_reader_index(k_bytes);
     return;
   }
 
-  case TypeId::LOCAL_DATE: {
-    // LocalDate is stored as fixed 4-byte day count.
-    constexpr uint32_t kBytes = static_cast<uint32_t>(sizeof(int32_t));
-    if (ctx.buffer().reader_index() + kBytes > ctx.buffer().size()) {
+  case TypeId::DATE: {
+    // Date is stored as fixed 4-byte day count.
+    constexpr uint32_t k_bytes = static_cast<uint32_t>(sizeof(int32_t));
+    if (ctx.buffer().reader_index() + k_bytes > ctx.buffer().size()) {
       ctx.set_error(Error::buffer_out_of_bound(ctx.buffer().reader_index(),
-                                               kBytes, ctx.buffer().size()));
+                                               k_bytes, ctx.buffer().size()));
       return;
     }
-    ctx.buffer().IncreaseReaderIndex(kBytes);
+    ctx.buffer().increase_reader_index(k_bytes);
     return;
   }
 
@@ -553,7 +573,7 @@ void skip_field_value(ReadContext &ctx, const FieldType &field_type,
   case TypeId::FLOAT32_ARRAY:
   case TypeId::FLOAT64_ARRAY: {
     // Read array length
-    uint32_t len = ctx.read_varuint32(ctx.error());
+    uint32_t len = ctx.read_var_uint32(ctx.error());
     if (FORY_PREDICT_FALSE(ctx.has_error())) {
       return;
     }
@@ -577,24 +597,24 @@ void skip_field_value(ReadContext &ctx, const FieldType &field_type,
       break;
     }
 
-    ctx.buffer().IncreaseReaderIndex(len * elem_size);
+    ctx.buffer().increase_reader_index(len * elem_size);
     return;
   }
 
   case TypeId::BINARY: {
     // Read binary length
-    uint32_t len = ctx.read_varuint32(ctx.error());
+    uint32_t len = ctx.read_var_uint32(ctx.error());
     if (FORY_PREDICT_FALSE(ctx.has_error())) {
       return;
     }
-    ctx.buffer().IncreaseReaderIndex(len);
+    ctx.buffer().increase_reader_index(len);
     return;
   }
 
   case TypeId::ENUM:
   case TypeId::NAMED_ENUM: {
     // Enums are serialized as ordinal varuint32 values.
-    ctx.read_varuint32(ctx.error());
+    ctx.read_var_uint32(ctx.error());
     return;
   }
 
@@ -608,6 +628,10 @@ void skip_field_value(ReadContext &ctx, const FieldType &field_type,
     return;
 
   case TypeId::UNION:
+    skip_union(ctx);
+    return;
+  case TypeId::TYPED_UNION:
+  case TypeId::NAMED_UNION:
     skip_union(ctx);
     return;
 

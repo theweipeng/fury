@@ -90,11 +90,37 @@ class FieldAnalyzerImpl implements FieldAnalyzer{
       return null;
     }
 
-    TypeSpecGen fieldType = Analyzer.typeAnalyzer.getTypeImmutableAndTag(
-      Analyzer.typeSystemAnalyzer.decideInterfaceType(element.type),
+    // Check for uint annotations
+    final uintAnnotationResult = Analyzer.uintAnnotationAnalyzer.analyze(
+      element.metadata,
       locationMark,
     );
 
+    TypeSpecGen fieldType;
+    if (uintAnnotationResult.hasAnnotation) {
+      // Validate that @uint is only used on int fields
+      if (!element.type.isDartCoreInt) {
+        throw ConstraintViolationException(
+          locationMark.libPath,
+          locationMark.clsName,
+          element.name,
+          'Please Validate @uint usage only on int fields',
+        );
+      }
+      // Use annotation-based type override
+      fieldType = Analyzer.typeAnalyzer.getTypeImmutableAndTagWithOverride(
+        Analyzer.typeSystemAnalyzer.decideInterfaceType(element.type),
+        locationMark,
+        uintAnnotationResult.objType!,
+      );
+    } else {
+      // Use default type resolution
+      fieldType = Analyzer.typeAnalyzer.getTypeImmutableAndTag(
+        Analyzer.typeSystemAnalyzer.decideInterfaceType(element.type),
+        locationMark,
+      );
+    }
+    
     return Either.left(
       FieldSpecImmutable.publicOr(
         element.isPublic,

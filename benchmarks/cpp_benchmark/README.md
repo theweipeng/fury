@@ -29,14 +29,14 @@ Note: Protobuf is fetched automatically via CMake FetchContent, so no manual ins
 <img src="../../docs/benchmarks/cpp/throughput.png" width="90%">
 </p>
 
-| Datatype     | Operation   | Fory TPS   | Protobuf TPS | Faster      |
-| ------------ | ----------- | ---------- | ------------ | ----------- |
-| Mediacontent | Serialize   | 2,430,924  | 484,368      | Fory (5.0x) |
-| Mediacontent | Deserialize | 740,074    | 387,522      | Fory (1.9x) |
-| Sample       | Serialize   | 4,813,270  | 3,021,968    | Fory (1.6x) |
-| Sample       | Deserialize | 915,554    | 684,675      | Fory (1.3x) |
-| Struct       | Serialize   | 18,105,957 | 5,788,186    | Fory (3.1x) |
-| Struct       | Deserialize | 7,495,726  | 5,932,982    | Fory (1.3x) |
+| Datatype     | Operation   | Fory TPS  | Protobuf TPS | Faster      |
+| ------------ | ----------- | --------- | ------------ | ----------- |
+| Mediacontent | Serialize   | 2,254,915 | 504,410      | Fory (4.5x) |
+| Mediacontent | Deserialize | 741,303   | 396,013      | Fory (1.9x) |
+| Sample       | Serialize   | 4,248,973 | 3,229,102    | Fory (1.3x) |
+| Sample       | Deserialize | 935,709   | 715,837      | Fory (1.3x) |
+| Struct       | Serialize   | 9,143,618 | 5,881,005    | Fory (1.6x) |
+| Struct       | Deserialize | 7,746,787 | 6,202,164    | Fory (1.2x) |
 
 ## Quick Start
 
@@ -45,6 +45,34 @@ Run the complete benchmark pipeline (build, run, generate report):
 ```bash
 cd benchmarks/cpp_benchmark
 ./run.sh
+```
+
+### Run Options
+
+```bash
+./run.sh --help
+
+Options:
+  --data <struct|sample>       Filter benchmark by data type
+  --serializer <fory|protobuf> Filter benchmark by serializer
+  --duration <seconds>         Minimum time to run each benchmark (e.g., 10, 30)
+  --debug                      Build with debug symbols for profiling
+```
+
+Examples:
+
+```bash
+# Run only Struct benchmarks
+./run.sh --data struct
+
+# Run only Fory benchmarks
+./run.sh --serializer fory
+
+# Run each benchmark for at least 10 seconds (for more stable results)
+./run.sh --duration 10
+
+# Combine options
+./run.sh --data struct --serializer fory --duration 5
 ```
 
 ## Building

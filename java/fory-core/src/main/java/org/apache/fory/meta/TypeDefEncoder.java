@@ -51,7 +51,8 @@ import org.apache.fory.util.StringUtils;
 import org.apache.fory.util.Utils;
 
 /**
- * An encoder which encode {@link ClassDef} into binary. See spec documentation:
+ * An encoder which encode {@link ClassDef} into binary. Global header layout follows the xlang spec
+ * with an 8-bit meta size and flags at bits 8/9. See spec documentation:
  * docs/specification/fory_xlang_serialization_spec.md <a
  * href="https://fory.apache.org/docs/specification/fory_xlang_serialization_spec">...</a>
  */
@@ -66,10 +67,10 @@ class TypeDefEncoder {
                 fory.getXtypeResolver().getFieldDescriptors(type, true),
                 false,
                 Function.identity());
-    ClassInfo classInfo = fory._getTypeResolver().getClassInfo(type);
+    ClassInfo classInfo = fory.getTypeResolver().getClassInfo(type);
     List<Field> fields;
-    int xtypeId = classInfo.getXtypeId();
-    if (Types.isStructType(xtypeId & 0xff)) {
+    int typeId = classInfo.getTypeId();
+    if (Types.isStructType(typeId & 0xff)) {
       fields =
           descriptorGrouper.getSortedDescriptors().stream()
               .map(Descriptor::getField)
@@ -121,7 +122,7 @@ class TypeDefEncoder {
             true,
             encodeClassDef.getInt64(0),
             classDefBytes);
-    if (Utils.debugOutputEnabled()) {
+    if (Utils.DEBUG_OUTPUT_ENABLED) {
       LOG.info("[Java TypeDef BUILT] " + classDef);
     }
     return classDef;
@@ -144,7 +145,7 @@ class TypeDefEncoder {
       buffer.writeVarUint32(fields.size() - SMALL_NUM_FIELDS_THRESHOLD);
     }
     if (resolver.isRegisteredById(type)) {
-      buffer.writeVarUint32(classInfo.getXtypeId());
+      buffer.writeVarUint32(classInfo.getTypeId());
     } else {
       Preconditions.checkArgument(resolver.isRegisteredByName(type));
       currentClassHeader |= REGISTER_BY_NAME_FLAG;

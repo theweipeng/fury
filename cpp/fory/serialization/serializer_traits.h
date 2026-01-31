@@ -169,7 +169,7 @@ template <typename T> inline bool is_null_value(const T &value) {
   }
 }
 
-/// Get the inner/element type of a nullable type
+/// get the inner/element type of a nullable type
 template <typename T> struct nullable_element_type {
   using type = T;
 };
@@ -216,9 +216,9 @@ inline const nullable_element_t<T> &deref_nullable(const T &value) {
 // Fory Struct Detection
 // ============================================================================
 
-/// Check if type has FORY_FIELD_INFO defined via ADL
-/// This trait only evaluates to true if ForyFieldInfo is available AND doesn't
-/// trigger static_assert
+/// Check if type has FORY_STRUCT defined via member lookup or ADL.
+/// This trait only evaluates to true if fory_field_info is available AND
+/// doesn't trigger static_assert.
 template <typename T, typename = void>
 struct has_fory_field_info : std::false_type {};
 
@@ -230,7 +230,7 @@ struct has_fory_field_info<
 template <typename T>
 inline constexpr bool has_fory_field_info_v = has_fory_field_info<T>::value;
 
-/// Check if type is serializable (has both FORY_FIELD_INFO and
+/// Check if type is serializable (has both FORY_STRUCT and
 /// SerializationMeta)
 template <typename T, typename = void>
 struct is_fory_serializable : std::false_type {};
@@ -326,7 +326,7 @@ struct is_std_unique_ptr<std::unique_ptr<T>> : std::true_type {};
 template <typename T>
 inline constexpr bool is_std_unique_ptr_v = is_std_unique_ptr<T>::value;
 
-/// Get the concrete type_index for a value
+/// get the concrete type_index for a value
 /// For non-polymorphic types, this is just typeid(T)
 /// For polymorphic types, this returns the runtime type using RTTI
 /// For smart pointers, dereferences to get the actual derived type
@@ -370,35 +370,13 @@ template <typename T>
 inline constexpr bool is_shared_ref_v = is_shared_ref<T>::value;
 
 // ============================================================================
-// Reference Metadata Requirements
-// ============================================================================
-
-/// Determine if a type requires reference metadata (null/ref flags) even when
-/// nested inside another structure.
-/// Note: std::string does NOT require ref metadata - it's written inline
-/// without ref tracking, matching Java/Rust xlang behavior.
-template <typename T> struct requires_ref_metadata : std::false_type {};
-
-template <typename T>
-struct requires_ref_metadata<std::optional<T>> : std::true_type {};
-
-template <typename T>
-struct requires_ref_metadata<std::shared_ptr<T>> : std::true_type {};
-
-template <typename T>
-struct requires_ref_metadata<std::unique_ptr<T>> : std::true_type {};
-
-template <typename T>
-inline constexpr bool requires_ref_metadata_v = requires_ref_metadata<T>::value;
-
-// ============================================================================
 // Element Type Extraction
 // ============================================================================
 
-/// Get element type for containers (reuse meta::GetValueType)
+/// get element type for containers (reuse meta::GetValueType)
 template <typename T> using element_type_t = typename meta::GetValueType<T>;
 
-/// Get key type for map-like containers
+/// get key type for map-like containers
 template <typename T, typename = void> struct key_type_impl {};
 
 template <typename T>
@@ -408,7 +386,7 @@ struct key_type_impl<T, std::void_t<typename T::key_type>> {
 
 template <typename T> using key_type_t = typename key_type_impl<T>::type;
 
-/// Get mapped type for map-like containers
+/// get mapped type for map-like containers
 template <typename T, typename = void> struct mapped_type_impl {};
 
 template <typename T>
@@ -567,7 +545,7 @@ template <typename... Ts> struct TypeIndex<std::variant<Ts...>> {
 // type_index<T>() function - main entry point
 // ============================================================================
 
-/// Get compile-time type index for a type.
+/// get compile-time type index for a type.
 /// This is much faster than std::type_index for hash map lookups.
 /// Returns a unique uint64_t for each type.
 template <typename T> constexpr uint64_t type_index() {

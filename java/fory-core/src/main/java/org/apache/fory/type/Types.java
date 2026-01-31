@@ -45,16 +45,16 @@ public class Types {
   /** int32: a 32-bit signed integer. */
   public static final int INT32 = 4;
 
-  /** var32: a 32-bit signed integer which uses fory var_int32 encoding. */
+  /** varint32: a 32-bit signed integer which uses fory var_int32 encoding. */
   public static final int VARINT32 = 5;
 
   /** int64: a 64-bit signed integer. */
   public static final int INT64 = 6;
 
-  /** var64: a 64-bit signed integer which uses fory PVL encoding. */
+  /** varint64: a 64-bit signed integer which uses fory PVL encoding. */
   public static final int VARINT64 = 7;
 
-  /** tagged_int64: a 64-bit signed integer which uses fory hybrid encoding. */
+  /** tagged_int64: a 64-bit signed integer which uses fory tagged encoding. */
   public static final int TAGGED_INT64 = 8;
 
   /** uint8: an 8-bit unsigned integer. */
@@ -130,77 +130,83 @@ public class Types {
   /** An `ext` type whose type mapping will be encoded as a name. */
   public static final int NAMED_EXT = 30;
 
-  /** A tagged union type that can hold one of several alternative types. */
+  /** A tagged union value whose schema identity is not embedded. */
   public static final int UNION = 31;
 
+  /** A union value with embedded numeric union type ID. */
+  public static final int TYPED_UNION = 32;
+
+  /** A union value with embedded union type name/TypeDef. */
+  public static final int NAMED_UNION = 33;
+
   /** Represents an empty/unit value with no data (e.g., for empty union alternatives). */
-  public static final int NONE = 32;
+  public static final int NONE = 34;
 
   /**
    * An absolute length of time, independent of any calendar/timezone, as a count of nanoseconds.
    */
-  public static final int DURATION = 33;
+  public static final int DURATION = 35;
 
   /**
    * A point in time, independent of any calendar/timezone, as a count of nanoseconds. The count is
    * relative to an epoch at UTC midnight on January 1, 1970.
    */
-  public static final int TIMESTAMP = 34;
+  public static final int TIMESTAMP = 36;
 
   /**
    * A naive date without timezone. The count is days relative to an epoch at UTC midnight on Jan 1,
    * 1970.
    */
-  public static final int LOCAL_DATE = 35;
+  public static final int DATE = 37;
 
   /** Exact decimal value represented as an integer value in two's complement. */
-  public static final int DECIMAL = 36;
+  public static final int DECIMAL = 38;
 
   /** A variable-length array of bytes. */
-  public static final int BINARY = 37;
+  public static final int BINARY = 39;
 
   /**
    * A multidimensional array where every sub-array can have different sizes but all have the same
    * type. Only numeric components allowed. Other arrays will be taken as List. The implementation
    * should support interoperability between array and list.
    */
-  public static final int ARRAY = 38;
+  public static final int ARRAY = 40;
 
   /** One dimensional bool array. */
-  public static final int BOOL_ARRAY = 39;
+  public static final int BOOL_ARRAY = 41;
 
   /** One dimensional int8 array. */
-  public static final int INT8_ARRAY = 40;
+  public static final int INT8_ARRAY = 42;
 
   /** One dimensional int16 array. */
-  public static final int INT16_ARRAY = 41;
+  public static final int INT16_ARRAY = 43;
 
   /** One dimensional int32 array. */
-  public static final int INT32_ARRAY = 42;
+  public static final int INT32_ARRAY = 44;
 
   /** One dimensional int64 array. */
-  public static final int INT64_ARRAY = 43;
+  public static final int INT64_ARRAY = 45;
 
   /** One dimensional uint8 array. */
-  public static final int UINT8_ARRAY = 44;
+  public static final int UINT8_ARRAY = 46;
 
   /** One dimensional uint16 array. */
-  public static final int UINT16_ARRAY = 45;
+  public static final int UINT16_ARRAY = 47;
 
   /** One dimensional uint32 array. */
-  public static final int UINT32_ARRAY = 46;
+  public static final int UINT32_ARRAY = 48;
 
   /** One dimensional uint64 array. */
-  public static final int UINT64_ARRAY = 47;
+  public static final int UINT64_ARRAY = 49;
 
   /** One dimensional float16 array. */
-  public static final int FLOAT16_ARRAY = 48;
+  public static final int FLOAT16_ARRAY = 50;
 
   /** One dimensional float32 array. */
-  public static final int FLOAT32_ARRAY = 49;
+  public static final int FLOAT32_ARRAY = 51;
 
   /** One dimensional float64 array. */
-  public static final int FLOAT64_ARRAY = 50;
+  public static final int FLOAT64_ARRAY = 52;
 
   /** Bound value for range checks (types with id >= BOUND are not internal types). */
   public static final int BOUND = 64;
@@ -213,6 +219,7 @@ public class Types {
       case NAMED_COMPATIBLE_STRUCT:
       case NAMED_ENUM:
       case NAMED_EXT:
+      case NAMED_UNION:
         return true;
       default:
         return false;
@@ -237,8 +244,18 @@ public class Types {
     return value == ENUM || value == NAMED_ENUM;
   }
 
+  public static boolean isUnionType(int value) {
+    assert value < 0xff;
+    return value == UNION || value == TYPED_UNION || value == NAMED_UNION;
+  }
+
   public static boolean isUserDefinedType(byte typeId) {
-    return isStructType(typeId) || isExtType(typeId) || isEnumType(typeId);
+    return isStructType(typeId)
+        || isExtType(typeId)
+        || isEnumType(typeId)
+        || typeId == UNION
+        || typeId == TYPED_UNION
+        || typeId == NAMED_UNION;
   }
 
   public static boolean isPrimitiveType(int typeId) {
@@ -275,8 +292,10 @@ public class Types {
       case INT16:
         return INT16_ARRAY;
       case INT32:
+      case VARINT32:
         return INT32_ARRAY;
       case INT64:
+      case VARINT64:
         return INT64_ARRAY;
       case UINT8:
         return UINT8_ARRAY;
@@ -304,6 +323,10 @@ public class Types {
     if (annotation != null) {
       return TypeAnnotationUtils.getTypeId(annotation, rawType);
     } else {
+      int unionTypeId = getUnionDescriptorTypeId(fory, rawType);
+      if (unionTypeId != -1) {
+        return unionTypeId;
+      }
       return getTypeId(fory, rawType);
     }
   }
@@ -319,9 +342,25 @@ public class Types {
       if (typeAnnotation != null) {
         return TypeAnnotationUtils.getTypeId(typeAnnotation, rawType);
       } else {
+        int unionTypeId = getUnionDescriptorTypeId(fory, rawType);
+        if (unionTypeId != -1) {
+          return unionTypeId;
+        }
         return getTypeId(fory, rawType);
       }
     }
+  }
+
+  private static int getUnionDescriptorTypeId(Fory fory, Class<?> rawType) {
+    ClassInfo classInfo = fory.getTypeResolver().getClassInfo(rawType, false);
+    if (classInfo == null) {
+      return -1;
+    }
+    int internalTypeId = classInfo.getTypeId() & 0xff;
+    if (Types.isUnionType(internalTypeId)) {
+      return Types.UNION;
+    }
+    return -1;
   }
 
   public static int getTypeId(Fory fory, Class<?> clz) {
@@ -347,9 +386,9 @@ public class Types {
         return Types.FLOAT64;
       }
     }
-    ClassInfo classInfo = fory._getTypeResolver().getClassInfo(clz, false);
+    ClassInfo classInfo = fory.getTypeResolver().getClassInfo(clz, false);
     if (classInfo != null) {
-      return fory.isCrossLanguage() ? classInfo.getXtypeId() : classInfo.getClassId();
+      return classInfo.getTypeId();
     }
     return Types.UNKNOWN;
   }

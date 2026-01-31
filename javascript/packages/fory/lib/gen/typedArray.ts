@@ -19,10 +19,10 @@
 
 import { Type, TypeInfo } from "../typeInfo";
 import { CodecBuilder } from "./builder";
-import { BaseSerializerGenerator, RefState, SerializerGenerator } from "./serializer";
+import { BaseSerializerGenerator, SerializerGenerator } from "./serializer";
 import { CodegenRegistry } from "./router";
-import { InternalSerializerType } from "../type";
 import { Scope } from "./scope";
+import { TypeId } from "../type";
 
 function build(inner: TypeInfo) {
   return class TypedArraySerializerGenerator extends BaseSerializerGenerator {
@@ -35,18 +35,18 @@ function build(inner: TypeInfo) {
       this.innerGenerator = CodegenRegistry.newGeneratorByTypeInfo(inner, builder, scope);
     }
 
-    writeStmt(accessor: string): string {
+    write(accessor: string): string {
       const item = this.scope.uniqueName("item");
       return `
                 ${this.builder.writer.varUInt32(`${accessor}.length`)}
                 ${this.builder.writer.reserve(`${this.innerGenerator.getFixedSize()} * ${accessor}.length`)};
                 for (const ${item} of ${accessor}) {
-                    ${this.innerGenerator.toWriteEmbed(item, true)}
+                    ${this.innerGenerator.writeEmbed().write(item)}
                 }
             `;
     }
 
-    readStmt(accessor: (expr: string) => string, refState: RefState): string {
+    read(accessor: (expr: string) => string, refState: string): string {
       const result = this.scope.uniqueName("result");
       const len = this.scope.uniqueName("len");
       const idx = this.scope.uniqueName("idx");
@@ -56,7 +56,7 @@ function build(inner: TypeInfo) {
                 const ${result} = new Array(${len});
                 ${this.maybeReference(result, refState)}
                 for (let ${idx} = 0; ${idx} < ${len}; ${idx}++) {
-                    ${this.innerGenerator.toReadEmbed(x => `${result}[${idx}] = ${x};`, true, RefState.fromFalse())}
+                    ${this.innerGenerator.read(x => `${result}[${idx}] = ${x};`, "false")}
                 }
                 ${accessor(result)}
              `;
@@ -65,18 +65,18 @@ function build(inner: TypeInfo) {
     getFixedSize(): number {
       return 7;
     }
-
-    needToWriteRef(): boolean {
-      return Boolean(this.builder.fory.config.refTracking);
-    }
   };
 }
 
-CodegenRegistry.register(InternalSerializerType.BOOL_ARRAY, build(Type.bool()));
-CodegenRegistry.register(InternalSerializerType.INT8_ARRAY, build(Type.int8()));
-CodegenRegistry.register(InternalSerializerType.INT16_ARRAY, build(Type.int16()));
-CodegenRegistry.register(InternalSerializerType.INT32_ARRAY, build(Type.int32()));
-CodegenRegistry.register(InternalSerializerType.INT64_ARRAY, build(Type.int64()));
-CodegenRegistry.register(InternalSerializerType.FLOAT16_ARRAY, build(Type.float16()));
-CodegenRegistry.register(InternalSerializerType.FLOAT32_ARRAY, build(Type.float32()));
-CodegenRegistry.register(InternalSerializerType.FLOAT64_ARRAY, build(Type.float64()));
+CodegenRegistry.register(TypeId.BOOL_ARRAY, build(Type.bool()));
+CodegenRegistry.register(TypeId.INT8_ARRAY, build(Type.int8()));
+CodegenRegistry.register(TypeId.INT16_ARRAY, build(Type.int16()));
+CodegenRegistry.register(TypeId.INT32_ARRAY, build(Type.int32()));
+CodegenRegistry.register(TypeId.INT64_ARRAY, build(Type.int64()));
+CodegenRegistry.register(TypeId.UINT8_ARRAY, build(Type.uint8()));
+CodegenRegistry.register(TypeId.UINT16_ARRAY, build(Type.uint16()));
+CodegenRegistry.register(TypeId.UINT32_ARRAY, build(Type.uint32()));
+CodegenRegistry.register(TypeId.UINT64_ARRAY, build(Type.uint64()));
+CodegenRegistry.register(TypeId.FLOAT16_ARRAY, build(Type.float16()));
+CodegenRegistry.register(TypeId.FLOAT32_ARRAY, build(Type.float32()));
+CodegenRegistry.register(TypeId.FLOAT64_ARRAY, build(Type.float64()));

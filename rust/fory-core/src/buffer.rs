@@ -114,7 +114,7 @@ impl<'a> Writer<'a> {
     #[inline(always)]
     pub fn write_varint32(&mut self, value: i32) {
         let zigzag = ((value as i64) << 1) ^ ((value as i64) >> 31);
-        self._write_varuint32(zigzag as u32)
+        self._write_var_uint32(zigzag as u32)
     }
 
     // ============ INT64 (TypeId = 6) ============
@@ -129,7 +129,7 @@ impl<'a> Writer<'a> {
     #[inline(always)]
     pub fn write_varint64(&mut self, value: i64) {
         let zigzag = ((value << 1) ^ (value >> 63)) as u64;
-        self._write_varuint64(zigzag);
+        self._write_var_uint64(zigzag);
     }
 
     // ============ TAGGED_INT64 (TypeId = 8) ============
@@ -193,12 +193,12 @@ impl<'a> Writer<'a> {
     // ============ VAR_UINT32 (TypeId = 12) ============
 
     #[inline(always)]
-    pub fn write_varuint32(&mut self, value: u32) {
-        self._write_varuint32(value)
+    pub fn write_var_uint32(&mut self, value: u32) {
+        self._write_var_uint32(value)
     }
 
     #[inline(always)]
-    fn _write_varuint32(&mut self, value: u32) {
+    fn _write_var_uint32(&mut self, value: u32) {
         if value < 0x80 {
             self.bf.push(value as u8);
         } else if value < 0x4000 {
@@ -254,12 +254,12 @@ impl<'a> Writer<'a> {
     // ============ VAR_UINT64 (TypeId = 14) ============
 
     #[inline(always)]
-    pub fn write_varuint64(&mut self, value: u64) {
-        self._write_varuint64(value);
+    pub fn write_var_uint64(&mut self, value: u64) {
+        self._write_var_uint64(value);
     }
 
     #[inline(always)]
-    fn _write_varuint64(&mut self, value: u64) {
+    fn _write_var_uint64(&mut self, value: u64) {
         if value < 0x80 {
             self.bf.push(value as u8);
         } else if value < 0x4000 {
@@ -451,8 +451,8 @@ impl<'a> Writer<'a> {
         const SIZE: usize = std::mem::size_of::<usize>();
         match SIZE {
             2 => self.write_u16(value as u16),
-            4 => self.write_varuint32(value as u32),
-            8 => self.write_varuint64(value as u64),
+            4 => self.write_var_uint32(value as u32),
+            8 => self.write_var_uint64(value as u64),
             _ => unreachable!("unsupported usize size"),
         }
     }
@@ -460,7 +460,7 @@ impl<'a> Writer<'a> {
     // ============ Other helper methods ============
 
     #[inline(always)]
-    pub fn write_varuint36_small(&mut self, value: u64) {
+    pub fn write_var_uint36_small(&mut self, value: u64) {
         assert!(value < (1u64 << 36), "value too large for 36-bit varint");
         if value < 0x80 {
             self.bf.push(value as u8);
@@ -522,7 +522,8 @@ impl<'a> Reader<'a> {
 
     #[inline(always)]
     pub fn sub_slice(&self, start: usize, end: usize) -> Result<&[u8], Error> {
-        if start >= self.bf.len() || end > self.bf.len() || end < start {
+        // Allow start == bf.len() when end == bf.len() to support empty slices at buffer end
+        if start > self.bf.len() || end > self.bf.len() || end < start {
             Err(Error::buffer_out_of_bound(
                 start,
                 self.bf.len(),
@@ -765,58 +766,58 @@ impl<'a> Reader<'a> {
         }
 
         let b1 = self.value_at(self.cursor + 1)? as u64;
-        let mut var64 = (b0 & 0x7F) | ((b1 & 0x7F) << 7);
+        let mut result = (b0 & 0x7F) | ((b1 & 0x7F) << 7);
         if b1 < 0x80 {
             self.move_next(2);
-            return Ok(var64);
+            return Ok(result);
         }
 
         let b2 = self.value_at(self.cursor + 2)? as u64;
-        var64 |= (b2 & 0x7F) << 14;
+        result |= (b2 & 0x7F) << 14;
         if b2 < 0x80 {
             self.move_next(3);
-            return Ok(var64);
+            return Ok(result);
         }
 
         let b3 = self.value_at(self.cursor + 3)? as u64;
-        var64 |= (b3 & 0x7F) << 21;
+        result |= (b3 & 0x7F) << 21;
         if b3 < 0x80 {
             self.move_next(4);
-            return Ok(var64);
+            return Ok(result);
         }
 
         let b4 = self.value_at(self.cursor + 4)? as u64;
-        var64 |= (b4 & 0x7F) << 28;
+        result |= (b4 & 0x7F) << 28;
         if b4 < 0x80 {
             self.move_next(5);
-            return Ok(var64);
+            return Ok(result);
         }
 
         let b5 = self.value_at(self.cursor + 5)? as u64;
-        var64 |= (b5 & 0x7F) << 35;
+        result |= (b5 & 0x7F) << 35;
         if b5 < 0x80 {
             self.move_next(6);
-            return Ok(var64);
+            return Ok(result);
         }
 
         let b6 = self.value_at(self.cursor + 6)? as u64;
-        var64 |= (b6 & 0x7F) << 42;
+        result |= (b6 & 0x7F) << 42;
         if b6 < 0x80 {
             self.move_next(7);
-            return Ok(var64);
+            return Ok(result);
         }
 
         let b7 = self.value_at(self.cursor + 7)? as u64;
-        var64 |= (b7 & 0x7F) << 49;
+        result |= (b7 & 0x7F) << 49;
         if b7 < 0x80 {
             self.move_next(8);
-            return Ok(var64);
+            return Ok(result);
         }
 
         let b8 = self.value_at(self.cursor + 8)? as u64;
-        var64 |= (b8 & 0xFF) << 56;
+        result |= (b8 & 0xFF) << 56;
         self.move_next(9);
-        Ok(var64)
+        Ok(result)
     }
 
     // ============ TAGGED_UINT64 (TypeId = 15) ============

@@ -24,13 +24,23 @@ import (
 	"strings"
 )
 
+// FieldKind describes how a field is stored in Go memory.
+type FieldKind uint8
+
+const (
+	FieldKindValue FieldKind = iota
+	FieldKindPointer
+	FieldKindOptional
+)
+
 // PrimitiveFieldInfo contains only the fields needed for hot primitive serialization loops.
 // This minimal struct improves cache efficiency during iteration.
-// Size: 16 bytes (vs full FieldInfo)
 type PrimitiveFieldInfo struct {
 	Offset      uintptr    // Field offset for unsafe access
 	DispatchId  DispatchId // Type dispatch ID
 	WriteOffset uint8      // Offset within fixed-fields buffer (0-255, sufficient for fixed primitives)
+	Kind        FieldKind
+	Meta        *FieldMeta
 }
 
 // FieldMeta contains cold/rarely-accessed field metadata.
@@ -42,6 +52,9 @@ type FieldMeta struct {
 	Nullable   bool
 	FieldIndex int      // -1 if field doesn't exist in current struct (for compatible mode)
 	FieldDef   FieldDef // original FieldDef from remote TypeDef (for compatible mode skip)
+
+	// Optional fields (fory/optional.Optional[T]) - only valid when FieldKindOptional
+	OptionalInfo optionalInfo
 
 	// Pre-computed sizes (for fixed primitives)
 	FixedSize int // 0 if not fixed-size, else 1/2/4/8
@@ -67,7 +80,7 @@ type FieldInfo struct {
 	DispatchId  DispatchId // Type dispatch ID
 	WriteOffset int        // Offset within fixed-fields buffer region (sum of preceding field sizes)
 	RefMode     RefMode    // ref mode for serializer.Write/Read
-	IsPtr       bool       // True if field.Type.Kind() == reflect.Ptr
+	Kind        FieldKind
 	Serializer  Serializer // Serializer for this field
 
 	// Cold fields - accessed less frequently
@@ -113,7 +126,7 @@ func (g *FieldGroup) ForEachField(fn func(*FieldInfo)) {
 
 // DebugPrint prints field group information for debugging.
 func (g *FieldGroup) DebugPrint(typeName string) {
-	if !DebugOutputEnabled() {
+	if !DebugOutputEnabled {
 		return
 	}
 	fmt.Printf("[Go] ========== Sorted fields for %s ==========\n", typeName)
@@ -147,11 +160,11 @@ func GroupFields(fields []FieldInfo) FieldGroup {
 	// Categorize fields
 	for i := range fields {
 		field := &fields[i]
-		if isFixedSizePrimitive(field.DispatchId, field.Meta.Nullable) {
+		if isFixedSizePrimitive(field.DispatchId) {
 			// Non-nullable fixed-size primitives only
 			field.Meta.FixedSize = getFixedSizeByDispatchId(field.DispatchId)
 			g.FixedFields = append(g.FixedFields, *field)
-		} else if isVarintPrimitive(field.DispatchId, field.Meta.Nullable) {
+		} else if isVarintPrimitive(field.DispatchId) {
 			// Non-nullable varint primitives only
 			g.VarintFields = append(g.VarintFields, *field)
 		} else {
@@ -169,7 +182,7 @@ func GroupFields(fields []FieldInfo) FieldGroup {
 		if fi.Meta.TypeId != fj.Meta.TypeId {
 			return fi.Meta.TypeId > fj.Meta.TypeId // typeId descending
 		}
-		return fi.Meta.Name < fj.Meta.Name // name ascending
+		return getFieldSortKey(fi) < getFieldSortKey(fj) // tag ID or name ascending
 	})
 
 	// Compute WriteOffset after sorting and build primitive field slice
@@ -180,6 +193,8 @@ func GroupFields(fields []FieldInfo) FieldGroup {
 			Offset:      g.FixedFields[i].Offset,
 			DispatchId:  g.FixedFields[i].DispatchId,
 			WriteOffset: uint8(g.FixedSize),
+			Kind:        g.FixedFields[i].Kind,
+			Meta:        g.FixedFields[i].Meta,
 		}
 		g.FixedSize += g.FixedFields[i].Meta.FixedSize
 	}
@@ -196,7 +211,7 @@ func GroupFields(fields []FieldInfo) FieldGroup {
 		if fi.Meta.TypeId != fj.Meta.TypeId {
 			return fi.Meta.TypeId > fj.Meta.TypeId // typeId descending
 		}
-		return fi.Meta.Name < fj.Meta.Name // name ascending
+		return getFieldSortKey(fi) < getFieldSortKey(fj) // tag ID or name ascending
 	})
 
 	// Compute maxVarintSize and build primitive varint field slice
@@ -206,6 +221,8 @@ func GroupFields(fields []FieldInfo) FieldGroup {
 		g.PrimitiveVarintFields[i] = PrimitiveFieldInfo{
 			Offset:     g.VarintFields[i].Offset,
 			DispatchId: g.VarintFields[i].DispatchId,
+			Kind:       g.VarintFields[i].Kind,
+			Meta:       g.VarintFields[i].Meta,
 			// WriteOffset not used for varint fields (variable length)
 		}
 	}
@@ -222,15 +239,14 @@ func GroupFields(fields []FieldInfo) FieldGroup {
 		if catI == 0 {
 			return comparePrimitiveFields(fi, fj)
 		}
-		// Within other internal types category (STRING, BINARY, LIST, SET, MAP),
-		// sort by typeId then by sort key (tagID if available, otherwise name).
-		if catI == 1 {
+		// Within internal/build-in or collection categories, sort by typeId then sort key.
+		if catI == 1 || catI == 2 || catI == 3 {
 			if fi.Meta.TypeId != fj.Meta.TypeId {
 				return fi.Meta.TypeId < fj.Meta.TypeId
 			}
 			return getFieldSortKey(fi) < getFieldSortKey(fj)
 		}
-		// Other categories (struct, enum, etc.): sort by sort key (tagID if available, otherwise name)
+		// Other categories (struct, enum, etc.): sort by sort key
 		return getFieldSortKey(fi) < getFieldSortKey(fj)
 	})
 
@@ -246,7 +262,7 @@ func fieldHasNonPrimitiveSerializer(field *FieldInfo) bool {
 	}
 	// ENUM (numeric ID), NAMED_ENUM (namespace/typename), NAMED_STRUCT, NAMED_COMPATIBLE_STRUCT, NAMED_EXT
 	// all require special serialization and should not use the primitive fast path
-	// Note: ENUM uses unsigned Varuint32Small7 for ordinals, not signed zigzag varint
+	// Note: ENUM uses unsigned VarUint32Small7 for ordinals, not signed zigzag varint
 	// Use internal type ID (low 8 bits) since registered types have composite TypeIds like (userID << 8) | internalID
 	internalTypeId := TypeId(field.Meta.TypeId & 0xFF)
 	switch internalTypeId {
@@ -268,21 +284,29 @@ func isEnumField(field *FieldInfo) bool {
 
 // getFieldCategory returns the category for sorting remainingFields:
 // 0: nullable primitives (sorted by primitiveComparator)
-// 1: internal types STRING, BINARY, LIST, SET, MAP (sorted by typeId, then name)
-// 2: struct, enum, and all other types (sorted by name only)
+// 1: internal build-in types (sorted by typeId, then sort key)
+// 2: list/set collections (sorted by typeId, then sort key)
+// 3: map collections (sorted by typeId, then sort key)
+// 4: struct, enum, and all other types (sorted by sort key)
 func getFieldCategory(field *FieldInfo) int {
 	if isNullableFixedSizePrimitive(field.DispatchId) || isNullableVarintPrimitive(field.DispatchId) {
 		return 0
 	}
-	internalId := field.Meta.TypeId & 0xFF
-	switch TypeId(internalId) {
-	case STRING, BINARY, LIST, SET, MAP:
-		// Internal types: sorted by typeId, then name
-		return 1
-	default:
-		// struct, enum, and all other types: sorted by name
+	internalId := int16(field.Meta.TypeId & 0xFF)
+	if internalId == UNKNOWN {
+		return 4
+	}
+	if isUserDefinedType(internalId) {
+		return 4
+	}
+	if internalId == LIST || internalId == SET {
 		return 2
 	}
+	if internalId == MAP {
+		return 3
+	}
+	// Internal build-in types: sorted by typeId, then sort key (matches Java build-in group)
+	return 1
 }
 
 // comparePrimitiveFields compares two nullable primitive fields using Java's primitiveComparator logic:
@@ -303,7 +327,7 @@ func comparePrimitiveFields(fi, fj *FieldInfo) bool {
 	if fi.Meta.TypeId != fj.Meta.TypeId {
 		return fi.Meta.TypeId > fj.Meta.TypeId // typeId descending
 	}
-	return fi.Meta.Name < fj.Meta.Name // name ascending
+	return getFieldSortKey(fi) < getFieldSortKey(fj) // tag ID or name ascending
 }
 
 // getNullableFixedSize returns the fixed size for nullable fixed primitives
@@ -342,27 +366,19 @@ func getUnderlyingTypeSize(dispatchId DispatchId) int {
 	switch dispatchId {
 	// 64-bit types
 	case PrimitiveInt64DispatchId, PrimitiveUint64DispatchId, PrimitiveFloat64DispatchId,
-		NotnullInt64PtrDispatchId, NotnullUint64PtrDispatchId, NotnullFloat64PtrDispatchId,
 		PrimitiveVarint64DispatchId, PrimitiveVarUint64DispatchId,
-		NotnullVarint64PtrDispatchId, NotnullVarUint64PtrDispatchId,
 		PrimitiveTaggedInt64DispatchId, PrimitiveTaggedUint64DispatchId,
-		NotnullTaggedInt64PtrDispatchId, NotnullTaggedUint64PtrDispatchId,
-		PrimitiveIntDispatchId, PrimitiveUintDispatchId,
-		NotnullIntPtrDispatchId, NotnullUintPtrDispatchId:
+		PrimitiveIntDispatchId, PrimitiveUintDispatchId:
 		return 8
 	// 32-bit types
 	case PrimitiveInt32DispatchId, PrimitiveUint32DispatchId, PrimitiveFloat32DispatchId,
-		NotnullInt32PtrDispatchId, NotnullUint32PtrDispatchId, NotnullFloat32PtrDispatchId,
-		PrimitiveVarint32DispatchId, PrimitiveVarUint32DispatchId,
-		NotnullVarint32PtrDispatchId, NotnullVarUint32PtrDispatchId:
+		PrimitiveVarint32DispatchId, PrimitiveVarUint32DispatchId:
 		return 4
 	// 16-bit types
-	case PrimitiveInt16DispatchId, PrimitiveUint16DispatchId,
-		NotnullInt16PtrDispatchId, NotnullUint16PtrDispatchId:
+	case PrimitiveInt16DispatchId, PrimitiveUint16DispatchId:
 		return 2
 	// 8-bit types
-	case PrimitiveBoolDispatchId, PrimitiveInt8DispatchId, PrimitiveUint8DispatchId,
-		NotnullBoolPtrDispatchId, NotnullInt8PtrDispatchId, NotnullUint8PtrDispatchId:
+	case PrimitiveBoolDispatchId, PrimitiveInt8DispatchId, PrimitiveUint8DispatchId:
 		return 1
 	// Nullable types
 	case NullableInt64DispatchId, NullableUint64DispatchId, NullableFloat64DispatchId,
@@ -428,12 +444,54 @@ func isInternalTypeWithoutTypeMeta(t reflect.Type) bool {
 	return false
 }
 
-// isStructField checks if a type is a struct type (directly or via pointer)
-func isStructField(t reflect.Type) bool {
-	if t.Kind() == reflect.Struct {
+var (
+	unionMarkerType = reflect.TypeOf((*UnionMarker)(nil)).Elem()
+	unionGetterType = reflect.TypeOf((*UnionGetter)(nil)).Elem()
+	unionSetterType = reflect.TypeOf((*UnionSetter)(nil)).Elem()
+)
+
+// isUnionType checks if a type implements the union accessors.
+func isUnionType(t reflect.Type) bool {
+	if t == nil {
+		return false
+	}
+	if info, ok := getOptionalInfo(t); ok {
+		t = info.valueType
+	}
+	if t.Implements(unionMarkerType) || reflect.PtrTo(t).Implements(unionMarkerType) {
 		return true
 	}
-	if t.Kind() == reflect.Ptr && t.Elem().Kind() == reflect.Struct {
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Struct {
+		return false
+	}
+	if t.Implements(unionGetterType) || reflect.PtrTo(t).Implements(unionGetterType) {
+		return true
+	}
+	return t.Implements(unionSetterType) || reflect.PtrTo(t).Implements(unionSetterType)
+}
+
+// isStructField checks if a type is a struct type (directly or via pointer) excluding unions.
+func isStructField(t reflect.Type) bool {
+	if t == nil {
+		return false
+	}
+	if info, ok := getOptionalInfo(t); ok {
+		t = info.valueType
+	}
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	if isUnionType(t) {
+		return false
+	}
+	// Date/Timestamp are built-in types with dedicated encodings, not user structs.
+	if t == dateType || t == timestampType {
+		return false
+	}
+	if t.Kind() == reflect.Struct {
 		return true
 	}
 	return false
@@ -606,16 +664,21 @@ func sortFields(
 		if tagIDs != nil && i < len(tagIDs) {
 			tagID = tagIDs[i]
 		}
-		if ser == nil {
-			others = append(others, triple{UNKNOWN, nil, name, nullables[i], tagID})
+		typeID := typeIds[i]
+		if typeID == UNKNOWN {
+			// Unknown stays in "other" group regardless of serializer presence.
+			others = append(others, triple{UNKNOWN, ser, name, nullables[i], tagID})
 			continue
 		}
-		typeTriples = append(typeTriples, triple{typeIds[i], ser, name, nullables[i], tagID})
+		// Serializer may be nil for dynamic element types; field ordering must rely on typeId only.
+		typeTriples = append(typeTriples, triple{typeID, ser, name, nullables[i], tagID})
 	}
-	// Java orders: primitives, boxed, finals, others, collections, maps
+	// Ordering:
+	// 1) primitives (nullable=false), 2) primitives (nullable=true),
+	// 3) built-in non-container, 4) list/set, 5) map, 6) user-defined/unknown
 	// primitives = non-nullable primitive types (int, long, etc.)
 	// boxed = nullable boxed types (Integer, Long, etc. which are pointers in Go)
-	var primitives, boxed, collection, otherInternalTypeFields []triple
+	var primitives, boxed, listSet, maps, otherInternalTypeFields []triple
 
 	for _, t := range typeTriples {
 		switch {
@@ -627,11 +690,14 @@ func sortFields(
 				primitives = append(primitives, t)
 			}
 		case isPrimitiveArrayType(t.typeID):
-			// Primitive arrays: sorted by name only (category 2 in reflection)
-			collection = append(collection, t)
-		case isListType(t.typeID), isSetType(t.typeID), isMapType(t.typeID):
-			// LIST, SET, MAP: sorted by typeId, name (category 1 in reflection)
+			// Primitive arrays: built-in non-container types (sorted by typeId then name)
 			otherInternalTypeFields = append(otherInternalTypeFields, t)
+		case isListType(t.typeID), isSetType(t.typeID):
+			// LIST, SET: collection group
+			listSet = append(listSet, t)
+		case isMapType(t.typeID):
+			// MAP: map group
+			maps = append(maps, t)
 		case isUserDefinedType(t.typeID):
 			userDefined = append(userDefined, t)
 		case t.typeID == UNKNOWN:
@@ -687,21 +753,24 @@ func sortFields(
 		})
 	}
 	sortByTypeIDThenName(otherInternalTypeFields)
+	sortByTypeIDThenName(listSet)
+	sortByTypeIDThenName(maps)
 	// Merge all category 2 fields (primitive arrays, userDefined, others) and sort by name
-	// This matches GroupFields' getFieldCategory which sorts all category 2 fields together
-	category2 := make([]triple, 0, len(collection)+len(userDefined)+len(others))
-	category2 = append(category2, collection...)  // primitive arrays
-	category2 = append(category2, userDefined...) // structs, enums
-	category2 = append(category2, others...)      // unknown types
-	sortTuple(category2)
+	// This matches GroupFields' getFieldCategory which sorts all category 4 fields together
+	otherGroup := make([]triple, 0, len(userDefined)+len(others))
+	otherGroup = append(otherGroup, userDefined...) // structs, enums, ext
+	otherGroup = append(otherGroup, others...)      // unknown types
+	sortTuple(otherGroup)
 
-	// Order: primitives, boxed, internal types (STRING/BINARY/LIST/SET/MAP), category 2 (by name)
-	// This aligns with GroupFields' getFieldCategory sorting
+	// Order: primitives, boxed, built-in non-container, list/set, map, other (by name)
+	// This aligns with GroupFields' getFieldCategory sorting and spec ordering.
 	all := make([]triple, 0, len(fieldNames))
 	all = append(all, primitives...)
 	all = append(all, boxed...)
-	all = append(all, otherInternalTypeFields...) // STRING, BINARY, LIST, SET, MAP (category 1)
-	all = append(all, category2...)               // all category 2 fields sorted by name
+	all = append(all, otherInternalTypeFields...) // STRING, BINARY, primitive arrays, time, unions, etc.
+	all = append(all, listSet...)
+	all = append(all, maps...)
+	all = append(all, otherGroup...)
 
 	outSer := make([]Serializer, len(all))
 	outNam := make([]string, len(all))
@@ -716,7 +785,16 @@ func typesCompatible(actual, expected reflect.Type) bool {
 	if actual == nil || expected == nil {
 		return false
 	}
+	if info, ok := getOptionalInfo(actual); ok {
+		actual = info.valueType
+	}
+	if info, ok := getOptionalInfo(expected); ok {
+		expected = info.valueType
+	}
 	if actual == expected {
+		return true
+	}
+	if isIntUintWidthCompatible(actual.Kind(), expected.Kind()) {
 		return true
 	}
 	// any can accept any value
@@ -731,6 +809,18 @@ func typesCompatible(actual, expected reflect.Type) bool {
 	}
 	if expected.Kind() == reflect.Ptr && expected.Elem() == actual {
 		return true
+	}
+	// Handle pointer vs non-pointer width compatibility in both directions.
+	if actual.Kind() == reflect.Ptr && expected.Kind() != reflect.Ptr {
+		if isIntUintWidthCompatible(actual.Elem().Kind(), expected.Kind()) {
+			return true
+		}
+	}
+	// Symmetric case: expected is pointer, actual is non-pointer.
+	if expected.Kind() == reflect.Ptr && actual.Kind() != reflect.Ptr {
+		if isIntUintWidthCompatible(actual.Kind(), expected.Elem().Kind()) {
+			return true
+		}
 	}
 	if actual.Kind() == expected.Kind() {
 		switch actual.Kind() {
@@ -747,14 +837,36 @@ func typesCompatible(actual, expected reflect.Type) bool {
 	return false
 }
 
+func isIntUintWidthCompatible(actualKind, expectedKind reflect.Kind) bool {
+	return (actualKind == reflect.Int && expectedKind == reflect.Int64) ||
+		(actualKind == reflect.Int64 && expectedKind == reflect.Int) ||
+		(actualKind == reflect.Uint && expectedKind == reflect.Uint64) ||
+		(actualKind == reflect.Uint64 && expectedKind == reflect.Uint)
+}
+
 func elementTypesCompatible(actual, expected reflect.Type) bool {
 	if actual == nil || expected == nil {
 		return false
 	}
+	if info, ok := getOptionalInfo(actual); ok {
+		actual = info.valueType
+	}
+	if info, ok := getOptionalInfo(expected); ok {
+		expected = info.valueType
+	}
 	if actual == expected || actual.AssignableTo(expected) || expected.AssignableTo(actual) {
 		return true
 	}
-	if actual.Kind() == reflect.Ptr {
+	if isIntUintWidthCompatible(actual.Kind(), expected.Kind()) {
+		return true
+	}
+	if actual.Kind() == reflect.Ptr && expected.Kind() == reflect.Ptr {
+		return elementTypesCompatible(actual.Elem(), expected.Elem())
+	}
+	if actual.Kind() == reflect.Ptr && expected.Kind() != reflect.Ptr {
+		return elementTypesCompatible(actual.Elem(), expected)
+	}
+	if expected.Kind() == reflect.Ptr && actual.Kind() != reflect.Ptr {
 		return elementTypesCompatible(actual, expected.Elem())
 	}
 	return false
@@ -764,6 +876,15 @@ func elementTypesCompatible(actual, expected reflect.Type) bool {
 // This is used when the type is not registered in typesInfo
 // Note: Uses VARINT32/VARINT64/VAR_UINT32/VAR_UINT64 to match Java xlang mode and Rust
 func typeIdFromKind(type_ reflect.Type) TypeId {
+	if info, ok := getOptionalInfo(type_); ok {
+		return typeIdFromKind(info.valueType)
+	}
+	if type_ == dateType {
+		return DATE
+	}
+	if type_ == timestampType {
+		return TIMESTAMP
+	}
 	switch type_.Kind() {
 	case reflect.Bool:
 		return BOOL
@@ -797,12 +918,20 @@ func typeIdFromKind(type_ reflect.Type) TypeId {
 			return BOOL_ARRAY
 		case reflect.Int8:
 			return INT8_ARRAY
+		case reflect.Uint8:
+			return UINT8_ARRAY
 		case reflect.Int16:
 			return INT16_ARRAY
+		case reflect.Uint16:
+			return UINT16_ARRAY
 		case reflect.Int32:
 			return INT32_ARRAY
+		case reflect.Uint32:
+			return UINT32_ARRAY
 		case reflect.Int64, reflect.Int:
 			return INT64_ARRAY
+		case reflect.Uint64, reflect.Uint:
+			return UINT64_ARRAY
 		case reflect.Float32:
 			return FLOAT32_ARRAY
 		case reflect.Float64:
@@ -819,12 +948,20 @@ func typeIdFromKind(type_ reflect.Type) TypeId {
 			return BOOL_ARRAY
 		case reflect.Int8:
 			return INT8_ARRAY
+		case reflect.Uint8:
+			return UINT8_ARRAY
 		case reflect.Int16:
 			return INT16_ARRAY
+		case reflect.Uint16:
+			return UINT16_ARRAY
 		case reflect.Int32:
 			return INT32_ARRAY
+		case reflect.Uint32:
+			return UINT32_ARRAY
 		case reflect.Int64, reflect.Int:
 			return INT64_ARRAY
+		case reflect.Uint64, reflect.Uint:
+			return UINT64_ARRAY
 		case reflect.Float32:
 			return FLOAT32_ARRAY
 		case reflect.Float64:

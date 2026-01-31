@@ -25,6 +25,7 @@
 #include "fory/util/error.h"
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 namespace fory {
@@ -41,11 +42,11 @@ template <> struct Serializer<uint8_t> {
   static constexpr TypeId type_id = TypeId::UINT8;
 
   static inline void write_type_info(WriteContext &ctx) {
-    ctx.write_varuint32(static_cast<uint32_t>(type_id));
+    ctx.write_var_uint32(static_cast<uint32_t>(type_id));
   }
 
   static inline void read_type_info(ReadContext &ctx) {
-    uint32_t actual = ctx.read_varuint32(ctx.error());
+    uint32_t actual = ctx.read_var_uint32(ctx.error());
     if (FORY_PREDICT_FALSE(actual != static_cast<uint32_t>(type_id))) {
       ctx.set_error(
           Error::type_mismatch(actual, static_cast<uint32_t>(type_id)));
@@ -53,7 +54,7 @@ template <> struct Serializer<uint8_t> {
   }
 
   static inline void write(uint8_t value, WriteContext &ctx, RefMode ref_mode,
-                           bool write_type, bool has_generics = false) {
+                           bool write_type, bool = false) {
     write_not_null_ref_flag(ctx, ref_mode);
     if (write_type) {
       write_type_info(ctx);
@@ -66,7 +67,7 @@ template <> struct Serializer<uint8_t> {
   }
 
   static inline void write_data_generic(uint8_t value, WriteContext &ctx,
-                                        bool has_generics) {
+                                        bool) {
     write_data(value, ctx);
   }
 
@@ -77,7 +78,7 @@ template <> struct Serializer<uint8_t> {
       return 0;
     }
     if (read_type) {
-      uint32_t type_id_read = ctx.read_varuint32(ctx.error());
+      uint32_t type_id_read = ctx.read_var_uint32(ctx.error());
       if (FORY_PREDICT_FALSE(type_id_read != static_cast<uint32_t>(type_id))) {
         ctx.set_error(
             Error::type_mismatch(type_id_read, static_cast<uint32_t>(type_id)));
@@ -90,12 +91,12 @@ template <> struct Serializer<uint8_t> {
     return ctx.read_uint8(ctx.error());
   }
 
-  static inline uint8_t read_data_generic(ReadContext &ctx, bool has_generics) {
+  static inline uint8_t read_data_generic(ReadContext &ctx, bool) {
     return read_data(ctx);
   }
 
   static inline uint8_t read_with_type_info(ReadContext &ctx, RefMode ref_mode,
-                                            const TypeInfo &type_info) {
+                                            const TypeInfo &) {
     return read(ctx, ref_mode, false);
   }
 };
@@ -105,11 +106,11 @@ template <> struct Serializer<uint16_t> {
   static constexpr TypeId type_id = TypeId::UINT16;
 
   static inline void write_type_info(WriteContext &ctx) {
-    ctx.write_varuint32(static_cast<uint32_t>(type_id));
+    ctx.write_var_uint32(static_cast<uint32_t>(type_id));
   }
 
   static inline void read_type_info(ReadContext &ctx) {
-    uint32_t actual = ctx.read_varuint32(ctx.error());
+    uint32_t actual = ctx.read_var_uint32(ctx.error());
     if (FORY_PREDICT_FALSE(actual != static_cast<uint32_t>(type_id))) {
       ctx.set_error(
           Error::type_mismatch(actual, static_cast<uint32_t>(type_id)));
@@ -117,7 +118,7 @@ template <> struct Serializer<uint16_t> {
   }
 
   static inline void write(uint16_t value, WriteContext &ctx, RefMode ref_mode,
-                           bool write_type, bool has_generics = false) {
+                           bool write_type, bool = false) {
     write_not_null_ref_flag(ctx, ref_mode);
     if (write_type) {
       write_type_info(ctx);
@@ -130,7 +131,7 @@ template <> struct Serializer<uint16_t> {
   }
 
   static inline void write_data_generic(uint16_t value, WriteContext &ctx,
-                                        bool has_generics) {
+                                        bool) {
     write_data(value, ctx);
   }
 
@@ -141,7 +142,7 @@ template <> struct Serializer<uint16_t> {
       return 0;
     }
     if (read_type) {
-      uint32_t type_id_read = ctx.read_varuint32(ctx.error());
+      uint32_t type_id_read = ctx.read_var_uint32(ctx.error());
       if (FORY_PREDICT_FALSE(type_id_read != static_cast<uint32_t>(type_id))) {
         ctx.set_error(
             Error::type_mismatch(type_id_read, static_cast<uint32_t>(type_id)));
@@ -154,13 +155,12 @@ template <> struct Serializer<uint16_t> {
     return ctx.read_uint16(ctx.error());
   }
 
-  static inline uint16_t read_data_generic(ReadContext &ctx,
-                                           bool has_generics) {
+  static inline uint16_t read_data_generic(ReadContext &ctx, bool) {
     return read_data(ctx);
   }
 
   static inline uint16_t read_with_type_info(ReadContext &ctx, RefMode ref_mode,
-                                             const TypeInfo &type_info) {
+                                             const TypeInfo &) {
     return read(ctx, ref_mode, false);
   }
 };
@@ -170,11 +170,11 @@ template <> struct Serializer<uint32_t> {
   static constexpr TypeId type_id = TypeId::VAR_UINT32;
 
   static inline void write_type_info(WriteContext &ctx) {
-    ctx.write_varuint32(static_cast<uint32_t>(type_id));
+    ctx.write_var_uint32(static_cast<uint32_t>(type_id));
   }
 
   static inline void read_type_info(ReadContext &ctx) {
-    uint32_t actual = ctx.read_varuint32(ctx.error());
+    uint32_t actual = ctx.read_var_uint32(ctx.error());
     if (FORY_PREDICT_FALSE(actual != static_cast<uint32_t>(type_id))) {
       ctx.set_error(
           Error::type_mismatch(actual, static_cast<uint32_t>(type_id)));
@@ -182,7 +182,7 @@ template <> struct Serializer<uint32_t> {
   }
 
   static inline void write(uint32_t value, WriteContext &ctx, RefMode ref_mode,
-                           bool write_type, bool has_generics = false) {
+                           bool write_type, bool = false) {
     write_not_null_ref_flag(ctx, ref_mode);
     if (write_type) {
       write_type_info(ctx);
@@ -191,11 +191,11 @@ template <> struct Serializer<uint32_t> {
   }
 
   static inline void write_data(uint32_t value, WriteContext &ctx) {
-    ctx.write_bytes(&value, sizeof(uint32_t));
+    ctx.write_var_uint32(value);
   }
 
   static inline void write_data_generic(uint32_t value, WriteContext &ctx,
-                                        bool has_generics) {
+                                        bool) {
     write_data(value, ctx);
   }
 
@@ -206,26 +206,25 @@ template <> struct Serializer<uint32_t> {
       return 0;
     }
     if (read_type) {
-      uint32_t type_id_read = ctx.read_varuint32(ctx.error());
+      uint32_t type_id_read = ctx.read_var_uint32(ctx.error());
       if (FORY_PREDICT_FALSE(type_id_read != static_cast<uint32_t>(type_id))) {
         ctx.set_error(
             Error::type_mismatch(type_id_read, static_cast<uint32_t>(type_id)));
       }
     }
-    return ctx.read_uint32(ctx.error());
+    return ctx.read_var_uint32(ctx.error());
   }
 
   static inline uint32_t read_data(ReadContext &ctx) {
-    return ctx.read_uint32(ctx.error());
+    return ctx.read_var_uint32(ctx.error());
   }
 
-  static inline uint32_t read_data_generic(ReadContext &ctx,
-                                           bool has_generics) {
+  static inline uint32_t read_data_generic(ReadContext &ctx, bool) {
     return read_data(ctx);
   }
 
   static inline uint32_t read_with_type_info(ReadContext &ctx, RefMode ref_mode,
-                                             const TypeInfo &type_info) {
+                                             const TypeInfo &) {
     return read(ctx, ref_mode, false);
   }
 };
@@ -235,11 +234,11 @@ template <> struct Serializer<uint64_t> {
   static constexpr TypeId type_id = TypeId::VAR_UINT64;
 
   static inline void write_type_info(WriteContext &ctx) {
-    ctx.write_varuint32(static_cast<uint32_t>(type_id));
+    ctx.write_var_uint32(static_cast<uint32_t>(type_id));
   }
 
   static inline void read_type_info(ReadContext &ctx) {
-    uint32_t actual = ctx.read_varuint32(ctx.error());
+    uint32_t actual = ctx.read_var_uint32(ctx.error());
     if (FORY_PREDICT_FALSE(actual != static_cast<uint32_t>(type_id))) {
       ctx.set_error(
           Error::type_mismatch(actual, static_cast<uint32_t>(type_id)));
@@ -247,7 +246,7 @@ template <> struct Serializer<uint64_t> {
   }
 
   static inline void write(uint64_t value, WriteContext &ctx, RefMode ref_mode,
-                           bool write_type, bool has_generics = false) {
+                           bool write_type, bool = false) {
     write_not_null_ref_flag(ctx, ref_mode);
     if (write_type) {
       write_type_info(ctx);
@@ -256,11 +255,11 @@ template <> struct Serializer<uint64_t> {
   }
 
   static inline void write_data(uint64_t value, WriteContext &ctx) {
-    ctx.write_bytes(&value, sizeof(uint64_t));
+    ctx.write_var_uint64(value);
   }
 
   static inline void write_data_generic(uint64_t value, WriteContext &ctx,
-                                        bool has_generics) {
+                                        bool) {
     write_data(value, ctx);
   }
 
@@ -271,26 +270,25 @@ template <> struct Serializer<uint64_t> {
       return 0;
     }
     if (read_type) {
-      uint32_t type_id_read = ctx.read_varuint32(ctx.error());
+      uint32_t type_id_read = ctx.read_var_uint32(ctx.error());
       if (FORY_PREDICT_FALSE(type_id_read != static_cast<uint32_t>(type_id))) {
         ctx.set_error(
             Error::type_mismatch(type_id_read, static_cast<uint32_t>(type_id)));
       }
     }
-    return ctx.read_uint64(ctx.error());
+    return ctx.read_var_uint64(ctx.error());
   }
 
   static inline uint64_t read_data(ReadContext &ctx) {
-    return ctx.read_uint64(ctx.error());
+    return ctx.read_var_uint64(ctx.error());
   }
 
-  static inline uint64_t read_data_generic(ReadContext &ctx,
-                                           bool has_generics) {
+  static inline uint64_t read_data_generic(ReadContext &ctx, bool) {
     return read_data(ctx);
   }
 
   static inline uint64_t read_with_type_info(ReadContext &ctx, RefMode ref_mode,
-                                             const TypeInfo &type_info) {
+                                             const TypeInfo &) {
     return read(ctx, ref_mode, false);
   }
 };
@@ -305,11 +303,11 @@ template <size_t N> struct Serializer<std::array<uint8_t, N>> {
   static constexpr TypeId type_id = TypeId::INT8_ARRAY;
 
   static inline void write_type_info(WriteContext &ctx) {
-    ctx.write_varuint32(static_cast<uint32_t>(type_id));
+    ctx.write_var_uint32(static_cast<uint32_t>(type_id));
   }
 
   static inline void read_type_info(ReadContext &ctx) {
-    uint32_t actual = ctx.read_varuint32(ctx.error());
+    uint32_t actual = ctx.read_var_uint32(ctx.error());
     if (FORY_PREDICT_FALSE(
             !type_id_matches(actual, static_cast<uint32_t>(type_id)))) {
       ctx.set_error(
@@ -331,17 +329,18 @@ template <size_t N> struct Serializer<std::array<uint8_t, N>> {
                                 WriteContext &ctx) {
     Buffer &buffer = ctx.buffer();
     constexpr size_t max_size = 8 + N * sizeof(uint8_t);
-    buffer.Grow(static_cast<uint32_t>(max_size));
+    buffer.grow(static_cast<uint32_t>(max_size));
     uint32_t writer_index = buffer.writer_index();
-    writer_index += buffer.PutVarUint32(writer_index, static_cast<uint32_t>(N));
+    writer_index +=
+        buffer.put_var_uint32(writer_index, static_cast<uint32_t>(N));
     if constexpr (N > 0) {
-      buffer.UnsafePut(writer_index, arr.data(), N * sizeof(uint8_t));
+      buffer.unsafe_put(writer_index, arr.data(), N * sizeof(uint8_t));
     }
-    buffer.WriterIndex(writer_index + N * sizeof(uint8_t));
+    buffer.writer_index(writer_index + N * sizeof(uint8_t));
   }
 
   static inline void write_data_generic(const std::array<uint8_t, N> &arr,
-                                        WriteContext &ctx, bool has_generics) {
+                                        WriteContext &ctx, bool) {
     write_data(arr, ctx);
   }
 
@@ -352,7 +351,7 @@ template <size_t N> struct Serializer<std::array<uint8_t, N>> {
       return std::array<uint8_t, N>();
     }
     if (read_type) {
-      uint32_t type_id_read = ctx.read_varuint32(ctx.error());
+      uint32_t type_id_read = ctx.read_var_uint32(ctx.error());
       if (FORY_PREDICT_FALSE(type_id_read != static_cast<uint32_t>(type_id))) {
         ctx.set_error(
             Error::type_mismatch(type_id_read, static_cast<uint32_t>(type_id)));
@@ -362,7 +361,7 @@ template <size_t N> struct Serializer<std::array<uint8_t, N>> {
   }
 
   static inline std::array<uint8_t, N> read_data(ReadContext &ctx) {
-    uint32_t length = ctx.read_varuint32(ctx.error());
+    uint32_t length = ctx.read_var_uint32(ctx.error());
     if (FORY_PREDICT_FALSE(length != N || length * sizeof(uint8_t) >
                                               ctx.buffer().remaining_size())) {
       ctx.set_error(Error::invalid_data("Array size mismatch: expected " +
@@ -378,8 +377,7 @@ template <size_t N> struct Serializer<std::array<uint8_t, N>> {
   }
 
   static inline std::array<uint8_t, N>
-  read_with_type_info(ReadContext &ctx, RefMode ref_mode,
-                      const TypeInfo &type_info) {
+  read_with_type_info(ReadContext &ctx, RefMode ref_mode, const TypeInfo &) {
     return read(ctx, ref_mode, false);
   }
 };
@@ -389,11 +387,11 @@ template <size_t N> struct Serializer<std::array<uint16_t, N>> {
   static constexpr TypeId type_id = TypeId::UINT16_ARRAY;
 
   static inline void write_type_info(WriteContext &ctx) {
-    ctx.write_varuint32(static_cast<uint32_t>(type_id));
+    ctx.write_var_uint32(static_cast<uint32_t>(type_id));
   }
 
   static inline void read_type_info(ReadContext &ctx) {
-    uint32_t actual = ctx.read_varuint32(ctx.error());
+    uint32_t actual = ctx.read_var_uint32(ctx.error());
     if (FORY_PREDICT_FALSE(
             !type_id_matches(actual, static_cast<uint32_t>(type_id)))) {
       ctx.set_error(
@@ -415,17 +413,18 @@ template <size_t N> struct Serializer<std::array<uint16_t, N>> {
                                 WriteContext &ctx) {
     Buffer &buffer = ctx.buffer();
     constexpr size_t max_size = 8 + N * sizeof(uint16_t);
-    buffer.Grow(static_cast<uint32_t>(max_size));
+    buffer.grow(static_cast<uint32_t>(max_size));
     uint32_t writer_index = buffer.writer_index();
-    writer_index += buffer.PutVarUint32(writer_index, static_cast<uint32_t>(N));
+    writer_index +=
+        buffer.put_var_uint32(writer_index, static_cast<uint32_t>(N));
     if constexpr (N > 0) {
-      buffer.UnsafePut(writer_index, arr.data(), N * sizeof(uint16_t));
+      buffer.unsafe_put(writer_index, arr.data(), N * sizeof(uint16_t));
     }
-    buffer.WriterIndex(writer_index + N * sizeof(uint16_t));
+    buffer.writer_index(writer_index + N * sizeof(uint16_t));
   }
 
   static inline void write_data_generic(const std::array<uint16_t, N> &arr,
-                                        WriteContext &ctx, bool has_generics) {
+                                        WriteContext &ctx, bool) {
     write_data(arr, ctx);
   }
 
@@ -436,7 +435,7 @@ template <size_t N> struct Serializer<std::array<uint16_t, N>> {
       return std::array<uint16_t, N>();
     }
     if (read_type) {
-      uint32_t type_id_read = ctx.read_varuint32(ctx.error());
+      uint32_t type_id_read = ctx.read_var_uint32(ctx.error());
       if (FORY_PREDICT_FALSE(type_id_read != static_cast<uint32_t>(type_id))) {
         ctx.set_error(
             Error::type_mismatch(type_id_read, static_cast<uint32_t>(type_id)));
@@ -446,7 +445,7 @@ template <size_t N> struct Serializer<std::array<uint16_t, N>> {
   }
 
   static inline std::array<uint16_t, N> read_data(ReadContext &ctx) {
-    uint32_t length = ctx.read_varuint32(ctx.error());
+    uint32_t length = ctx.read_var_uint32(ctx.error());
     if (FORY_PREDICT_FALSE(length != N || length * sizeof(uint16_t) >
                                               ctx.buffer().remaining_size())) {
       ctx.set_error(Error::invalid_data("Array size mismatch: expected " +
@@ -462,8 +461,7 @@ template <size_t N> struct Serializer<std::array<uint16_t, N>> {
   }
 
   static inline std::array<uint16_t, N>
-  read_with_type_info(ReadContext &ctx, RefMode ref_mode,
-                      const TypeInfo &type_info) {
+  read_with_type_info(ReadContext &ctx, RefMode ref_mode, const TypeInfo &) {
     return read(ctx, ref_mode, false);
   }
 };
@@ -473,11 +471,11 @@ template <size_t N> struct Serializer<std::array<uint32_t, N>> {
   static constexpr TypeId type_id = TypeId::UINT32_ARRAY;
 
   static inline void write_type_info(WriteContext &ctx) {
-    ctx.write_varuint32(static_cast<uint32_t>(type_id));
+    ctx.write_var_uint32(static_cast<uint32_t>(type_id));
   }
 
   static inline void read_type_info(ReadContext &ctx) {
-    uint32_t actual = ctx.read_varuint32(ctx.error());
+    uint32_t actual = ctx.read_var_uint32(ctx.error());
     if (FORY_PREDICT_FALSE(
             !type_id_matches(actual, static_cast<uint32_t>(type_id)))) {
       ctx.set_error(
@@ -499,17 +497,18 @@ template <size_t N> struct Serializer<std::array<uint32_t, N>> {
                                 WriteContext &ctx) {
     Buffer &buffer = ctx.buffer();
     constexpr size_t max_size = 8 + N * sizeof(uint32_t);
-    buffer.Grow(static_cast<uint32_t>(max_size));
+    buffer.grow(static_cast<uint32_t>(max_size));
     uint32_t writer_index = buffer.writer_index();
-    writer_index += buffer.PutVarUint32(writer_index, static_cast<uint32_t>(N));
+    writer_index +=
+        buffer.put_var_uint32(writer_index, static_cast<uint32_t>(N));
     if constexpr (N > 0) {
-      buffer.UnsafePut(writer_index, arr.data(), N * sizeof(uint32_t));
+      buffer.unsafe_put(writer_index, arr.data(), N * sizeof(uint32_t));
     }
-    buffer.WriterIndex(writer_index + N * sizeof(uint32_t));
+    buffer.writer_index(writer_index + N * sizeof(uint32_t));
   }
 
   static inline void write_data_generic(const std::array<uint32_t, N> &arr,
-                                        WriteContext &ctx, bool has_generics) {
+                                        WriteContext &ctx, bool) {
     write_data(arr, ctx);
   }
 
@@ -520,7 +519,7 @@ template <size_t N> struct Serializer<std::array<uint32_t, N>> {
       return std::array<uint32_t, N>();
     }
     if (read_type) {
-      uint32_t type_id_read = ctx.read_varuint32(ctx.error());
+      uint32_t type_id_read = ctx.read_var_uint32(ctx.error());
       if (FORY_PREDICT_FALSE(type_id_read != static_cast<uint32_t>(type_id))) {
         ctx.set_error(
             Error::type_mismatch(type_id_read, static_cast<uint32_t>(type_id)));
@@ -530,7 +529,7 @@ template <size_t N> struct Serializer<std::array<uint32_t, N>> {
   }
 
   static inline std::array<uint32_t, N> read_data(ReadContext &ctx) {
-    uint32_t length = ctx.read_varuint32(ctx.error());
+    uint32_t length = ctx.read_var_uint32(ctx.error());
     if (FORY_PREDICT_FALSE(length != N || length * sizeof(uint32_t) >
                                               ctx.buffer().remaining_size())) {
       ctx.set_error(Error::invalid_data("Array size mismatch: expected " +
@@ -546,8 +545,7 @@ template <size_t N> struct Serializer<std::array<uint32_t, N>> {
   }
 
   static inline std::array<uint32_t, N>
-  read_with_type_info(ReadContext &ctx, RefMode ref_mode,
-                      const TypeInfo &type_info) {
+  read_with_type_info(ReadContext &ctx, RefMode ref_mode, const TypeInfo &) {
     return read(ctx, ref_mode, false);
   }
 };
@@ -557,11 +555,11 @@ template <size_t N> struct Serializer<std::array<uint64_t, N>> {
   static constexpr TypeId type_id = TypeId::UINT64_ARRAY;
 
   static inline void write_type_info(WriteContext &ctx) {
-    ctx.write_varuint32(static_cast<uint32_t>(type_id));
+    ctx.write_var_uint32(static_cast<uint32_t>(type_id));
   }
 
   static inline void read_type_info(ReadContext &ctx) {
-    uint32_t actual = ctx.read_varuint32(ctx.error());
+    uint32_t actual = ctx.read_var_uint32(ctx.error());
     if (FORY_PREDICT_FALSE(
             !type_id_matches(actual, static_cast<uint32_t>(type_id)))) {
       ctx.set_error(
@@ -583,17 +581,18 @@ template <size_t N> struct Serializer<std::array<uint64_t, N>> {
                                 WriteContext &ctx) {
     Buffer &buffer = ctx.buffer();
     constexpr size_t max_size = 8 + N * sizeof(uint64_t);
-    buffer.Grow(static_cast<uint32_t>(max_size));
+    buffer.grow(static_cast<uint32_t>(max_size));
     uint32_t writer_index = buffer.writer_index();
-    writer_index += buffer.PutVarUint32(writer_index, static_cast<uint32_t>(N));
+    writer_index +=
+        buffer.put_var_uint32(writer_index, static_cast<uint32_t>(N));
     if constexpr (N > 0) {
-      buffer.UnsafePut(writer_index, arr.data(), N * sizeof(uint64_t));
+      buffer.unsafe_put(writer_index, arr.data(), N * sizeof(uint64_t));
     }
-    buffer.WriterIndex(writer_index + N * sizeof(uint64_t));
+    buffer.writer_index(writer_index + N * sizeof(uint64_t));
   }
 
   static inline void write_data_generic(const std::array<uint64_t, N> &arr,
-                                        WriteContext &ctx, bool has_generics) {
+                                        WriteContext &ctx, bool) {
     write_data(arr, ctx);
   }
 
@@ -604,7 +603,7 @@ template <size_t N> struct Serializer<std::array<uint64_t, N>> {
       return std::array<uint64_t, N>();
     }
     if (read_type) {
-      uint32_t type_id_read = ctx.read_varuint32(ctx.error());
+      uint32_t type_id_read = ctx.read_var_uint32(ctx.error());
       if (FORY_PREDICT_FALSE(type_id_read != static_cast<uint32_t>(type_id))) {
         ctx.set_error(
             Error::type_mismatch(type_id_read, static_cast<uint32_t>(type_id)));
@@ -614,7 +613,7 @@ template <size_t N> struct Serializer<std::array<uint64_t, N>> {
   }
 
   static inline std::array<uint64_t, N> read_data(ReadContext &ctx) {
-    uint32_t length = ctx.read_varuint32(ctx.error());
+    uint32_t length = ctx.read_var_uint32(ctx.error());
     if (FORY_PREDICT_FALSE(length != N || length * sizeof(uint64_t) >
                                               ctx.buffer().remaining_size())) {
       ctx.set_error(Error::invalid_data("Array size mismatch: expected " +
@@ -630,8 +629,7 @@ template <size_t N> struct Serializer<std::array<uint64_t, N>> {
   }
 
   static inline std::array<uint64_t, N>
-  read_with_type_info(ReadContext &ctx, RefMode ref_mode,
-                      const TypeInfo &type_info) {
+  read_with_type_info(ReadContext &ctx, RefMode ref_mode, const TypeInfo &) {
     return read(ctx, ref_mode, false);
   }
 };
@@ -646,11 +644,11 @@ template <> struct Serializer<std::vector<uint8_t>> {
   static constexpr TypeId type_id = TypeId::BINARY;
 
   static inline void write_type_info(WriteContext &ctx) {
-    ctx.write_varuint32(static_cast<uint32_t>(type_id));
+    ctx.write_var_uint32(static_cast<uint32_t>(type_id));
   }
 
   static inline void read_type_info(ReadContext &ctx) {
-    uint32_t actual = ctx.read_varuint32(ctx.error());
+    uint32_t actual = ctx.read_var_uint32(ctx.error());
     if (FORY_PREDICT_FALSE(
             !type_id_matches(actual, static_cast<uint32_t>(type_id)))) {
       ctx.set_error(
@@ -663,7 +661,7 @@ template <> struct Serializer<std::vector<uint8_t>> {
                            bool has_generics = false) {
     write_not_null_ref_flag(ctx, ref_mode);
     if (write_type) {
-      ctx.write_varuint32(static_cast<uint32_t>(type_id));
+      ctx.write_var_uint32(static_cast<uint32_t>(type_id));
     }
     write_data_generic(vec, ctx, has_generics);
   }
@@ -672,18 +670,18 @@ template <> struct Serializer<std::vector<uint8_t>> {
                                 WriteContext &ctx) {
     Buffer &buffer = ctx.buffer();
     size_t max_size = 8 + vec.size();
-    buffer.Grow(static_cast<uint32_t>(max_size));
+    buffer.grow(static_cast<uint32_t>(max_size));
     uint32_t writer_index = buffer.writer_index();
     writer_index +=
-        buffer.PutVarUint32(writer_index, static_cast<uint32_t>(vec.size()));
+        buffer.put_var_uint32(writer_index, static_cast<uint32_t>(vec.size()));
     if (!vec.empty()) {
-      buffer.UnsafePut(writer_index, vec.data(), vec.size());
+      buffer.unsafe_put(writer_index, vec.data(), vec.size());
     }
-    buffer.WriterIndex(writer_index + static_cast<uint32_t>(vec.size()));
+    buffer.writer_index(writer_index + static_cast<uint32_t>(vec.size()));
   }
 
   static inline void write_data_generic(const std::vector<uint8_t> &vec,
-                                        WriteContext &ctx, bool has_generics) {
+                                        WriteContext &ctx, bool) {
     write_data(vec, ctx);
   }
 
@@ -694,7 +692,7 @@ template <> struct Serializer<std::vector<uint8_t>> {
       return std::vector<uint8_t>();
     }
     if (read_type) {
-      uint32_t type_id_read = ctx.read_varuint32(ctx.error());
+      uint32_t type_id_read = ctx.read_var_uint32(ctx.error());
       if (FORY_PREDICT_FALSE(type_id_read != static_cast<uint32_t>(type_id))) {
         ctx.set_error(
             Error::type_mismatch(type_id_read, static_cast<uint32_t>(type_id)));
@@ -704,7 +702,7 @@ template <> struct Serializer<std::vector<uint8_t>> {
   }
 
   static inline std::vector<uint8_t> read_data(ReadContext &ctx) {
-    uint32_t length = ctx.read_varuint32(ctx.error());
+    uint32_t length = ctx.read_var_uint32(ctx.error());
     if (FORY_PREDICT_FALSE(length > ctx.buffer().remaining_size())) {
       ctx.set_error(
           Error::invalid_data("Invalid length: " + std::to_string(length)));
@@ -717,14 +715,12 @@ template <> struct Serializer<std::vector<uint8_t>> {
     return vec;
   }
 
-  static inline std::vector<uint8_t> read_data_generic(ReadContext &ctx,
-                                                       bool has_generics) {
+  static inline std::vector<uint8_t> read_data_generic(ReadContext &ctx, bool) {
     return read_data(ctx);
   }
 
   static inline std::vector<uint8_t>
-  read_with_type_info(ReadContext &ctx, RefMode ref_mode,
-                      const TypeInfo &type_info) {
+  read_with_type_info(ReadContext &ctx, RefMode ref_mode, const TypeInfo &) {
     return read(ctx, ref_mode, false);
   }
 };
@@ -734,11 +730,11 @@ template <> struct Serializer<std::vector<uint16_t>> {
   static constexpr TypeId type_id = TypeId::UINT16_ARRAY;
 
   static inline void write_type_info(WriteContext &ctx) {
-    ctx.write_varuint32(static_cast<uint32_t>(type_id));
+    ctx.write_var_uint32(static_cast<uint32_t>(type_id));
   }
 
   static inline void read_type_info(ReadContext &ctx) {
-    uint32_t actual = ctx.read_varuint32(ctx.error());
+    uint32_t actual = ctx.read_var_uint32(ctx.error());
     if (FORY_PREDICT_FALSE(
             !type_id_matches(actual, static_cast<uint32_t>(type_id)))) {
       ctx.set_error(
@@ -758,21 +754,26 @@ template <> struct Serializer<std::vector<uint16_t>> {
 
   static inline void write_data(const std::vector<uint16_t> &vec,
                                 WriteContext &ctx) {
+    uint64_t total_bytes = static_cast<uint64_t>(vec.size()) * sizeof(uint16_t);
+    if (total_bytes > std::numeric_limits<uint32_t>::max()) {
+      ctx.set_error(Error::invalid("Vector byte size exceeds uint32_t range"));
+      return;
+    }
     Buffer &buffer = ctx.buffer();
-    size_t data_size = vec.size() * sizeof(uint16_t);
-    size_t max_size = 8 + data_size;
-    buffer.Grow(static_cast<uint32_t>(max_size));
+    size_t max_size = 8 + static_cast<size_t>(total_bytes);
+    buffer.grow(static_cast<uint32_t>(max_size));
     uint32_t writer_index = buffer.writer_index();
     writer_index +=
-        buffer.PutVarUint32(writer_index, static_cast<uint32_t>(vec.size()));
-    if (!vec.empty()) {
-      buffer.UnsafePut(writer_index, vec.data(), data_size);
+        buffer.put_var_uint32(writer_index, static_cast<uint32_t>(total_bytes));
+    if (total_bytes > 0) {
+      buffer.unsafe_put(writer_index, vec.data(),
+                        static_cast<uint32_t>(total_bytes));
     }
-    buffer.WriterIndex(writer_index + static_cast<uint32_t>(data_size));
+    buffer.writer_index(writer_index + static_cast<uint32_t>(total_bytes));
   }
 
   static inline void write_data_generic(const std::vector<uint16_t> &vec,
-                                        WriteContext &ctx, bool has_generics) {
+                                        WriteContext &ctx, bool) {
     write_data(vec, ctx);
   }
 
@@ -783,7 +784,7 @@ template <> struct Serializer<std::vector<uint16_t>> {
       return std::vector<uint16_t>();
     }
     if (read_type) {
-      uint32_t type_id_read = ctx.read_varuint32(ctx.error());
+      uint32_t type_id_read = ctx.read_var_uint32(ctx.error());
       if (FORY_PREDICT_FALSE(type_id_read != static_cast<uint32_t>(type_id))) {
         ctx.set_error(
             Error::type_mismatch(type_id_read, static_cast<uint32_t>(type_id)));
@@ -793,28 +794,35 @@ template <> struct Serializer<std::vector<uint16_t>> {
   }
 
   static inline std::vector<uint16_t> read_data(ReadContext &ctx) {
-    uint32_t length = ctx.read_varuint32(ctx.error());
-    if (FORY_PREDICT_FALSE(length * sizeof(uint16_t) >
-                           ctx.buffer().remaining_size())) {
-      ctx.set_error(
-          Error::invalid_data("Invalid length: " + std::to_string(length)));
+    uint32_t total_bytes = ctx.read_var_uint32(ctx.error());
+    if (FORY_PREDICT_FALSE(ctx.has_error())) {
       return std::vector<uint16_t>();
     }
+    if (total_bytes % sizeof(uint16_t) != 0) {
+      ctx.set_error(Error::invalid_data("Invalid length: " +
+                                        std::to_string(total_bytes)));
+      return std::vector<uint16_t>();
+    }
+    if (FORY_PREDICT_FALSE(total_bytes > ctx.buffer().remaining_size())) {
+      ctx.set_error(Error::invalid_data("Invalid length: " +
+                                        std::to_string(total_bytes)));
+      return std::vector<uint16_t>();
+    }
+    size_t length = total_bytes / sizeof(uint16_t);
     std::vector<uint16_t> vec(length);
-    if (length > 0) {
-      ctx.read_bytes(vec.data(), length * sizeof(uint16_t), ctx.error());
+    if (total_bytes > 0) {
+      ctx.read_bytes(vec.data(), total_bytes, ctx.error());
     }
     return vec;
   }
 
   static inline std::vector<uint16_t> read_data_generic(ReadContext &ctx,
-                                                        bool has_generics) {
+                                                        bool) {
     return read_data(ctx);
   }
 
   static inline std::vector<uint16_t>
-  read_with_type_info(ReadContext &ctx, RefMode ref_mode,
-                      const TypeInfo &type_info) {
+  read_with_type_info(ReadContext &ctx, RefMode ref_mode, const TypeInfo &) {
     return read(ctx, ref_mode, false);
   }
 };
@@ -824,11 +832,11 @@ template <> struct Serializer<std::vector<uint32_t>> {
   static constexpr TypeId type_id = TypeId::UINT32_ARRAY;
 
   static inline void write_type_info(WriteContext &ctx) {
-    ctx.write_varuint32(static_cast<uint32_t>(type_id));
+    ctx.write_var_uint32(static_cast<uint32_t>(type_id));
   }
 
   static inline void read_type_info(ReadContext &ctx) {
-    uint32_t actual = ctx.read_varuint32(ctx.error());
+    uint32_t actual = ctx.read_var_uint32(ctx.error());
     if (FORY_PREDICT_FALSE(
             !type_id_matches(actual, static_cast<uint32_t>(type_id)))) {
       ctx.set_error(
@@ -848,21 +856,26 @@ template <> struct Serializer<std::vector<uint32_t>> {
 
   static inline void write_data(const std::vector<uint32_t> &vec,
                                 WriteContext &ctx) {
+    uint64_t total_bytes = static_cast<uint64_t>(vec.size()) * sizeof(uint32_t);
+    if (total_bytes > std::numeric_limits<uint32_t>::max()) {
+      ctx.set_error(Error::invalid("Vector byte size exceeds uint32_t range"));
+      return;
+    }
     Buffer &buffer = ctx.buffer();
-    size_t data_size = vec.size() * sizeof(uint32_t);
-    size_t max_size = 8 + data_size;
-    buffer.Grow(static_cast<uint32_t>(max_size));
+    size_t max_size = 8 + static_cast<size_t>(total_bytes);
+    buffer.grow(static_cast<uint32_t>(max_size));
     uint32_t writer_index = buffer.writer_index();
     writer_index +=
-        buffer.PutVarUint32(writer_index, static_cast<uint32_t>(vec.size()));
-    if (!vec.empty()) {
-      buffer.UnsafePut(writer_index, vec.data(), data_size);
+        buffer.put_var_uint32(writer_index, static_cast<uint32_t>(total_bytes));
+    if (total_bytes > 0) {
+      buffer.unsafe_put(writer_index, vec.data(),
+                        static_cast<uint32_t>(total_bytes));
     }
-    buffer.WriterIndex(writer_index + static_cast<uint32_t>(data_size));
+    buffer.writer_index(writer_index + static_cast<uint32_t>(total_bytes));
   }
 
   static inline void write_data_generic(const std::vector<uint32_t> &vec,
-                                        WriteContext &ctx, bool has_generics) {
+                                        WriteContext &ctx, bool) {
     write_data(vec, ctx);
   }
 
@@ -873,7 +886,7 @@ template <> struct Serializer<std::vector<uint32_t>> {
       return std::vector<uint32_t>();
     }
     if (read_type) {
-      uint32_t type_id_read = ctx.read_varuint32(ctx.error());
+      uint32_t type_id_read = ctx.read_var_uint32(ctx.error());
       if (FORY_PREDICT_FALSE(type_id_read != static_cast<uint32_t>(type_id))) {
         ctx.set_error(
             Error::type_mismatch(type_id_read, static_cast<uint32_t>(type_id)));
@@ -883,28 +896,35 @@ template <> struct Serializer<std::vector<uint32_t>> {
   }
 
   static inline std::vector<uint32_t> read_data(ReadContext &ctx) {
-    uint32_t length = ctx.read_varuint32(ctx.error());
-    if (FORY_PREDICT_FALSE(length * sizeof(uint32_t) >
-                           ctx.buffer().remaining_size())) {
-      ctx.set_error(
-          Error::invalid_data("Invalid length: " + std::to_string(length)));
+    uint32_t total_bytes = ctx.read_var_uint32(ctx.error());
+    if (FORY_PREDICT_FALSE(ctx.has_error())) {
       return std::vector<uint32_t>();
     }
+    if (total_bytes % sizeof(uint32_t) != 0) {
+      ctx.set_error(Error::invalid_data("Invalid length: " +
+                                        std::to_string(total_bytes)));
+      return std::vector<uint32_t>();
+    }
+    if (FORY_PREDICT_FALSE(total_bytes > ctx.buffer().remaining_size())) {
+      ctx.set_error(Error::invalid_data("Invalid length: " +
+                                        std::to_string(total_bytes)));
+      return std::vector<uint32_t>();
+    }
+    size_t length = total_bytes / sizeof(uint32_t);
     std::vector<uint32_t> vec(length);
-    if (length > 0) {
-      ctx.read_bytes(vec.data(), length * sizeof(uint32_t), ctx.error());
+    if (total_bytes > 0) {
+      ctx.read_bytes(vec.data(), total_bytes, ctx.error());
     }
     return vec;
   }
 
   static inline std::vector<uint32_t> read_data_generic(ReadContext &ctx,
-                                                        bool has_generics) {
+                                                        bool) {
     return read_data(ctx);
   }
 
   static inline std::vector<uint32_t>
-  read_with_type_info(ReadContext &ctx, RefMode ref_mode,
-                      const TypeInfo &type_info) {
+  read_with_type_info(ReadContext &ctx, RefMode ref_mode, const TypeInfo &) {
     return read(ctx, ref_mode, false);
   }
 };
@@ -914,11 +934,11 @@ template <> struct Serializer<std::vector<uint64_t>> {
   static constexpr TypeId type_id = TypeId::UINT64_ARRAY;
 
   static inline void write_type_info(WriteContext &ctx) {
-    ctx.write_varuint32(static_cast<uint32_t>(type_id));
+    ctx.write_var_uint32(static_cast<uint32_t>(type_id));
   }
 
   static inline void read_type_info(ReadContext &ctx) {
-    uint32_t actual = ctx.read_varuint32(ctx.error());
+    uint32_t actual = ctx.read_var_uint32(ctx.error());
     if (FORY_PREDICT_FALSE(
             !type_id_matches(actual, static_cast<uint32_t>(type_id)))) {
       ctx.set_error(
@@ -938,21 +958,26 @@ template <> struct Serializer<std::vector<uint64_t>> {
 
   static inline void write_data(const std::vector<uint64_t> &vec,
                                 WriteContext &ctx) {
+    uint64_t total_bytes = static_cast<uint64_t>(vec.size()) * sizeof(uint64_t);
+    if (total_bytes > std::numeric_limits<uint32_t>::max()) {
+      ctx.set_error(Error::invalid("Vector byte size exceeds uint32_t range"));
+      return;
+    }
     Buffer &buffer = ctx.buffer();
-    size_t data_size = vec.size() * sizeof(uint64_t);
-    size_t max_size = 8 + data_size;
-    buffer.Grow(static_cast<uint32_t>(max_size));
+    size_t max_size = 8 + static_cast<size_t>(total_bytes);
+    buffer.grow(static_cast<uint32_t>(max_size));
     uint32_t writer_index = buffer.writer_index();
     writer_index +=
-        buffer.PutVarUint32(writer_index, static_cast<uint32_t>(vec.size()));
-    if (!vec.empty()) {
-      buffer.UnsafePut(writer_index, vec.data(), data_size);
+        buffer.put_var_uint32(writer_index, static_cast<uint32_t>(total_bytes));
+    if (total_bytes > 0) {
+      buffer.unsafe_put(writer_index, vec.data(),
+                        static_cast<uint32_t>(total_bytes));
     }
-    buffer.WriterIndex(writer_index + static_cast<uint32_t>(data_size));
+    buffer.writer_index(writer_index + static_cast<uint32_t>(total_bytes));
   }
 
   static inline void write_data_generic(const std::vector<uint64_t> &vec,
-                                        WriteContext &ctx, bool has_generics) {
+                                        WriteContext &ctx, bool) {
     write_data(vec, ctx);
   }
 
@@ -963,7 +988,7 @@ template <> struct Serializer<std::vector<uint64_t>> {
       return std::vector<uint64_t>();
     }
     if (read_type) {
-      uint32_t type_id_read = ctx.read_varuint32(ctx.error());
+      uint32_t type_id_read = ctx.read_var_uint32(ctx.error());
       if (FORY_PREDICT_FALSE(type_id_read != static_cast<uint32_t>(type_id))) {
         ctx.set_error(
             Error::type_mismatch(type_id_read, static_cast<uint32_t>(type_id)));
@@ -973,28 +998,35 @@ template <> struct Serializer<std::vector<uint64_t>> {
   }
 
   static inline std::vector<uint64_t> read_data(ReadContext &ctx) {
-    uint32_t length = ctx.read_varuint32(ctx.error());
-    if (FORY_PREDICT_FALSE(length * sizeof(uint64_t) >
-                           ctx.buffer().remaining_size())) {
-      ctx.set_error(
-          Error::invalid_data("Invalid length: " + std::to_string(length)));
+    uint32_t total_bytes = ctx.read_var_uint32(ctx.error());
+    if (FORY_PREDICT_FALSE(ctx.has_error())) {
       return std::vector<uint64_t>();
     }
+    if (total_bytes % sizeof(uint64_t) != 0) {
+      ctx.set_error(Error::invalid_data("Invalid length: " +
+                                        std::to_string(total_bytes)));
+      return std::vector<uint64_t>();
+    }
+    if (FORY_PREDICT_FALSE(total_bytes > ctx.buffer().remaining_size())) {
+      ctx.set_error(Error::invalid_data("Invalid length: " +
+                                        std::to_string(total_bytes)));
+      return std::vector<uint64_t>();
+    }
+    size_t length = total_bytes / sizeof(uint64_t);
     std::vector<uint64_t> vec(length);
-    if (length > 0) {
-      ctx.read_bytes(vec.data(), length * sizeof(uint64_t), ctx.error());
+    if (total_bytes > 0) {
+      ctx.read_bytes(vec.data(), total_bytes, ctx.error());
     }
     return vec;
   }
 
   static inline std::vector<uint64_t> read_data_generic(ReadContext &ctx,
-                                                        bool has_generics) {
+                                                        bool) {
     return read_data(ctx);
   }
 
   static inline std::vector<uint64_t>
-  read_with_type_info(ReadContext &ctx, RefMode ref_mode,
-                      const TypeInfo &type_info) {
+  read_with_type_info(ReadContext &ctx, RefMode ref_mode, const TypeInfo &) {
     return read(ctx, ref_mode, false);
   }
 };

@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set
 
 import pyfory
+from pyfory import Ref
 from pyfory.meta.meta_compressor import NoOpMetaCompressor
 
 
@@ -172,6 +173,23 @@ class OneEnumFieldStruct:
 class TwoEnumFieldStruct:
     f1: TestEnum = None
     f2: TestEnum = None
+
+
+# ============================================================================
+# Collection Element Reference Override Test Types
+# ============================================================================
+
+
+@dataclass
+class RefOverrideElement:
+    id: pyfory.int32 = 0
+    name: str = ""
+
+
+@dataclass
+class RefOverrideContainer:
+    list_field: List[Ref[RefOverrideElement]] = None
+    map_field: Dict[str, Ref[RefOverrideElement]] = None
 
 
 # ============================================================================
@@ -342,7 +360,7 @@ def test_string_serializer():
         fory.serialize(s, buffer=new_buffer)
 
     with open(data_file, "wb") as f:
-        f.write(new_buffer.get_bytes(0, new_buffer.writer_index))
+        f.write(new_buffer.get_bytes(0, new_buffer.get_writer_index()))
 
 
 def test_simple_struct():
@@ -498,7 +516,7 @@ def test_consistent_named():
         fory.serialize(my_ext, buffer=new_buffer)
 
     with open(data_file, "wb") as f:
-        f.write(new_buffer.get_bytes(0, new_buffer.writer_index))
+        f.write(new_buffer.get_bytes(0, new_buffer.get_writer_index()))
 
 
 def test_struct_version_check():
@@ -565,7 +583,7 @@ def test_polymorphic_list():
     fory.serialize(holder, buffer=new_buffer)
 
     with open(data_file, "wb") as f:
-        f.write(new_buffer.get_bytes(0, new_buffer.writer_index))
+        f.write(new_buffer.get_bytes(0, new_buffer.get_writer_index()))
 
 
 def test_polymorphic_map():
@@ -612,7 +630,7 @@ def test_polymorphic_map():
     fory.serialize(holder, buffer=new_buffer)
 
     with open(data_file, "wb") as f:
-        f.write(new_buffer.get_bytes(0, new_buffer.writer_index))
+        f.write(new_buffer.get_bytes(0, new_buffer.get_writer_index()))
 
 
 def test_one_string_field_schema():
@@ -1218,6 +1236,31 @@ def test_ref_compatible():
 
     # Re-serialize and write back
     new_bytes = fory.serialize(outer)
+    with open(data_file, "wb") as f:
+        f.write(new_bytes)
+
+
+def test_collection_element_ref_override():
+    data_file = get_data_file()
+    with open(data_file, "rb") as f:
+        data_bytes = f.read()
+
+    fory = pyfory.Fory(xlang=True, compatible=False, ref=True)
+    fory.register_type(RefOverrideElement, type_id=701)
+    fory.register_type(RefOverrideContainer, type_id=702)
+
+    outer = fory.deserialize(data_bytes)
+    debug_print(f"Deserialized: {outer}")
+
+    assert outer.list_field, "list_field should not be empty"
+    shared = outer.list_field[0]
+
+    new_outer = RefOverrideContainer(
+        list_field=[shared, shared],
+        map_field={"k1": shared, "k2": shared},
+    )
+
+    new_bytes = fory.serialize(new_outer)
     with open(data_file, "wb") as f:
         f.write(new_bytes)
 
